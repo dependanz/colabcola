@@ -1,0 +1,17 @@
+# Python build/cache outputs
+__pycache__/
+*.py[cod]
+build/
+*.egg-info/
+.venv/
+venv/
+
+# Downloaded Google OAuth client files are credentials; keep them outside the repository.
+client_secret_*.json
+desktop-client.json
+colab-client.json
+*-client-secrets.json
+
+# Generated bundles, controllers, receipts and result archives stay on the device that made them.
+dist/
+.pytest_cache/

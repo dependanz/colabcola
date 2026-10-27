@@ -1,0 +1,10 @@
+include README.md DEVELOPMENT.md PACKAGING.md LIFECYCLE.md
+include pyproject.toml MANIFEST.in
+recursive-include src/colabcola *.py *.json
+include tools/build_development.py
+prune tests
+prune examples
+prune jobs
+prune dist
+prune build
+global-exclude __pycache__ *.py[cod]

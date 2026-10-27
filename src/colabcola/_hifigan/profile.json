@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "workload": "hifi-gan-v1",
+  "upstream": {
+    "repository": "https://github.com/jik876/hifi-gan.git",
+    "commit": "4769534d45265d52a904b850da5a622601885777",
+    "license_spdx": "MIT",
+    "license_notice": "Copyright (c) 2020 Jungil Kong",
+    "files": [
+      {
+        "path": "LICENSE",
+        "size": 1087,
+        "sha256": "dc2e017a9a4430fbd21aa83345310fa34b7050d6c1d7a06d30436f7e5c4be2f4",
+        "role": "license",
+        "bundle_target": "workload/hifi_gan/LICENSE"
+      },
+      {
+        "path": "README.md",
+        "size": 4998,
+        "sha256": "ec90245c3604828a53c17eb68a2f435a38b5a656230fd4acbdb8fb341ae54a25",
+        "role": "license",
+        "bundle_target": "workload/hifi_gan/upstream/README.md"
+      },
+      {
+        "path": "config_v1.json",
+        "size": 799,
+        "sha256": "c1bd98e99062ddbced38729a5252dc2aa772328d16d70097ac139dab2f269dc9",
+        "role": "config",
+        "bundle_target": "workload/hifi_gan/config_v1.json"
+      },
+      {
+        "path": "env.py",
+        "size": 409,
+        "sha256": "2afc77370655cdde057adf856b0f47f467196658a49bf762c876b071c76e824d",
+        "role": "source",
+        "bundle_target": "workload/hifi_gan/env.py"
+      },
+      {
+        "path": "meldataset.py",
+        "size": 6482,
+        "sha256": "7a0d45cb3340f4fab670fbf1c2837211236238440c0c9bf316708a6ce0c00fcc",
+        "role": "source",
+        "bundle_target": "workload/hifi_gan/meldataset.py"
+      },
+      {
+        "path": "models.py",
+        "size": 10188,
+        "sha256": "429277889c6d9991008c6ad6afd150c158bf0a1cf4fb3c43c7cb5937b774fd77",
+        "role": "source",
+        "bundle_target": "workload/hifi_gan/models.py"
+      },
+      {
+        "path": "requirements.txt",
+        "size": 119,
+        "sha256": "27c81950b7d91eac7a0008ef92813a08264a9003aa5656f10c34d34cd92ff13e",
+        "role": "config",
+        "bundle_target": "workload/hifi_gan/upstream/requirements.txt"
+      },
+      {
+        "path": "train.py",
+        "size": 12424,
+        "sha256": "0badf95950b05a7c304f8fd37702e56410ee9ad924df4cf61a6ebc4ecb98f3fe",
+        "role": "source",
+        "bundle_target": "workload/hifi_gan/upstream/train.py"
+      },
+      {
+        "path": "utils.py",
+        "size": 1435,
+        "sha256": "b2f38c037f0a3ab88e5c0d77dd768a912dbd3a3e2a8269f930a0b46e8b82ce61",
+        "role": "source",
+        "bundle_target": "workload/hifi_gan/utils.py"
+      },
+      {
+        "path": "LJSpeech-1.1/training.txt",
+        "size": 2749882,
+        "sha256": "56b01aaddd4e38e48694de749078ace84293894da0e2f2ba29a598f964eab8e4",
+        "role": "config",
+        "bundle_target": null
+      },
+      {
+        "path": "LJSpeech-1.1/validation.txt",
+        "size": 30708,
+        "sha256": "2055b12216b2efdb86b4c74c10851d5c040fc9dab3cc96679fdde9f691ea29b6",
+        "role": "config",
+        "bundle_target": null
+      }
+    ]
+  },
+  "overlays": [
+    {
+      "path": "train_colabcola.py",
+      "size": 26821,
+      "sha256": "daae936635e947481092468cd246ebba136e8db77c38f932c8ba7b957b869f6c",
+      "role": "source",
+      "bundle_target": "workload/hifi_gan/train_colabcola.py"
+    },
+    {
+      "path": "resume_state.py",
+      "size": 8268,
+      "sha256": "36d002ed83d5bcef3358f10bd42a29f3413fa6fd2aa2e0e53bb40d1c984d619a",
+      "role": "source",
+      "bundle_target": "workload/hifi_gan/resume_state.py"
+    }
+  ],
+  "runtime": {
+    "provider": "google_colab",
+    "runtime_version": "2026.07",
+    "backend_info_commit": "ec53f93fe44a9cab118dc5451527b18e36e1a643",
+    "gpu_package_snapshot_url": "https://raw.githubusercontent.com/googlecolab/backend-info/ec53f93fe44a9cab118dc5451527b18e36e1a643/pip-freeze.gpu.txt",
+    "requires_python": "==3.12.13",
+    "runtime_requirements": [
+      "torch==2.11.0+cu128",
+      "numpy==2.0.2",
+      "librosa==0.11.0",
+      "scipy==1.16.3",
+      "tensorboard==2.20.0",
+      "soundfile==0.14.0",
+      "matplotlib==3.10.0"
+    ],
+    "install_requirements": []
+  },
+  "smoke": {
+    "initial_completed_steps": 100,
+    "resumed_completed_steps": 110,
+    "checkpoint_interval": 50
+  }
+}

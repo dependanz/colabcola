@@ -1,0 +1,26 @@
+{
+  "gaussianavatars": {
+    "url": "https://github.com/ShenhanQian/GaussianAvatars",
+    "commit": "29b0021308d45c6dce0b522044a4893e189c7a23"
+  },
+  "rasterizer": "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d",
+  "simple_knn": "44f764299fa305faf6ec5ebd99939e0508331503",
+  "glm": "5c46b9c07008ae65cb81ab79cd677ecc1934b903",
+  "nvdiffrast": {
+    "url": "https://github.com/NVlabs/nvdiffrast",
+    "commit": "253ac4fcea7de5f396371124af597e6cc957bfae"
+  },
+  "upstream_modified": false,
+  "candidate_environment": "Python3.13, torch2.11.0+cu130, NumPy2.1.3; CUDA toolkit checked at runtime",
+  "training_assets_present": false,
+  "cloud_execution_authorized": false,
+  "runtime_source_patches": [
+    {
+      "path": "submodules/diff-gaussian-rasterization/cuda_rasterizer/rasterizer_impl.h",
+      "before_sha256": "4ead5b624a1f36197a6da3cba9e032a651318c96bc8d1f856eb196a3120fa544",
+      "after_sha256": "33e3dd7ffbdafd3d0729e8d111a993ffcef071da65fd87bbf363b59adf522026",
+      "change": "Include cstdint explicitly for std::uintptr_t; applied by gaussian_avatar.compat during setup",
+      "source": "https://github.com/graphdeco-inria/gaussian-splatting/issues/788"
+    }
+  ]
+}

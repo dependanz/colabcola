@@ -1,0 +1,13 @@
+{
+  "license": "not declared upstream; private dependency",
+  "modules": {
+    "__init__.py": "59b82c7ee9a82a3568761d19c058812d71c52ca09d07459ecf269065533ce7d8",
+    "builders.py": "0da7900e7d31ddfaee6d25119e8382df86f83c6aec0e453891e256d541dc03ba",
+    "slots.py": "fce7f18ff98ade70b7d195dd6810bd83080837c0c29ce115bf167cfdf53374de",
+    "tower.py": "f6810718a0222b21fe8446597c151bc643e823214466ab62fd53953fb5d312af"
+  },
+  "repository": "https://github.com/dependanz/hyperplus",
+  "source_commit": "24b446e9041724cb282763a90d724cf10edbcd24",
+  "version": "0.1.0",
+  "wheel_sha256": "dadc7e62ce0f31a69a79cf16e9f0178d4f9f45a56da73470a73d2954ed56a5f8"
+}

@@ -1,0 +1,517 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:colabcola:schema:job:v1",
+  "title": "colabcola source JobSpec v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "payload",
+    "entrypoint",
+    "python",
+    "runtime",
+    "resources",
+    "run",
+    "outputs",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "payload": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/payload"
+      }
+    },
+    "entrypoint": {
+      "$ref": "#/$defs/entrypoint"
+    },
+    "python": {
+      "$ref": "#/$defs/python"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/output"
+      }
+    },
+    "durable_checkpoints": {
+      "$ref": "#/$defs/durableCheckpoints"
+    },
+    "remote_inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/remoteInput"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "managed_recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_pattern",
+        "log_patterns"
+      ],
+      "properties": {
+        "checkpoint_pattern": {
+          "type": "string",
+          "pattern": "^outputs/.*\\.json$"
+        },
+        "log_patterns": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "pattern": "^outputs/"
+          }
+        },
+        "artifact_groups": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "marker",
+              "files",
+              "ready_when"
+            ],
+            "properties": {
+              "marker": {
+                "type": "string",
+                "pattern": "^outputs/.*\\.json$"
+              },
+              "files": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "ready_when": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 16,
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "remoteInput": {
+      "type": "object",
+      "required": [
+        "target",
+        "url",
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/portablePath"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?/[^\\s#@]*$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\/$)[^:]+$"
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nonemptyStringArray": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "role",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "source",
+            "data",
+            "config",
+            "license",
+            "wheel"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "$ref": "#/$defs/portablePath"
+        },
+        "exclude": {
+          "$ref": "#/$defs/nonemptyStringArray"
+        }
+      },
+      "additionalProperties": false
+    },
+    "entrypoint": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path",
+        "argv",
+        "cwd"
+      ],
+      "properties": {
+        "kind": {
+          "const": "python_script"
+        },
+        "path": {
+          "$ref": "#/$defs/portablePath"
+        },
+        "argv": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "const": "."
+            },
+            {
+              "$ref": "#/$defs/portablePath"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "python": {
+      "type": "object",
+      "required": [
+        "requires_python",
+        "runtime_requirements",
+        "install_requirements",
+        "embedded_wheels"
+      ],
+      "properties": {
+        "requires_python": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!.*(?:git\\+|://|@)).+$"
+          }
+        },
+        "install_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?:\\[[A-Za-z0-9._,-]+\\])?==[A-Za-z0-9][A-Za-z0-9.!+_-]*(?: --hash=sha256:[0-9a-fA-F]{64})+$"
+          }
+        },
+        "embedded_wheels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/portablePath"
+          }
+        },
+        "pip_requirements": {
+          "$ref": "#/$defs/nonemptyStringArray",
+          "description": "Optional ordinary PyPI requirements installed at runtime. Resolution is not hash-locked; URLs and pip options are rejected by the parser."
+        },
+        "isolation": {
+          "type": "object",
+          "required": [
+            "kind",
+            "version",
+            "url",
+            "bytes",
+            "sha256"
+          ],
+          "properties": {
+            "kind": {
+              "const": "cpython-standalone-linux-x86_64"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^3\\.12\\.[0-9]+$"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^\\s@#]+$"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "provider",
+        "version"
+      ],
+      "properties": {
+        "provider": {
+          "const": "google_colab"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(?:latest|[0-9]{4}\\.[0-9]{2})$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "object",
+      "required": [
+        "accelerator",
+        "gpu_count",
+        "cuda_required",
+        "minimum_gpu_memory_bytes"
+      ],
+      "properties": {
+        "accelerator": {
+          "enum": [
+            "cpu",
+            "gpu"
+          ]
+        },
+        "gpu_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "cuda_required": {
+          "type": "boolean"
+        },
+        "minimum_gpu_memory_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accelerator": {
+                "const": "gpu"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "gpu_count": {
+                "const": 1
+              },
+              "cuda_required": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accelerator": {
+                "const": "cpu"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "gpu_count": {
+                "const": 0
+              },
+              "cuda_required": {
+                "const": false
+              },
+              "minimum_gpu_memory_bytes": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "timeout_seconds",
+        "seed",
+        "environment",
+        "capture_stdout",
+        "capture_stderr"
+      ],
+      "properties": {
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "environment": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "capture_stdout": {
+          "type": "boolean"
+        },
+        "capture_stderr": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "required": [
+        "pattern",
+        "required",
+        "maximum_bytes"
+      ],
+      "properties": {
+        "pattern": {
+          "$ref": "#/$defs/portablePath"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "maximum_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "maximum_file_count"
+      ],
+      "properties": {
+        "maximum_file_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "durableCheckpoints": {
+      "type": "object",
+      "required": [
+        "directory",
+        "generator_prefix",
+        "state_prefix",
+        "filename_digits",
+        "poll_seconds",
+        "remote_retention"
+      ],
+      "properties": {
+        "directory": {
+          "$ref": "#/$defs/portablePath"
+        },
+        "generator_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "state_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "filename_digits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "poll_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 3600
+        },
+        "remote_retention": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

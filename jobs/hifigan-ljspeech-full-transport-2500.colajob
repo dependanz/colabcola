@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "name": "hifigan-ljspeech-full-transport-2500",
+  "payload": [
+    {
+      "role": "license",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/LICENSE",
+      "target": "workload/hifi_gan/LICENSE"
+    },
+    {
+      "role": "license",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/README.md",
+      "target": "workload/hifi_gan/upstream/README.md"
+    },
+    {
+      "role": "config",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/config_v1.json",
+      "target": "workload/hifi_gan/config_v1.json"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/env.py",
+      "target": "workload/hifi_gan/env.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/meldataset.py",
+      "target": "workload/hifi_gan/meldataset.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/models.py",
+      "target": "workload/hifi_gan/models.py"
+    },
+    {
+      "role": "config",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/requirements.txt",
+      "target": "workload/hifi_gan/upstream/requirements.txt"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/train.py",
+      "target": "workload/hifi_gan/upstream/train.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/utils.py",
+      "target": "workload/hifi_gan/utils.py"
+    },
+    {
+      "role": "source",
+      "source": "../src/colabcola/_hifigan/train_colabcola.py",
+      "target": "workload/hifi_gan/train_colabcola.py"
+    },
+    {
+      "role": "source",
+      "source": "../src/colabcola/_hifigan/resume_state.py",
+      "target": "workload/hifi_gan/resume_state.py"
+    },
+    {
+      "role": "license",
+      "source": "../src/colabcola/_hifigan/profile.json",
+      "target": "workload/hifi_gan/HIFIGAN_PROFILE.json"
+    },
+    {
+      "role": "license",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-full/LJSPEECH_SUBSET_MANIFEST.json",
+      "target": "workload/hifi_gan/LJSPEECH_SUBSET_MANIFEST.json"
+    },
+    {
+      "role": "config",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-full/LJSpeech-1.1/training.txt",
+      "target": "workload/hifi_gan/LJSpeech-1.1/training.txt"
+    },
+    {
+      "role": "config",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-full/LJSpeech-1.1/validation.txt",
+      "target": "workload/hifi_gan/LJSpeech-1.1/validation.txt"
+    },
+    {
+      "role": "data",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-full/LJSpeech-1.1/wavs",
+      "target": "workload/hifi_gan/LJSpeech-1.1/wavs"
+    }
+  ],
+  "entrypoint": {
+    "kind": "python_script",
+    "path": "workload/hifi_gan/train_colabcola.py",
+    "argv": [
+      "--config",
+      "workload/hifi_gan/config_v1.json",
+      "--input_wavs_dir",
+      "workload/hifi_gan/LJSpeech-1.1/wavs",
+      "--input_training_file",
+      "workload/hifi_gan/LJSpeech-1.1/training.txt",
+      "--input_validation_file",
+      "workload/hifi_gan/LJSpeech-1.1/validation.txt",
+      "--checkpoint_path",
+      "outputs/cp_hifigan",
+      "--metrics_path",
+      "outputs/metrics.ndjson",
+      "--maximum_steps",
+      "2500",
+      "--stdout_interval",
+      "10",
+      "--checkpoint_interval",
+      "500",
+      "--checkpoint_retention",
+      "2",
+      "--summary_interval",
+      "50",
+      "--validation_interval",
+      "500"
+    ],
+    "cwd": "."
+  },
+  "python": {
+    "requires_python": "==3.12.13",
+    "runtime_requirements": [
+      "torch==2.11.0+cu128",
+      "numpy==2.0.2",
+      "librosa==0.11.0",
+      "scipy==1.16.3",
+      "tensorboard==2.20.0",
+      "soundfile==0.14.0",
+      "matplotlib==3.10.0"
+    ],
+    "install_requirements": [],
+    "embedded_wheels": []
+  },
+  "runtime": {
+    "provider": "google_colab",
+    "version": "2026.07"
+  },
+  "resources": {
+    "accelerator": "gpu",
+    "gpu_count": 1,
+    "cuda_required": true,
+    "minimum_gpu_memory_bytes": 15032385536
+  },
+  "run": {
+    "timeout_seconds": 14400,
+    "seed": 1234,
+    "environment": {
+      "PYTHONUNBUFFERED": "1"
+    },
+    "capture_stdout": true,
+    "capture_stderr": true
+  },
+  "outputs": [
+    {
+      "pattern": "outputs/cp_hifigan/g_00002500",
+      "required": true,
+      "maximum_bytes": 134217728
+    },
+    {
+      "pattern": "outputs/cp_hifigan/do_00002500",
+      "required": true,
+      "maximum_bytes": 1610612736
+    },
+    {
+      "pattern": "outputs/cp_hifigan/config.json",
+      "required": true,
+      "maximum_bytes": 1048576
+    },
+    {
+      "pattern": "outputs/metrics.ndjson",
+      "required": true,
+      "maximum_bytes": 67108864
+    }
+  ],
+  "limits": {
+    "maximum_file_count": 14000
+  }
+}

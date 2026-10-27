@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colabcola"
+dynamic = ["version"]
+description = "Package batch GPU jobs into self-contained notebooks for Google Colab."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "packaging>=24,<27",
+  "requests>=2.32.5,<3",
+  "google-api-python-client>=2.100,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "keyring>=25,<27",
+]
+
+[project.optional-dependencies]
+# Development provider wheels are built by tools/build_development.py.
+# Their local versions deliberately cannot resolve to a different PyPI build.
+colab = [
+  "google-colab-cli==0.1.dev70+g79cd12638.colabcola1",
+  "jupyter-kernel-client==0.8.0+colabcola.f18e982c",
+]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = {attr = "colabcola._version.__version__"}
+
+[project.scripts]
+colabcola = "colabcola.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["colabcola*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+colabcola = ["_hifigan/*.json"]

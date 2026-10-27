@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "name": "hifigan-ljspeech-step-5000-audio-diagnostic",
+  "payload": [
+    {
+      "role": "license",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/LICENSE",
+      "target": "workload/hifi_gan/LICENSE"
+    },
+    {
+      "role": "license",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/README.md",
+      "target": "workload/hifi_gan/upstream/README.md"
+    },
+    {
+      "role": "config",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/config_v1.json",
+      "target": "workload/hifi_gan/config_v1.json"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/env.py",
+      "target": "workload/hifi_gan/env.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/meldataset.py",
+      "target": "workload/hifi_gan/meldataset.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/models.py",
+      "target": "workload/hifi_gan/models.py"
+    },
+    {
+      "role": "source",
+      "source": "../../../devspace/cache/colabcola/hifi-gan-4769534d45265d52a904b850da5a622601885777/utils.py",
+      "target": "workload/hifi_gan/utils.py"
+    },
+    {
+      "role": "source",
+      "source": "../src/colabcola/_hifigan/audio_diagnostic.py",
+      "target": "workload/hifi_gan/audio_diagnostic.py"
+    },
+    {
+      "role": "data",
+      "source": "../dist/hifigan-ljspeech-audio-diagnostic-input/g_00005000",
+      "target": "workload/hifi_gan/checkpoints/g_00005000"
+    },
+    {
+      "role": "data",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-pilot/LJSpeech-1.1/wavs/LJ001-0028.wav",
+      "target": "workload/hifi_gan/validation/LJ001-0028.wav"
+    },
+    {
+      "role": "data",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-pilot/LJSpeech-1.1/wavs/LJ001-0068.wav",
+      "target": "workload/hifi_gan/validation/LJ001-0068.wav"
+    },
+    {
+      "role": "data",
+      "source": "../../../devspace/datasets/colabcola/ljspeech-1.1-hifigan-pilot/LJSpeech-1.1/wavs/LJ002-0149.wav",
+      "target": "workload/hifi_gan/validation/LJ002-0149.wav"
+    }
+  ],
+  "entrypoint": {
+    "kind": "python_script",
+    "path": "workload/hifi_gan/audio_diagnostic.py",
+    "argv": [
+      "--config",
+      "workload/hifi_gan/config_v1.json",
+      "--checkpoint",
+      "workload/hifi_gan/checkpoints/g_00005000",
+      "--expected-checkpoint-sha256",
+      "836627cc247ec688589593d2324aae2cfadc8958eb17304c9426c44de56b46e3",
+      "--input-wav",
+      "workload/hifi_gan/validation/LJ001-0028.wav",
+      "--input-wav",
+      "workload/hifi_gan/validation/LJ001-0068.wav",
+      "--input-wav",
+      "workload/hifi_gan/validation/LJ002-0149.wav",
+      "--output-root",
+      "outputs/audio",
+      "--report",
+      "outputs/audio_diagnostic.json"
+    ],
+    "cwd": "."
+  },
+  "python": {
+    "requires_python": "==3.12.13",
+    "runtime_requirements": [
+      "torch==2.11.0+cu128",
+      "numpy==2.0.2",
+      "librosa==0.11.0",
+      "scipy==1.16.3"
+    ],
+    "install_requirements": [],
+    "embedded_wheels": []
+  },
+  "runtime": {
+    "provider": "google_colab",
+    "version": "2026.07"
+  },
+  "resources": {
+    "accelerator": "gpu",
+    "gpu_count": 1,
+    "cuda_required": true,
+    "minimum_gpu_memory_bytes": 4294967296
+  },
+  "run": {
+    "timeout_seconds": 1800,
+    "seed": 1234,
+    "environment": {
+      "PYTHONUNBUFFERED": "1"
+    },
+    "capture_stdout": true,
+    "capture_stderr": true
+  },
+  "outputs": [
+    {
+      "pattern": "outputs/audio/reference/*.wav",
+      "required": true,
+      "maximum_bytes": 4194304
+    },
+    {
+      "pattern": "outputs/audio/generated/*.wav",
+      "required": true,
+      "maximum_bytes": 4194304
+    },
+    {
+      "pattern": "outputs/audio_diagnostic.json",
+      "required": true,
+      "maximum_bytes": 1048576
+    }
+  ],
+  "limits": {
+    "maximum_file_count": 64
+  }
+}
