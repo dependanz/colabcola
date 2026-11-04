@@ -1,12 +1,30 @@
 """Single-command managed submission with durable journals and readable progress."""
 from __future__ import annotations
+import hashlib
 import json
 import re
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 from .lifecycle import TERMINAL, prepare, supervise, verify_final, recover_terminal_final
-from .lifecycle_io import LifecycleError, atomic, digest, encoded, read_regular, verified_inputs
+from .lifecycle_io import (LifecycleError, atomic, digest, encoded, read_regular, verified_inputs,
+                           safe_file, ARTIFACT_BYTES, MAX_MEMBERS)
+
+
+# Console-only presentation. Journal event names and machine-readable JSON are unchanged.
+_EVENT_LABELS = {
+    "staging_started": "Upload: preparing input bundle",
+    "inputs_verified_on_drive": "Upload: inputs verified on Drive",
+    "allocation_intent": "Runtime: requesting allocation",
+    "runtime_allocated": "Runtime: allocated",
+    "runtime_bootstrapped": "Runtime: worker started",
+    "logs_verified": "Logs: verified snapshot available",
+    "final_artifacts_verified": "Artifacts: verified from Drive",
+    "cleanup_requested": "Cleanup: releasing owned runtime",
+    "owned_runtime_released": "Cleanup: owned runtime released",
+    "run_finished": "Run: finished",
+}
 
 
 class Progress:
@@ -16,11 +34,64 @@ class Progress:
         self.sequence = 0
         self.last_progress = None
         self.log_positions = {}
+        self.existing_run = False
+        self.preflight_checks = []
+        # Rich is presentation-only, and never writes to machine-readable stdout.
+        # Use plain text for redirected output, CI, and tests.
+        self._rich = None
+        if callable(getattr(self.stream, "isatty", None)) and self.stream.isatty():
+            try:
+                from rich.console import Console
+                self._rich = Console(file=self.stream, highlight=False, markup=False)
+            except ImportError:
+                pass
+
+    def preflight_checked(self, name):
+        """Collect successful checks without printing fourteen repetitive lines."""
+        self.preflight_checks.append(name)
+
+    def preflight_completed(self, report):
+        count = sum(check.get("state") == "passed" for check in report["checks"])
+        self.say(f"Preflight: {count}/{len(report['checks'])} checks passed "
+                 "(installation, account, assignments, Drive)")
+
+    def view_existing(self, state):
+        """A terminal journal is history; only newly recovered snapshots are updates."""
+        self.existing_run = True
+        self.saved_snapshots = {key: self._snapshot_identity(state.get(key, {}))
+                                for key in ("logs", "artifacts", "final")}
+
+    @staticmethod
+    def _snapshot_identity(snapshot):
+        return snapshot.get("sha256"), snapshot.get("local_directory")
+
+    def show_recovery(self, state):
+        labels = {"logs": "additional saved logs", "artifacts": "additional completed outputs",
+                  "final": "final artifact bundle"}
+        for key, label in labels.items():
+            snapshot = state.get(key, {})
+            identity = self._snapshot_identity(snapshot)
+            if snapshot.get("local_directory") and identity != self.saved_snapshots.get(key):
+                self.say("Recovered " + label + " from Drive for this existing run: " + snapshot["local_directory"])
+                self.saved_snapshots[key] = identity
 
     def say(self, message):
         # Workload strings cannot inject terminal escape sequences.
         message = "".join(c if c.isprintable() else " " for c in str(message))
-        print("colabcola: " + message, file=self.stream, flush=True)
+        if self._rich is None:
+            print("[colabcola] " + message, file=self.stream, flush=True)
+            return
+        from rich.text import Text
+        line = Text("[colabcola] ", style="dim cyan")
+        if ": " in message and not message.startswith("["):
+            stage, detail = message.split(": ", 1)
+            stage_style = "bold red" if stage in {"Error", "Failure"} else (
+                "bold green" if stage == "Result" and detail.startswith("SUCCESS") else "bold")
+            line.append(stage + ": ", style=stage_style)
+            line.append(detail)
+        else:
+            line.append(message)
+        self._rich.print(line)
 
     def show_logs(self, snapshot, final=False):
         root = snapshot.get("local_directory")
@@ -60,13 +131,24 @@ class Progress:
                     # Redact conventional credential fields before truncating.
                     line = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", line)
                     line = re.sub(r"(?i)((?:access_token|refresh_token|client_secret|colab-runtime-proxy-token|authorization)[\"']?\s*[:=]\s*[\"']?)[^\s\"'&,}]+", r"\1[redacted]", line)
-                    self.say(f"[attempt {attempt} {name}] " + line[:1500])
+                    if line.startswith("colabcola: command "):
+                        line = line.removeprefix("colabcola: ")  # Launcher label is redundant here.
+                    channel = name.removeprefix("runtime/")
+                    self.say(f"[attempt {attempt} | {channel}] " + line[:1500])
             self.log_positions[key] = (len(body), digest(body), max(cursor, end))
 
     def __call__(self, state):
+        if self.existing_run:
+            self.show_recovery(state)
+            return
         for event in state.get("events", []):
             if event["sequence"] > self.sequence:
-                self.say(event["event"].replace("_", " "))
+                name = event["event"]
+                # The journal retains *every* historical preflight, including an
+                # earlier refusal before the user explicitly allowed a runtime.
+                # A recovered failure must not look like a new launch failure.
+                if not name.startswith("preflight_"):
+                    self.say(_EVENT_LABELS.get(name, name.replace("_", " ")))
                 self.sequence = event["sequence"]
         if state.get("connectivity") == "unknown" and state.get("attention"):
             value = (state.get("connectivity"), state["attention"])
@@ -76,8 +158,10 @@ class Progress:
         auth = state.get("drive_authorization", {})
         delivery = auth.get("delivery", {})
         health = (auth.get("state"), delivery.get("state"), delivery.get("stage"), delivery.get("error_type"))
-        if health != getattr(self, "authorization_health", None) and auth.get("state") in ("valid", "expiring", "unavailable"):
-            if auth["state"] == "valid":
+        if health != getattr(self, "authorization_health", None) and auth.get("state") in ("waiting", "valid", "expiring", "unavailable"):
+            if auth["state"] == "waiting":
+                message = "Drive access pending runtime bootstrap"
+            elif auth["state"] == "valid":
                 message = "Drive access valid"
                 if delivery.get("state") == "retrying":
                     action = "credential refresh" if delivery.get("stage") == "credentials" else "token delivery"
@@ -120,11 +204,82 @@ class Progress:
                     self.last_progress = value
 
 
+def _verify_completed_outputs(snapshot, job_id):
+    """Recheck saved intermediate outputs before displaying them as verified."""
+    root = Path(snapshot["local_directory"])
+    commit = snapshot.get("commit", {})
+    members = commit.get("members")
+    if (root.is_symlink() or commit.get("job_id") != job_id or not isinstance(members, dict)
+            or not 1 <= len(members) <= MAX_MEMBERS):
+        raise LifecycleError("saved completed-output snapshot is invalid")
+    total = 0
+    for name, record in members.items():
+        size = record.get("bytes")
+        if type(size) is not int or size < 0:
+            raise LifecycleError("saved completed-output size is invalid")
+        total += size
+        if total > ARTIFACT_BYTES:
+            raise LifecycleError("saved completed outputs exceed the artifact limit")
+        path = safe_file(root, name)
+        if path.stat().st_size != size:
+            raise LifecycleError("saved completed-output size differs")
+        with path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != record.get("sha256"):
+                raise LifecycleError("saved completed-output integrity failure")
+
+
+def _report_result(state, plan, directory, progress, *, existing=False):
+    final_directory = state.get("final", {}).get("local_directory")
+    intermediate_directory = state.get("artifacts", {}).get("local_directory")
+    final_status = "missing"
+    terminal_state = None
+    if final_directory:
+        try:
+            result = verify_final(final_directory, plan["job_id"])
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+            raise LifecycleError("final artifact bundle could not be verified; inspect the saved result directory") from None
+        terminal_state = result.get("terminal_state")
+        final_status = "verified"
+        progress.say("Artifacts: final bundle verified at " + final_directory)
+    else:
+        progress.say("Final artifact bundle is not available locally; artifact recovery is incomplete")
+    if intermediate_directory:
+        _verify_completed_outputs(state["artifacts"], plan["job_id"])
+        completed_status = "verified"
+        progress.say("Intermediate completed-output commits verified: " + intermediate_directory)
+    else:
+        completed_status = "not_available" if plan.get("artifact_groups") else "not_configured"
+        if completed_status == "not_available":
+            progress.say("Artifacts: configured intermediate outputs were not recovered")
+    if state.get("checkpoint"):
+        progress.say("Verified recovery checkpoint retained on Drive and under " + str(directory / "checkpoints"))
+    success = state["phase"] == "completed" and final_status == "verified" and terminal_state == "success"
+    if state["phase"] == "completed" and not success:
+        progress.say("The journal records completion, but verified successful final artifacts are required for a successful command")
+    progress.say("Result: " + ("SUCCESS - verified final artifacts" if success else
+               "INCOMPLETE - inspect the journal and saved artifacts"))
+    print(json.dumps({"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
+                      "result_directory": final_directory, "completed_artifact_directory": intermediate_directory,
+                      "final_artifacts_status": final_status, "completed_outputs_status": completed_status,
+                      "final_terminal_state": terminal_state, "viewing_existing_run": existing,
+                      "run_success": success, "reason": state.get("reason"), "hardware": state.get("hardware")}, indent=2))
+    return 0 if success else 3
+
+
 def run_managed(command, invocation):
     from .bundle import build_bundle
     job = command.job_file.resolve()
     config_path = (command.execution_config or job.with_suffix(".run.json")).resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    if isinstance(config, dict) and "profile" in config:
+        profile_keys = {"profile", "gpu", "max_attempts", "max_seconds",
+                        "fault_after_checkpoint", "provider_backend", "high_mem"}
+        if config["profile"] != "default" or config.keys() - profile_keys:
+            raise LifecycleError("invalid profile execution settings; do not mix account defaults with explicit credentials")
+        from .onboarding import execution_defaults
+        defaults = execution_defaults()
+        config = {key: value for key, value in config.items() if key != "profile"}
+        config.update(drive_parent=defaults["drive_parent"], token_command=str(defaults["token_command"]))
     required = {"drive_parent", "token_command", "gpu", "max_attempts", "max_seconds"}
     allowed = required | {"fault_after_checkpoint", "provider_backend", "high_mem"}
     if not isinstance(config, dict) or not required <= config.keys() or config.keys() - allowed:
@@ -142,10 +297,17 @@ def run_managed(command, invocation):
     if not token_command.is_absolute():
         token_command = config_path.parent / token_command
     helper_argv = json.loads(token_command.read_text(encoding="utf-8"))
+    # The built-in helper pins its original profile. Do not combine that Drive
+    # authorization with Colab authorization from another explicitly selected home.
+    if (isinstance(helper_argv, list) and len(helper_argv) == 6
+            and helper_argv[1:5] == ["-m", "colabcola", "_drive-token", "--config-home"]):
+        from .profiles import config_home
+        if not isinstance(helper_argv[5], str) or Path(helper_argv[5]).expanduser().absolute() != config_home():
+            raise LifecycleError("This job's Drive helper belongs to a different configuration; select its original --profile or COLABCOLA_CONFIG_HOME")
     directory = (command.run_dir or job.with_suffix(".run")).resolve()
     progress = Progress(directory)
     if not (directory / "plan.json").exists():
-        progress.say("Packaging and checking inputs (local preparation)")
+        progress.say("Prepare: packaging and checking local inputs")
         result = prepare(SimpleNamespace(job=job, job_args=command.job_args, run_dir=directory,
             token_command=token_command, drive_parent=config["drive_parent"], gpu=config["gpu"],
             max_attempts=config["max_attempts"], max_seconds=config["max_seconds"],
@@ -198,11 +360,27 @@ def run_managed(command, invocation):
             raise LifecycleError("approval does not match prepared plan")
         verified_inputs(directory, plan["files"])
     approval = command.approve or digest(encoded(plan))
-    progress.say(f"{plan['gpu']}; at most {plan['max_attempts']} runtimes; {plan['max_seconds']} seconds total")
-    progress.say(f"Provider {plan.get('provider_backend', 'legacy')}; runtime {plan.get('runtime_version', 'latest')}; "
-                 f"high host RAM: {plan.get('high_mem', False)}")
-    progress.say("Logs and recovered files: " + str(directory))
-    progress.say("Live logs: verified snapshots checked every 5 seconds, plus transfer/poll time")
+    state = None if command.prepare_only else json.loads((directory / "state.json").read_text())
+    existing = bool(state and state["phase"] in TERMINAL and not command.preflight_only)
+    if existing:
+        validate_prepared(plan)
+        progress.view_existing(state)
+        progress.say("Run: viewing existing " + state["phase"].replace("_", " ") +
+                     " journal (no new runtime)")
+    if existing:
+        accelerator = "CPU" if plan["gpu"] == "NONE" else plan["gpu"]
+        count = plan["max_attempts"]
+        progress.say(f"Run: {accelerator} | up to {count} "
+                     f"{'runtime' if count == 1 else 'runtimes'} | {plan['max_seconds']}s total")
+    else:
+        accelerator = "CPU" if plan["gpu"] == "NONE" else plan["gpu"]
+        count = plan["max_attempts"]
+        progress.say(f"Run: {accelerator} | up to {count} "
+                     f"{'runtime' if count == 1 else 'runtimes'} | {plan['max_seconds']}s total")
+    progress.say(f"Provider: Google Colab ({plan.get('provider_backend', 'legacy')}) | "
+                 f"runtime {plan.get('runtime_version', 'latest')} | "
+                 f"high-memory {'on' if plan.get('high_mem', False) else 'off'}")
+    progress.say("Workspace: " + str(directory))
     if command.prepare_only:
         validate_prepared(plan)
         print(json.dumps({"state": "prepared", "job_id": plan["job_id"], "run_dir": str(directory),
@@ -212,19 +390,14 @@ def run_managed(command, invocation):
                           "runtime_version": plan.get("runtime_version", "latest"),
                           "high_mem": plan.get("high_mem", False)}, indent=2))
         return 0
-    state = json.loads((directory / "state.json").read_text())
-    if state["phase"] in TERMINAL and not command.preflight_only:
-        validate_prepared(plan)
+    if existing:
+        if not state.get("final") and state.get("attempts"):
+            progress.say("Checking Drive for late artifacts and saved logs from this existing run")
         state = recover_terminal_final(directory, observer=progress)
         progress(state)
-        if state.get("final"):
-            verify_final(state["final"]["local_directory"], plan["job_id"])
-            progress.say("Verified results: " + state["final"]["local_directory"])
-        print(json.dumps({"state": state["phase"], "run_dir": str(directory),
-                          "result_directory": state.get("final", {}).get("local_directory"),
-                          "completed_artifact_directory": state.get("artifacts", {}).get("local_directory")}, indent=2))
-        return 0 if state["phase"] == "completed" else 3
-    # The invocation is the execution request. --prepare-only provides a no-network preview.
+        return _report_result(state, plan, directory, progress, existing=True)
+    # Preflight is read-only. The journal still records every individual check.
+    progress.say("Preflight: checking job, account, and Drive access")
     try:
         state = supervise(directory, approval, observer=progress, preflight_only=command.preflight_only,
                           validator=validate_prepared, allow_active_assignments=command.allow_active_assignments)
@@ -242,15 +415,5 @@ def run_managed(command, invocation):
     if command.preflight_only:
         print(json.dumps(state, indent=2))
         return 0
-    if state.get("final"):
-        root = state["final"]["local_directory"]
-        verify_final(root, plan["job_id"])
-        progress.say("Verified results: " + root)
-    if state.get("checkpoint"):
-        progress.say("Verified recovery checkpoint retained on Drive and under " + str(directory / "checkpoints"))
-    print(json.dumps({"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
-                      "result_directory": state.get("final", {}).get("local_directory"),
-                          "completed_artifact_directory": state.get("artifacts", {}).get("local_directory"),
-                      "reason": state.get("reason"), "hardware": state.get("hardware")}, indent=2))
-    return 0 if state["phase"] == "completed" else 3
+    return _report_result(state, plan, directory, progress)
 

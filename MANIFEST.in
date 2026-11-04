@@ -1,10 +1,13 @@
-include README.md DEVELOPMENT.md PACKAGING.md LIFECYCLE.md
+include README.md DEVELOPMENT.md PACKAGING.md LIFECYCLE.md USER_SETUP.md
 include pyproject.toml MANIFEST.in
 recursive-include src/colabcola *.py *.json
-include tools/build_development.py
+recursive-include src/colabcola/_vendor LICENSE
+include tools/build_development.py tools/vendor_provider.py
 prune tests
 prune examples
 prune jobs
 prune dist
 prune build
 global-exclude __pycache__ *.py[cod]
+
+recursive-include docs/setup *.svg

@@ -6,20 +6,37 @@ restores after confirmed runtime loss, verifies local artifacts and releases own
 Live allocation, GPU execution, deliberate runtime replacement, checkpoint continuation,
 Drive publication, local verification and compute release passed the bounded WSL/T4 proof.
 
-## Setup
+## Setup (dev17)
 
-The first provider uses Linux/macOS; this laptop uses Ubuntu WSL. Native Windows
-supervisor logic is tested, but native Windows provider support remains planned.
-Install google-colab-cli revision 79cd126383e72b1e911f20b7030e4247f7861704 using its
-frozen uv.lock, then install colabcola into that environment. Provider module hashes
-are checked before API use. Run colabcola lifecycle login once in a terminal.
-Keep the authorization code there. Credentials stay in private Linux configuration.
+Dev17 uses two authorizations behind one `colabcola login` command: the pinned
+Colab provider's identity for Colab, and a publisher-owned Desktop OAuth client
+for per-file Drive access. Both must resolve to the same Google account before
+a Drive workspace or profile is created. The Drive callback uses loopback + PKCE;
+its tokens and renewal path are separate from Colab's.
 
-Drive uses a separate helper JSON argv file returning access_token and expires_at.
-This laptop invokes the Windows environment's internal colabcola lifecycle drive-token
-command through WSL and the existing drive.file credential store. Never display its
-output or embed it in a job. Only a short-lived access token reaches a private runtime
-control directory outside portable artifacts and journals.
+The wheel must contain the publisher's configured `publisher_oauth.json` resource.
+A build without it stops before consent with publisher setup instructions.
+The publisher development app remains External / Testing; its Drive refresh tokens
+expire after seven days. Public release and production OAuth approval are separate.
+Live new-account acceptance must be recorded separately from mocked tests.
+
+Install the built Colabcola wheel in Python 3.12+ and run `colabcola login` in
+Ubuntu WSL/Linux. The installed package includes its inspected provider code.
+The login command guides Google consent for Colab and limited Drive access,
+checks Colab assignments without allocating, and creates/reuses the app's Drive folder.
+It generates the credential-free helper internally; consumers do not write one.
+
+`colabcola login --status` is offline. `--force` explicitly repeats authorization.
+`--config-home DIR` (or `COLABCOLA_CONFIG_HOME`) selects an isolated per-user configuration.
+The default remains `~/.config/colabcola`. OAuth tokens are kept in a private host
+files (`colab-oauth.json` and `drive-oauth.json`) with mode 0600 on Linux; they are never job payload or journal members.
+Running requires usable refresh authorization and an awake, connected supervisor.
+Native Windows runtime control remains unverified; Windows users should use WSL.
+
+Existing `lifecycle login` and explicit Drive helper configurations are retained for
+legacy prepared jobs. No existing credentials or prepared plans are migrated automatically.
+The development tests use empty configuration roots and simulated Google endpoints;
+live acceptance of each new authorization path is reported separately.
 
 ## Job and CLI
 
@@ -400,7 +417,7 @@ continuous code execution in its [official FAQ](https://research.google.com/cola
 No dummy activity or timer-based idle-timeout bypass is implemented.
 
 
-### Bounded cloud follow-up — 2026-10-16
+### Bounded cloud follow-up â€” 2026-10-16
 
 The subsequent private eight-case LongCat proof on installed `0.1.0.dev11` passed
 on one A100 80 GB with a fresh `kernel-v1` journal. The same kernel/request was
@@ -471,10 +488,10 @@ initial reserve. Existing bounds remain: 5-GiB outputs, 6-GiB snapshots, 4096 me
 renewal is covered by virtual-clock tests, not a new live five-hour acceptance run.
 
 
-## Run a recipe in one command (dev13)
+## Run a recipe in one command
 
 ```sh
-colabcola run --colaml experiment.colaml --run-dir runs/experiment-1
+colabcola run --colaml experiment.colaml --run-dir "$HOME/colabcola-runs/experiment-1"
 ```
 
 This uses the general packager, prepares the managed journal, runs built-in preflight,
@@ -496,8 +513,10 @@ for admission checks without staging/allocation. `--non-interactive` requires co
 recipe answers. `--approve SHA256` and `--expect-job-id SHA256` are optional exact
 identity guards; an expected job guard is retained on reconnect. Existing assignment
 overrides use the same repeatable `--allow-active-assignment ENDPOINT` as managed jobs.
-Recipe execution requires execution.drive_parent and execution.token_command. Packaging
-failure retains its evidence; do not reset or overwrite the incomplete workspace.
+Recipe execution uses the account profile created by `colabcola login`. Explicit
+`execution.drive_parent` and `execution.token_command` remain available for legacy
+configurations. Packaging failure retains its evidence; do not reset or overwrite
+the incomplete workspace.
 
 For an existing portraits recipe, select a NEW SIBLING folder; never the dev11 folder:
 
@@ -508,3 +527,27 @@ colabcola run --colaml portraits-2026-10/longcat.colaml --run-dir portraits-2026
 The run-dir is the workflow root; its generated journal is longcat.run inside it.
 These commands run in the installed controller environment (Ubuntu WSL for the current
 live-verified provider path). They do not migrate or upgrade an older controller.
+
+## Saved results and Drive status (dev17)
+
+Before runtime bootstrap confirms a lease, progress says `Drive access pending runtime
+bootstrap`. Actual expired leases and renewal failures still report their real health;
+the running-job expiry guard remains fail-closed.
+
+Repeating a terminal job opens its saved result: `Viewing existing completed run; no
+new runtime will be started`. Historical allocation events and workload logs are not
+replayed as current activity. If final artifacts were missing, the command can still
+recover late uploads from Drive without allocating compute, and identifies these as
+newly recovered snapshots from the existing run.
+
+The result retains `result_directory` and `completed_artifact_directory` and adds:
+
+- `final_artifacts_status`: `verified` or `missing`.
+- `completed_outputs_status`: `verified`, `not_configured`, or `not_available` for
+  optional intermediate completed-output commits.
+- `viewing_existing_run`: whether this command displayed a terminal journal.
+- `final_terminal_state` and `run_success`: a successful command requires a completed
+  journal and verified final artifacts whose workload terminal state is `success`.
+
+A null intermediate directory is normal when intermediate commits were not configured;
+it does not indicate missing final results. Corrupt saved artifacts fail verification.

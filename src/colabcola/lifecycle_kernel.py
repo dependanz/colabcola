@@ -43,7 +43,7 @@ def safe_client_class(base):
 
 
 def execute(session, code, kernel_id):
-    import jupyter_kernel_client as jkc
+    from ._vendor import jupyter_kernel_client as jkc
     import requests
     if hasattr(jkc, "ColabKernelClient"):
         base, token_key = jkc.ColabKernelClient, "proxy_token"
@@ -109,7 +109,7 @@ def _close(client):
 class WorkloadExecution:
     """One real execute_request; reconnecting never submits the workload again."""
     def __init__(self, session, kernel_id):
-        import jupyter_kernel_client as jkc
+        from ._vendor import jupyter_kernel_client as jkc
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
         self.client = safe_client_class(base)(server_url=session.url, token=session.token,
             kernel_id=kernel_id,

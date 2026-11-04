@@ -177,6 +177,71 @@ class RenewalHealthTests(unittest.TestCase):
             result=authorization_health(state,now=3300)
             self.assertEqual(result['state'],'unavailable');self.assertEqual(result['expires_at'],0)
 
+    def test_prebootstrap_missing_or_zero_lease_stays_waiting_across_journal_roundtrips(self):
+        for phase in ('prepared', 'staging', 'allocating', 'booting'):
+            for previous in ({}, {'expires_at':0}, {'state':'expiring','expires_at':0}):
+                with self.subTest(phase=phase, previous=previous):
+                    state={'phase':phase,'attempts':[] if phase in ('prepared','staging') else [{'number':1}],
+                           'drive_authorization':previous}
+                    for _ in range(3):
+                        result=authorization_health(state,now=3300)
+                        self.assertEqual(result['state'],'waiting')
+                        self.assertEqual(result['expires_at'],0)
+                        state['drive_authorization']=json.loads(json.dumps(result))
+
+    def test_bootstrap_confirms_lease_and_real_expiry_remains_expiring(self):
+        state={'phase':'booting','attempts':[{'number':1}], 'drive_authorization':{'expires_at':0}}
+        state['drive_authorization']=authorization_health(state,now=3300)
+        self.assertEqual(state['drive_authorization']['state'],'waiting')
+        state['drive_authorization']={'state':'bootstrapped','attempt':1,'expires_at':3600}
+        state['phase']='monitoring'
+        self.assertEqual(authorization_health(state,now=3300)['state'],'valid')
+        for phase in ('prepared','allocating','booting','monitoring'):
+            state['phase']=phase
+            for now in (3480,3601):
+                with self.subTest(phase=phase,now=now):
+                    result=authorization_health(state,now=now)
+                    self.assertEqual(result['state'],'expiring')
+                    self.assertEqual(result['expires_at'],3600)
+
+    def test_real_prebootstrap_retries_are_not_hidden_by_waiting_or_roundtrip(self):
+        failures=[{'delivery':{'state':'retrying','stage':stage,'error_type':'ReadTimeout'}}
+                  for stage in ('credentials','delivery')]
+        failures += [{'state':'retrying','error_type':'RefreshError'},
+                     {'state':'retrying'}, {'delivery':{'state':'failed','error_type':'RefreshError'}}]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                state={'phase':'booting','attempts':[{'number':1}],
+                       'drive_authorization':{'attempt':1,'expires_at':0,**failure}}
+                for _ in range(3):
+                    result=authorization_health(state,now=3300)
+                    self.assertEqual(result['state'],'unavailable')
+                    self.assertEqual(result['expires_at'],0)
+                    self.assertIn(result['delivery']['state'],('retrying','failed'))
+                    state['drive_authorization']=json.loads(json.dumps(result))
+
+    def test_live_retry_without_confirmed_access_does_not_claim_waiting(self):
+        state={'phase':'booting','attempts':[{'number':1}],'drive_authorization':{'expires_at':0}}
+        result=authorization_health(state,self.retry(),now=3300)
+        self.assertEqual(result['state'],'unavailable')
+        self.assertEqual(result['expires_at'],0)
+        self.assertEqual(result['delivery']['state'],'retrying')
+        state['drive_authorization']=result
+        success={'attempt':1,'expires_at':6600,'delivery':{'state':'confirmed','source':'delivery'}}
+        result=authorization_health(state,success,now=3300)
+        self.assertEqual(result['state'],'valid')
+        self.assertEqual(result['delivery']['state'],'confirmed')
+
+    def test_previous_attempt_expiry_and_retry_do_not_taint_new_runtime_start(self):
+        state={'phase':'booting','attempts':[{'number':1},{'number':2}],
+               'drive_authorization':{'attempt':1,'expires_at':3200,
+                                      'delivery':{'state':'retrying','stage':'credentials'}}}
+        result=authorization_health(state,self.retry(),now=3300)
+        self.assertEqual(result['state'],'waiting')
+        self.assertEqual(result['attempt'],2)
+        self.assertEqual(result['expires_at'],0)
+        self.assertNotIn('delivery',result)
+
     def test_unchanged_token_is_not_delivered_every_minute(self):
         engine=SimpleNamespace(state=self.state(),plan={});provider=mock.Mock()
         pump=RenewalPump(engine,provider,lambda:{'access_token':'secret','expires_at':3600},clock=lambda:1000)
@@ -222,6 +287,45 @@ class RenewalHealthTests(unittest.TestCase):
         state['worker']=self.worker();state['drive_authorization']=authorization_health(state,self.retry(),now=3300)
         progress(state)
         self.assertTrue(output.getvalue().rstrip().endswith('Drive access valid'))
+
+
+class SupervisorAuthorizationHealthTests(unittest.TestCase):
+    setUp=fixtures.LifecycleTests.setUp
+    engine=fixtures.LifecycleTests.engine
+    reload=fixtures.LifecycleTests.reload
+    running=fixtures.LifecycleTests.running
+
+    def test_monitoring_unknown_lease_still_fails_closed_and_releases_owned_runtime(self):
+        for previous in ({}, {'state':'waiting','expires_at':0}, {'state':'expiring','expires_at':0}):
+            with self.subTest(previous=previous):
+                engine=self.running()
+                engine.plan['authorization_policy']='renewable-v1'
+                engine.state['drive_authorization']=previous
+                engine.state['drive_authorization']=authorization_health(engine.state,now=self.now)
+                self.assertEqual(engine.state['drive_authorization']['state'],'unavailable')
+                self.assertEqual(engine.state['drive_authorization']['expires_at'],0)
+                engine.token=mock.Mock(side_effect=AssertionError('must release without requesting credentials'))
+                before=len(self.provider.releases)
+                engine.advance()
+                self.assertEqual(engine.state['phase'],'failed')
+                self.assertEqual(engine.state['reason'],'drive_authorization_expiring')
+                self.assertEqual(len(self.provider.releases),before+1)
+                engine.token.assert_not_called()
+
+    def test_supervisor_bootstrap_replaces_waiting_with_confirmed_lease(self):
+        engine=self.engine()
+        engine.plan['authorization_policy']='renewable-v1'
+        engine.token=lambda:{'access_token':'synthetic-private','expires_at':3600}
+        for phase in ('prepared','allocating','booting'):
+            self.assertEqual(engine.state['phase'],phase)
+            engine.state['drive_authorization']=authorization_health(engine.state,now=self.now)
+            self.assertEqual(engine.state['drive_authorization']['state'],'waiting')
+            engine.advance()
+        self.assertEqual(engine.state['phase'],'monitoring')
+        result=authorization_health(engine.state,now=self.now)
+        self.assertEqual(result['state'],'valid')
+        self.assertEqual(result['expires_at'],3600)
+        self.assertNotIn('synthetic-private',json.dumps(engine.state))
 
 
 @unittest.skipUnless(sys.platform == "linux", "real runtime worker requires Linux")

@@ -13,6 +13,7 @@ import threading
 from ._version import __version__
 from .errors import BundleError, SpecError
 from .lifecycle_io import LifecycleError, atomic, digest, encoded, read_regular
+from .profiles import add_profile_argument, selected
 
 
 def _utc():
@@ -68,6 +69,7 @@ def parser():
     p.add_argument("--approve",help="optional exact approval for this workspace's prepared plan")
     p.add_argument("--expect-job-id",help="optional portable job SHA256 guard, retained on reconnect")
     p.add_argument("--allow-active-assignment",action="append",default=[],metavar="ENDPOINT")
+    add_profile_argument(p)
     return p
 
 
@@ -104,8 +106,8 @@ def _open_workspace(args):
         if expected and args.expect_job_id and expected != args.expect_job_id:
             raise LifecycleError("expected job identity changed; use a new workspace")
         return workspace,record,False
-    from .packager import _safe
-    _safe(recipe)
+    from .packager import _safe_input
+    _safe_input(recipe)
     # A sibling is safe; creating inside a previous job folder is not preservation.
     for parent in workspace.parents:
         if parent.is_dir() and any(parent.glob("*.run/plan.json")):
@@ -131,7 +133,7 @@ def _package(recipe, destination, non_interactive):
     args,answers,save_path,questions = guide(args,arguments,cli)
     result = package(args)
     if not result["execution_config"]:
-        raise SpecError("colabcola run requires execution.drive_parent and execution.token_command in the recipe")
+        raise SpecError("packager did not produce execution settings")
     result["questions_asked"] = questions
     return result
 
@@ -165,12 +167,22 @@ def _execute(args, workspace, record, fresh):
     print("colabcola: Automatic command log: " + str(workspace/"launch.log"),file=sys.stderr,flush=True)
     command = SubmissionCommand(job_file=job,job_args=(),output=None,drive_config=None,
         prepare_only=args.prepare_only,preflight_only=args.preflight_only,approve=args.approve,
-        allow_active_assignments=tuple(args.allow_active_assignment))
+        allow_active_assignments=tuple(args.allow_active_assignment),
+        profile=getattr(args, "profile", None))
     return run_managed(command,invocation)
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    try:
+        with selected(args.profile):
+            return _run(args)
+    except LifecycleError as exc:
+        print("colabcola run: " + _redact(str(exc)),file=sys.stderr)
+        return 2
+
+
+def _run(args):
     from .lifecycle import run_lock
     try:
         workspace,record,fresh = _open_workspace(args)

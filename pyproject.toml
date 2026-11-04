@@ -7,22 +7,29 @@ name = "colabcola"
 dynamic = ["version"]
 description = "Package batch GPU jobs into self-contained notebooks for Google Colab."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "packaging>=24,<27",
   "requests>=2.32.5,<3",
   "google-api-python-client>=2.100,<3",
   "google-auth-oauthlib>=1.2,<2",
   "keyring>=25,<27",
+  "filelock>=3.29.2,<4",
+  "google-auth>=2.49.1,<3",
+  "html2text>=2024.2.26",
+  "pydantic>=2.12.5,<3",
+  "rich>=14.3.3,<15",
+  "jupyter-core>=5,<6",
+  "jupyter-client>=8.6.3,<9",
+  "jupyter-mimetypes>=0.2,<1",
+  "traitlets>=5.3,<6",
+  "typing-extensions>=4",
+  "websocket-client>=1.6,<2",
 ]
 
 [project.optional-dependencies]
-# Development provider wheels are built by tools/build_development.py.
-# Their local versions deliberately cannot resolve to a different PyPI build.
-colab = [
-  "google-colab-cli==0.1.dev70+g79cd12638.colabcola1",
-  "jupyter-kernel-client==0.8.0+colabcola.f18e982c",
-]
+# Compatibility extra: the default installation now includes the private providers.
+colab = []
 
 [tool.setuptools]
 include-package-data = false
@@ -39,4 +46,7 @@ include = ["colabcola*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-colabcola = ["_hifigan/*.json"]
+colabcola = ["_hifigan/*.json", "publisher_oauth.json"]
+"colabcola._vendor" = ["provenance.json"]
+"colabcola._vendor.colab_cli" = ["oauth_config.json", "LICENSE"]
+"colabcola._vendor.jupyter_kernel_client" = ["LICENSE"]

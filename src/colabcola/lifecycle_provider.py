@@ -16,6 +16,12 @@ SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email",
 UPSTREAM_COMMIT = "79cd126383e72b1e911f20b7030e4247f7861704"
 
 
+class AuthorizationScopeError(LifecycleError):
+    """Fresh Google consent omitted permissions; existing authorization is unchanged."""
+    def __init__(self):
+        super().__init__("Google did not grant all requested permissions; repeat login and grant all requested access. Existing authorization was not replaced")
+
+
 def verify_provider():
     expected = {
         "client.py": "7081d2c9decbc9a4cafb4ab89202c7e7a644f72bd74a7e846bffce5344839a06",
@@ -23,12 +29,52 @@ def verify_provider():
         "state.py": "563232b3b0bc201245e9c35a79df052ead53b6b8c90348aebe3fe8d1d23c83d3",
     }
     try:
-        package = importlib.resources.files("colab_cli")
+        package = importlib.resources.files("colabcola._vendor.colab_cli")
     except ModuleNotFoundError:
-        raise LifecycleError(f"Colab provider is not installed. Install the development wheelhouse with: python -m pip install --find-links /path/to/wheelhouse 'colabcola[colab]=={__version__}' (Python 3.12+ on Linux/WSL); see DEVELOPMENT.md") from None
+        raise LifecycleError("Bundled Colab provider is missing; reinstall the colabcola wheel with python -m pip install --force-reinstall colabcola") from None
     for name, sha in expected.items():
-        if digest(package.joinpath(name).read_bytes().replace(b"\r\n", b"\n")) != sha:
+        try:
+            body = package.joinpath(name).read_bytes()
+        except OSError:
+            raise LifecycleError("Bundled Colab provider is incomplete; reinstall colabcola") from None
+        if digest(_upstream_bytes(body)) != sha:
             raise LifecycleError("Google provider differs from inspected commit " + UPSTREAM_COMMIT)
+
+
+def _upstream_bytes(body):
+    """Undo only our documented namespace relocation for pinned upstream hashes."""
+    body = body.replace(b"\r\n", b"\n")
+    body = body.removeprefix(b"# Modified for Colabcola: private module namespace relocation; see ../provenance.json.\n")
+    for name in (b"colab_cli", b"jupyter_kernel_client"):
+        body = body.replace(b"from colabcola._vendor import " + name, b"import " + name)
+        body = body.replace(b"colabcola._vendor." + name, name)
+    return body
+
+
+def _verify_bundle():
+    """Verify every shipped provider source/resource before importing it."""
+    root = importlib.resources.files("colabcola._vendor")
+    try:
+        manifest = json.loads(root.joinpath("provenance.json").read_text(encoding="utf-8"))
+        expected_commits = {"colab_cli": UPSTREAM_COMMIT,
+                            "jupyter_kernel_client": "f18e982c3265df5e923aa9def101ab3fd737e139"}
+        if manifest["schema"] != 1 or set(manifest["providers"]) != set(expected_commits):
+            raise ValueError()
+        for name, commit in expected_commits.items():
+            record = manifest["providers"][name]
+            if record["commit"] != commit or not record["files"]:
+                raise ValueError()
+            package = root.joinpath(name)
+            actual = {entry.name for entry in package.iterdir()
+                      if entry.is_file() and (entry.name.endswith((".py", ".json")) or entry.name == "LICENSE")}
+            if actual != set(record["files"]):
+                raise ValueError()
+            for filename, entry in record["files"].items():
+                if "/" in filename or "\\" in filename or digest(package.joinpath(filename).read_bytes().replace(b"\r\n", b"\n")) != entry["sha256"]:
+                    raise ValueError()
+        return manifest
+    except (OSError, ValueError, KeyError, TypeError):
+        raise LifecycleError("Bundled provider integrity failed; reinstall the colabcola wheel") from None
 
 
 KERNEL_SOURCE_HASHES = {'client.py': 'd666344ceffd80d6d18a072e5a738069066e32471d97c238344edc108b8fda98', 'manager.py': '1006dd646953741cec569185075df88bb306efeb50e418a2de1ff44d972feecb', 'wsclient.py': '1a4456403b972990216012e079c5da0ff8a7c69fd3fcb72b19c20d74bd460bb1', 'utils.py': '98ffaef260265d0ced4cd7b849f5d9374515027acbe7a8db7b6feb614d7c49d4', 'constants.py': '63f874790a6c4cb8de5a4c4c08393e8ea91ddb4fbac2b1247993fe9dda19cb5e', 'models.py': '0ca21a2b00d1d2b657f52bd7113eee1cc1474094fb8b121eabb72b4b84b498fb'}
@@ -36,39 +82,51 @@ KERNEL_SOURCE_HASHES = {'client.py': 'd666344ceffd80d6d18a072e5a738069066e32471d
 
 def dependency_report():
     """Offline installation checks: no credential reads or provider construction."""
-    import importlib.metadata
     verify_provider()
+    manifest = _verify_bundle()
     try:
-        package = importlib.resources.files("jupyter_kernel_client")
+        package = importlib.resources.files("colabcola._vendor.jupyter_kernel_client")
         for name, expected in KERNEL_SOURCE_HASHES.items():
-            if digest(package.joinpath(name).read_bytes().replace(b"\r\n", b"\n")) != expected:
-                raise LifecycleError("Jupyter provider differs from inspected fork f18e982c; reinstall the development wheelhouse colab extra")
-        from colab_cli.client import Client, Prod
-        from colab_cli.state import SessionState
-        from jupyter_kernel_client import KernelClient, JupyterSubprotocol
+            if digest(_upstream_bytes(package.joinpath(name).read_bytes())) != expected:
+                raise LifecycleError("Jupyter provider differs from inspected fork f18e982c; reinstall colabcola")
+        from ._vendor.colab_cli.client import Client, Prod
+        from ._vendor.colab_cli.state import SessionState
+        from ._vendor.jupyter_kernel_client import KernelClient, JupyterSubprotocol
     except ImportError:
-        raise LifecycleError("Provider dependencies are incomplete; reinstall the development wheelhouse colab extra and run python -m pip check") from None
-    return {"provider_source_verified": True, "google_colab_cli": importlib.metadata.version("google-colab-cli"),
-            "jupyter_kernel_client": importlib.metadata.version("jupyter-kernel-client"),
+        raise LifecycleError("Provider dependencies are incomplete; reinstall colabcola and run python -m pip check") from None
+    return {"provider_source_verified": True, "distribution": "bundled_private_modules",
+            "google_colab_cli": manifest["providers"]["colab_cli"]["version"],
+            "jupyter_kernel_client": manifest["providers"]["jupyter_kernel_client"]["version"],
             "upstream_commit": UPSTREAM_COMMIT, "kernel_commit": "f18e982c3265df5e923aa9def101ab3fd737e139"}
 
 
 def auth_path():
-    return Path.home() / ".config/colabcola/colab-oauth.json"
+    from .profiles import config_home
+    return config_home() / "colab-oauth.json"
 
 
-def login():
+def login(scopes=None):
     dependency_report()
     from google_auth_oauthlib.flow import InstalledAppFlow
-    config = json.loads(importlib.resources.files("colab_cli").joinpath("oauth_config.json").read_text())
-    flow = InstalledAppFlow.from_client_config(config, SCOPES)
+    config = json.loads(importlib.resources.files("colabcola._vendor.colab_cli").joinpath("oauth_config.json").read_text())
+    requested_scopes = list(scopes or SCOPES)
+    flow = InstalledAppFlow.from_client_config(config, requested_scopes)
     flow.redirect_uri = "https://sdk.cloud.google.com/applicationdefaultauthcode.html"
     url, _ = flow.authorization_url(prompt="consent", token_usage="remote")
     print("Open this Google sign-in URL, then paste the code into this terminal:\n" + url)
     flow.fetch_token(code=input("Authorization code: ").strip())
+    credential = flow.credentials
+    # google-auth's JSON retains requested scopes but drops granted_scopes. Validate
+    # the original consent result before serializing or replacing an existing login.
+    granted = credential.granted_scopes
+    if isinstance(granted, str):
+        granted = granted.split()
+    if (not credential.has_scopes(requested_scopes)
+            or (granted is not None and not set(requested_scopes) <= set(granted))):
+        raise AuthorizationScopeError()
     path = auth_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic(path, json.loads(flow.credentials.to_json()))
+    atomic(path, json.loads(credential.to_json()))
     os.chmod(path, 0o600)
     print("Colab authorization saved. No runtime was allocated.")
 
@@ -82,7 +140,7 @@ def credentials():
     if os.name != "nt" and path.stat().st_mode & 0o077:
         raise LifecycleError("Colab credential file must have mode 0600")
     try:
-        credential = Credentials.from_authorized_user_file(str(path), SCOPES)
+        credential = Credentials.from_authorized_user_file(str(path))
         if not credential.valid:
             credential.refresh(Request())
         if not credential.valid or not credential.has_scopes(SCOPES):
@@ -99,7 +157,7 @@ class GoogleProvider:
     """Uses the inspected upstream client; tokens never enter the supervisor journal."""
     def __init__(self):
         dependency_report()
-        from colab_cli.client import Client, Prod
+        from ._vendor.colab_cli.client import Client, Prod
         from google.auth.transport.requests import AuthorizedSession
         verify_provider()
         os.environ["COLAB_CLI_REQUEST_TIMEOUT"] = "40"
@@ -115,7 +173,7 @@ class GoogleProvider:
         return next((item for item in self.assignments() if item.endpoint == endpoint), None)
 
     def allocate(self, allocation_id, gpu):
-        from colab_cli.client import Accelerator, Variant, resolve_assign_shape
+        from ._vendor.colab_cli.client import Accelerator, Variant, resolve_assign_shape
         # Persist allocation_id BEFORE calling. Retrying uses the same notebook UUID;
         # upstream reconciles an uncertain POST with a GET before repeating allocation.
         assignment = self.client.assign(uuid.UUID(allocation_id),
@@ -125,7 +183,7 @@ class GoogleProvider:
         return assignment.endpoint
 
     def reconcile(self, allocation_id, gpu):
-        from colab_cli.client import Accelerator, Variant, Assignment, resolve_assign_shape
+        from ._vendor.colab_cli.client import Accelerator, Variant, Assignment, resolve_assign_shape
         result = self.client._get_assignment(
             uuid.UUID(allocation_id),
             Variant.GPU if gpu != "NONE" else Variant.DEFAULT, Accelerator(gpu),
@@ -148,7 +206,7 @@ class GoogleProvider:
         return {"state": "absent", "unassign_status": status}
 
     def _session(self, endpoint):
-        from colab_cli.state import SessionState
+        from ._vendor.colab_cli.state import SessionState
         assignment = self.lookup(endpoint)
         if assignment is None:
             raise LifecycleError("owned runtime is absent")

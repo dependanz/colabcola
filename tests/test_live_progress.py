@@ -156,7 +156,7 @@ class KernelTests(unittest.TestCase):
             def stop(self,**kwargs):
                 if close_error:raise close_error
         module=SimpleNamespace(KernelClient=Client,JupyterSubprotocol=SimpleNamespace(DEFAULT='default'))
-        with mock.patch.dict(sys.modules,{'jupyter_kernel_client':module}),mock.patch('colabcola.lifecycle_kernel.time.sleep'):
+        with mock.patch('colabcola._vendor.jupyter_kernel_client',module,create=True),mock.patch('colabcola.lifecycle_kernel.time.sleep'):
             execute(SimpleNamespace(url='https://invalid',token='secret'),'pass','owned')
 
     def test_execution_failure_is_not_retried_and_is_redacted(self):
@@ -208,8 +208,8 @@ class KernelTests(unittest.TestCase):
 
     def test_installed_jupyter_start_timeout_without_kernel_cleans_up(self):
         try:
-            import jupyter_kernel_client
-            from jupyter_kernel_client.manager import KernelHttpManager
+            from colabcola._vendor import jupyter_kernel_client
+            from colabcola._vendor.jupyter_kernel_client.manager import KernelHttpManager
         except ImportError:
             self.skipTest('optional installed Jupyter dependency unavailable')
         import requests
@@ -228,7 +228,7 @@ class KernelTests(unittest.TestCase):
 
     def test_installed_jupyter_constructor_failure_no_missing_manager_warning(self):
         try:
-            import jupyter_kernel_client as jkc
+            from colabcola._vendor import jupyter_kernel_client as jkc
         except ImportError:
             self.skipTest('optional installed Jupyter dependency unavailable')
         base=getattr(jkc,'KernelClient',getattr(jkc,'JupyterKernelClient',None))

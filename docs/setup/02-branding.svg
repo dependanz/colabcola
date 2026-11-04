@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 485" role="img" aria-labelledby="branding-title branding-desc">
+<title id="branding-title">First-time Google Auth Platform setup — schematic, not a screenshot</title>
+<desc id="branding-desc">The Get started flow has App information, Audience, Contact Information and Finish. Enter a recognizable personal app name, select your own support email, choose External, enter contact email and personally review the policy agreement. Creating these settings does not publish the app.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="485" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">First-time Google Auth Platform setup</text>
+<rect x="32" y="108" width="431" height="139" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="497" y="108" width="431" height="139" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="32" y="272" width="431" height="139" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="497" y="272" width="431" height="139" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="52" y="144" class="card-title">1  App information</text><text x="52" y="178" class="body">App name: Colabcola personal</text>
+<text x="52" y="205" class="body">User support email: your setup account</text><text x="517" y="144" class="card-title">2  Audience</text><text x="517" y="178" class="body">Choose External for personal setup</text>
+<text x="517" y="205" class="body">Then choose Next</text><text x="52" y="308" class="card-title">3  Contact Information</text><text x="52" y="342" class="body">Enter an email you monitor</text>
+<text x="52" y="369" class="body">Then choose Next</text><text x="517" y="308" class="card-title">4  Finish</text><text x="517" y="342" class="body">Review and decide on the policy agreement</text>
+<text x="517" y="369" class="body">Continue → Create</text><text x="32" y="449" class="note">Create configures the app. Publishing to Production is a separate choice.</text>
+</svg>

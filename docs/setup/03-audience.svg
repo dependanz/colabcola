@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-labelledby="audience-title audience-desc">
+<title id="audience-title">Testing requires your account as a test user — schematic, not a screenshot</title>
+<desc id="audience-desc">On Audience, use External with publishing status Testing, then Add users and Save the same Google account used for Colab and Drive. Testing grants containing Drive scope expire after seven days. Production is a separate manual decision.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="470" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">Testing requires your account as a test user</text>
+<rect x="32" y="110" width="428" height="243" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="496" y="110" width="432" height="243" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="52" y="149" class="card-title">Audience settings</text><text x="52" y="195" class="body">User type: External</text>
+<text x="52" y="222" class="body">Publishing status: Testing</text><rect x="52" y="274" width="210" height="34" rx="17" fill="#d8eee9"/><text x="66" y="298" class="small">Keep Testing for setup</text><text x="516" y="149" class="card-title">Test users</text><text x="516" y="195" class="body">Add users</text>
+<text x="516" y="222" class="body">Enter your intended Google account</text>
+<text x="516" y="249" class="body">Save</text><text x="516" y="308" class="small">Use this account for both authorizations</text><rect x="32" y="380" width="896" height="65" rx="12" fill="#fff2d9" stroke="#d9bb78"/><text x="51" y="407" class="card-title">7-day expiry</text><text x="234" y="406" class="body">Testing + Drive scope: re-consent when the grant expires.</text><text x="234" y="431" class="small">Automatic access-token refresh cannot extend this testing limit.</text>
+</svg>

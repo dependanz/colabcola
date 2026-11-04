@@ -27,6 +27,7 @@ from .drive import (
     write_drive_receipt,
 )
 from .lifecycle_io import LifecycleError
+from .profiles import add_profile_argument, selected
 from .errors import BundleError, DriveTransportError, SpecError
 from .google_drive import (
     DEFAULT_COLAB_SECRET_NAME,
@@ -58,6 +59,7 @@ class SubmissionCommand:
     approve: str | None = None
     preflight_only: bool = False
     allow_active_assignments: tuple[str, ...] = ()
+    profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ class ControllerCommand:
     drive_relative_path: str
     reused: bool
     drive_config: Path | None
+    profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +86,7 @@ class GoogleDriveAuthCommand:
     colab_client_secrets: Path
     colab_secret_name: str
     drive_config: Path | None
+    profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +94,7 @@ class ValidateCommand:
     """A parsed request to validate one job file."""
 
     job_file: Path
+    profile: str | None = None
 
 
 Command = SubmissionCommand | ControllerCommand | GoogleDriveAuthCommand | ValidateCommand
@@ -102,7 +107,7 @@ def _submission_parser(*, prog: str = "colabcola") -> argparse.ArgumentParser:
             "Run managed .colajobs with progress and recovery, stage other jobs for their "
             "Drive controller, or explicitly compile a self-contained notebook."
         ),
-        epilog="Run recipes with colabcola run --help. Create jobs with colabcola package --help. Arguments after JOB.colajob are forwarded unchanged to the job entrypoint.",
+        epilog="Use colabcola --profile NAME <command> to select an account for one invocation. Set up account access with colabcola login. Run recipes with colabcola run --help. Create jobs with colabcola package --help. Arguments after JOB.colajob are forwarded unchanged to the job entrypoint.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
@@ -137,6 +142,7 @@ def _submission_parser(*, prog: str = "colabcola") -> argparse.ArgumentParser:
         metavar="JOB_ARGS",
         help="arguments forwarded unchanged, without shell parsing",
     )
+    add_profile_argument(parser)
     return parser
 
 
@@ -146,7 +152,7 @@ def _controller_parser() -> argparse.ArgumentParser:
         description=(
             "Generate a tiny controller after independently verifying an uploaded Drive object."
         ),
-        epilog="Run recipes with colabcola run --help. Create jobs with colabcola package --help. Arguments after JOB.colajob are forwarded unchanged to the job entrypoint.",
+        epilog="Use colabcola --profile NAME <command> to select an account for one invocation. Set up account access with colabcola login. Run recipes with colabcola run --help. Create jobs with colabcola package --help. Arguments after JOB.colajob are forwarded unchanged to the job entrypoint.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--output", type=Path, help="controller .ipynb output path")
@@ -158,6 +164,7 @@ def _controller_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reused", action="store_true")
     parser.add_argument("job_file", type=Path, metavar="JOB.colajob")
     parser.add_argument("job_args", nargs=argparse.REMAINDER, metavar="JOB_ARGS")
+    add_profile_argument(parser)
     return parser
 
 
@@ -177,6 +184,7 @@ def _google_drive_auth_parser() -> argparse.ArgumentParser:
         help="Colab Secrets key containing the limited-input OAuth client JSON",
     )
     parser.add_argument("--drive-config", type=Path, help="settings output path")
+    add_profile_argument(parser)
     return parser
 
 
@@ -186,25 +194,41 @@ def _validation_parser() -> argparse.ArgumentParser:
         description="Validate a version 1 .colajob without compiling it.",
     )
     parser.add_argument("job_file", type=Path, metavar="JOB.colajob")
+    add_profile_argument(parser)
     return parser
 
 
-def _parse_command(argv: Sequence[str]) -> Command:
+def _profile_prefix(argv: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Move only leading global selectors; never inspect workload arguments."""
     raw = list(argv)
+    end = 0
+    while end < len(raw):
+        if raw[end] == "--profile":
+            end = min(end + 2, len(raw))
+        elif raw[end].startswith("--profile="):
+            end += 1
+        else:
+            break
+    return raw[:end], raw[end:]
+
+
+def _parse_command(argv: Sequence[str]) -> Command:
+    prefix, raw = _profile_prefix(argv)
     if raw[:2] == ["auth", "google-drive"]:
-        args = _google_drive_auth_parser().parse_args(raw[2:])
+        args = _google_drive_auth_parser().parse_args(prefix + raw[2:])
         return GoogleDriveAuthCommand(
             desktop_client_secrets=args.desktop_client_secrets,
             colab_client_secrets=args.colab_client_secrets,
             colab_secret_name=args.colab_secret_name,
             drive_config=args.drive_config,
+            profile=args.profile,
         )
     if raw and raw[0] == "validate":
-        args = _validation_parser().parse_args(raw[1:])
-        return ValidateCommand(job_file=args.job_file)
+        args = _validation_parser().parse_args(prefix + raw[1:])
+        return ValidateCommand(job_file=args.job_file, profile=args.profile)
 
     if raw and raw[0] == "controller":
-        args = _controller_parser().parse_args(raw[1:])
+        args = _controller_parser().parse_args(prefix + raw[1:])
         return ControllerCommand(
             job_file=args.job_file,
             job_args=tuple(args.job_args),
@@ -215,6 +239,7 @@ def _parse_command(argv: Sequence[str]) -> Command:
             drive_relative_path=args.drive_relative_path,
             reused=args.reused,
             drive_config=args.drive_config,
+            profile=args.profile,
         )
 
     mode = "submit"
@@ -224,7 +249,7 @@ def _parse_command(argv: Sequence[str]) -> Command:
         raw = raw[1:]
         parser = _submission_parser(prog="colabcola compile")
 
-    args = parser.parse_args(raw)
+    args = parser.parse_args(prefix + raw)
     if args.prepare_only and args.preflight_only:
         parser.error("--prepare-only and --preflight-only are mutually exclusive")
     return SubmissionCommand(
@@ -237,6 +262,7 @@ def _parse_command(argv: Sequence[str]) -> Command:
         execution_config=args.execution_config, run_dir=args.run_dir,
         prepare_only=args.prepare_only, resume_from=args.resume_from, approve=args.approve,
         preflight_only=args.preflight_only, allow_active_assignments=tuple(args.allow_active_assignment),
+        profile=args.profile,
     )
 
 
@@ -254,18 +280,42 @@ def _validation_summary(invocation: JobInvocation) -> dict[str, object]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
+    prefix, arguments = _profile_prefix(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "login":
+        from .onboarding import main as login_main
+        return login_main(prefix + arguments[1:])
+    if arguments and arguments[0] == "_drive-token":
+        if prefix:
+            _submission_parser().error("--profile is not supported for the internal token helper")
+        from .onboarding import token_main
+        return token_main(arguments[1:])
     if arguments and arguments[0] == "lifecycle":
         from .lifecycle import main as lifecycle_main
-        return lifecycle_main(arguments[1:])
+        global_parser = argparse.ArgumentParser(prog="colabcola")
+        add_profile_argument(global_parser)
+        options = global_parser.parse_args(prefix)
+        try:
+            with selected(options.profile):
+                return lifecycle_main(arguments[1:])
+        except LifecycleError as exc:
+            print(f"colabcola: {exc}", file=sys.stderr)
+            return 2
     if arguments and arguments[0] == "run":
         from .workflow import main as workflow_main
-        return workflow_main(arguments[1:])
+        return workflow_main(prefix + arguments[1:])
     if arguments and arguments[0] == "package":
         from .packager import main as package_main
-        return package_main(arguments[1:])
-    command = _parse_command(arguments)
+        return package_main(prefix + arguments[1:])
+    command = _parse_command(prefix + arguments)
+    try:
+        with selected(command.profile):
+            return _execute(command)
+    except LifecycleError as exc:
+        print(f"colabcola: {exc}", file=sys.stderr)
+        return 2
 
+
+def _execute(command: Command) -> int:
     try:
         if isinstance(command, GoogleDriveAuthCommand):
             settings = google_drive_settings_from_clients(

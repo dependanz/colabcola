@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-labelledby="scopes-title scopes-desc">
+<title id="scopes-title">Data Access: three scopes — schematic, not a screenshot</title>
+<desc id="scopes-desc">Add or remove scopes, select openid, https://www.googleapis.com/auth/userinfo.email, and https://www.googleapis.com/auth/drive.file, then Update and Save. Drive file access is limited to files used with this app. Enabling the Drive API is a separate project setting.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="470" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">Data Access: three scopes</text>
+<rect x="32" y="111" width="896" height="72" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="32" y="195" width="896" height="72" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="32" y="279" width="896" height="72" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="53" y="151" class="mono">openid</text><text x="620" y="151" class="small">Identify the Google account</text><text x="53" y="235" class="mono">https://www.googleapis.com/auth/userinfo.email</text><text x="620" y="235" class="small">Show the selected email</text><text x="53" y="319" class="mono">https://www.googleapis.com/auth/drive.file</text><text x="620" y="319" class="small">Files used with this app</text><rect x="32" y="376" width="162" height="34" rx="17" fill="#d8eee9"/><text x="46" y="400" class="small">Update → Save</text><text x="220" y="394" class="note">Declare scopes here; enable Google Drive API in the same project.</text><text x="220" y="423" class="note">drive.file does not give access to every file already in your Drive.</text>
+</svg>

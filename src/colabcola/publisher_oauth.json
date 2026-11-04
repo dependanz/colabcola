@@ -1,0 +1,12 @@
+{
+  "installed": {
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "client_id": "912921213637-vq2b6opgtjmk2dk8acoam4facq3rn99n.apps.googleusercontent.com",
+    "client_secret": "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",
+    "project_id": "colabcola-development",
+    "redirect_uris": [
+      "http://localhost"
+    ],
+    "token_uri": "https://oauth2.googleapis.com/token"
+  }
+}

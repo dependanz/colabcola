@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-labelledby="authorize-title authorize-desc">
+<title id="authorize-title">Two authorizations, then a verified Drive workspace — schematic, not a screenshot</title>
+<desc id="authorize-desc">Colab authorization uses the upstream provider. Drive authorization uses your personal Desktop client. Both must identify the same Google account. Colabcola verifies Drive access and folder ownership before saving a configured profile. No runtime starts during login.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="470" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">Two authorizations, then a verified Drive workspace</text>
+<rect x="32" y="108" width="275" height="251" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="343" y="108" width="275" height="251" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="654" y="108" width="274" height="251" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="52" y="146" class="card-title">1  Colab consent</text><text x="52" y="189" class="body">Upstream provider identity</text>
+<text x="52" y="216" class="body">Choose intended account</text>
+<text x="52" y="243" class="body">Follow terminal instructions</text><text x="52" y="314" class="small">Checks Colab access</text><path d="M308 228h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="363" y="146" class="card-title">2  Drive consent</text><text x="363" y="189" class="body">Your Desktop client</text>
+<text x="363" y="216" class="body">Choose the same account</text>
+<text x="363" y="243" class="body">Grant identity + drive.file</text><text x="363" y="314" class="small">Temporary localhost callback</text><path d="M619 228h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="674" y="146" class="card-title">3  Workspace check</text><text x="674" y="189" class="body">Account identities match</text>
+<text x="674" y="216" class="body">Owned, writable Drive folder</text>
+<text x="674" y="243" class="body">Save local profile</text><rect x="674" y="291" width="158" height="34" rx="17" fill="#d8eee9"/><text x="688" y="315" class="small">configured</text><text x="32" y="403" class="note">The terminal reports verified success. Viewing this guide does not complete setup.</text><text x="32" y="436" class="note">Start compute later with colabcola JOB.colajob, after reviewing the job's limits.</text>
+</svg>

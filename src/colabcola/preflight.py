@@ -17,6 +17,9 @@ from .lifecycle_io import (LifecycleError, atomic, digest, encoded, verified_inp
                            read_regular, INPUT_BYTES, SNAPSHOT_BYTES, RESULT_METADATA_BYTES)
 
 
+_CONTROLLER_RESOURCE_SUFFIXES = (".py", ".json", ".html", ".css", ".js", ".svg")
+
+
 class PreflightError(LifecycleError):
     pass
 
@@ -32,13 +35,13 @@ def installation_integrity(package_root=None, distribution=None):
     expected = {}
     for entry in distribution.files or ():
         name = str(entry).replace("\\", "/")
-        if name.startswith("colabcola/") and name.endswith((".py", ".json")):
+        if name.startswith("colabcola/") and name.endswith(_CONTROLLER_RESOURCE_SUFFIXES):
             relative = name.removeprefix("colabcola/")
             if not entry.hash or entry.hash.mode != "sha256":
                 raise LifecycleError("controller wheel RECORD has no SHA256")
             expected[relative] = entry
     actual = {p.relative_to(package_root).as_posix() for p in package_root.rglob("*")
-              if p.is_file() and p.suffix in (".py", ".json") and "__pycache__" not in p.parts}
+              if p.is_file() and p.suffix in _CONTROLLER_RESOURCE_SUFFIXES and "__pycache__" not in p.parts}
     if not expected or actual != set(expected):
         raise LifecycleError("install a built colabcola wheel; package files differ from RECORD")
     for relative, entry in expected.items():
@@ -142,8 +145,10 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
         try:
             detail = action()
             item.update(state="passed", detail=detail, ended_at=time.time())
-            if observer and hasattr(observer, "say"):
-                observer.say("Preflight: " + name.replace("_"," ") + " passed")
+            if observer and hasattr(observer, "preflight_checked"):
+                observer.preflight_checked(name)
+            elif observer and hasattr(observer, "say"):
+                observer.say("Preflight: " + name.replace("_", " ") + " passed")
             return detail
         except BaseException:
             item.update(state="failed", ended_at=time.time())
@@ -230,6 +235,8 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
             check("client_cleanup", close_client)
         report["state"] = "passed"
         persist()
+        if observer and hasattr(observer, "preflight_completed"):
+            observer.preflight_completed(report)
         return report, provider, token
     except BaseException as exc:
         report.update(state="interrupted" if isinstance(exc,KeyboardInterrupt) else "failed", failed_check=current,

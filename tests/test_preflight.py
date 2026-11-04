@@ -81,7 +81,12 @@ class PreflightTests(unittest.TestCase):
     def test_bare_launch_automatically_checks_before_engine_exists(self):
         with mock.patch("colabcola.lifecycle.Supervisor") as engine,mock.patch("colabcola.lifecycle.RenewalPump",create=True):
             engine.return_value.state={"phase":"completed","events":[],"attempts":[]}
-            self.assertEqual(self.run_cli(),0)
+            # This admission-only fixture has no final artifact bundle. Admission
+            # succeeds, but a bare completion flag cannot claim workload success.
+            self.assertEqual(self.run_cli(),3)
+            summary=json.loads(self.stdout.getvalue())
+            self.assertEqual(summary["final_artifacts_status"],"missing")
+            self.assertFalse(summary["run_success"])
             engine.assert_called_once()
             self.assertEqual(self.report()["state"],"passed")
         self.provider.assignments.assert_called_once()
@@ -230,6 +235,25 @@ class IntegrityTests(unittest.TestCase):
             (package/"__init__.py").unlink()
             with self.assertRaises(LifecycleError):preflight.installation_integrity(package,dist)
             with self.assertRaises(LifecycleError):preflight.installation_integrity(package,SimpleNamespace(files=[]))
+
+
+    def test_bundled_static_resources_are_checked_against_wheel_record(self):
+        for suffix in (".html", ".css", ".js", ".svg"):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); package = root / "colabcola"; assets = package / "static"
+                assets.mkdir(parents=True)
+                path = assets / ("fixture" + suffix); path.write_bytes(b"bundled fixture")
+                entry = PackagePath("colabcola/static/fixture" + suffix)
+                entry.hash = FileHash("sha256=" + base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).rstrip(b"=").decode())
+                dist = SimpleNamespace(files=[entry], locate_file=lambda p: root / str(p))
+                self.assertEqual(preflight.installation_integrity(package, dist)["files_verified"], 1)
+                path.write_bytes(b"modified fixture")
+                with self.assertRaisesRegex(LifecycleError, "integrity failure"):
+                    preflight.installation_integrity(package, dist)
+                path.write_bytes(b"bundled fixture")
+                (assets / ("unrecorded" + suffix)).write_bytes(b"extra")
+                with self.assertRaisesRegex(LifecycleError, "differ from RECORD"):
+                    preflight.installation_integrity(package, dist)
 
 
 class FolderTests(unittest.TestCase):

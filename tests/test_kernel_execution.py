@@ -158,10 +158,14 @@ class RealKernelTests(unittest.TestCase):
 import time,json
 from colabcola.lifecycle_worker import current_token
 p=Path(__file__).parent
-(p/'entered').write_text('one execution')
+def publish_text(name, value):
+ temporary=p/(name+'.next')
+ temporary.write_text(value)
+ temporary.replace(p/name)
+publish_text('entered','one execution')
 while not (p/'finish').exists():
- (p/'work-progress').write_text(str(time.time()))
- (p/'token-used').write_text(current_token(p)['access_token'])
+ publish_text('work-progress',str(time.time()))
+ publish_text('token-used',current_token(p)['access_token'])
  time.sleep(.05)
 (p/'completed').write_text('real work completed')
 """
@@ -178,7 +182,7 @@ while not (p/'finish').exists():
                 provider._upload=lambda session,path,body:(root/Path(path).name).write_bytes(body)
                 provider.refresh_token('owned',{'run_id':'local','execution_mode':'kernel-v1'},{'number':1},{'access_token':'rotated','expires_at':time.time()+3600})
                 deadline=time.monotonic()+5
-                while (root/'token-used').read_text()!='rotated' and time.monotonic()<deadline:time.sleep(.05)
+                while (not (root/'token-used').exists() or (root/'token-used').read_text()!='rotated') and time.monotonic()<deadline:time.sleep(.05)
                 self.assertEqual((root/'token-used').read_text(),'rotated')
                 # Closing and reconnecting control channels does not restart or stop work.
                 before=float((root/'work-progress').read_text());handle.close();time.sleep(.15)

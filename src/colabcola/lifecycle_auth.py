@@ -26,7 +26,8 @@ class TokenLease:
 
 
 def _expiry(value):
-    return value if type(value) in (int, float) and math.isfinite(value) else None
+    # Zero is the persisted unknown-lease sentinel, not an expired real lease.
+    return value if type(value) in (int, float) and math.isfinite(value) and value > 0 else None
 
 
 def _worker_confirms(worker, attempt, expiry, now):
@@ -54,14 +55,12 @@ def authorization_health(state, renewal=None, *, now=None):
     """
     now = time.time() if now is None else now
     attempts = state.get("attempts", [])
-    if not attempts:
-        return dict(state.get("drive_authorization", {}))
-    number = attempts[-1]["number"]
+    number = attempts[-1]["number"] if attempts else None
     old = state.get("drive_authorization", {})
     if old.get("attempt") not in (None, number):
         old = {}
     update = renewal or {}
-    if update.get("attempt") != number:
+    if number is None or update.get("attempt") != number:
         update = {}
     result = {k: v for k, v in old.items() if k not in ("state", "error_type")}
     result.update({k: v for k, v in update.items() if k not in ("state", "error_type", "expires_at")})
@@ -71,6 +70,14 @@ def authorization_health(state, renewal=None, *, now=None):
         confirmed = max(confirmed or 0, delivered)
     candidate = _expiry(result.get("credential_expires_at")) or confirmed
     delivery = dict(result.get("delivery", {}))
+    # Keep older journals' actual retry evidence durable when no structured
+    # delivery record exists; a missing lease alone is not a credential error.
+    error_type = update.get("error_type") or old.get("error_type")
+    if not delivery and delivered is None and (error_type or old.get("state") == "retrying"
+                                                or update.get("state") == "retrying"):
+        delivery = {"state": "retrying"}
+        if error_type:
+            delivery["error_type"] = error_type
     worker = state.get("worker", {})
     if _worker_confirms(worker, number, candidate, now):
         confirmed = max(confirmed or 0, candidate)
@@ -81,10 +88,15 @@ def authorization_health(state, renewal=None, *, now=None):
                         "at": worker["authorization"]["last_verified_publication"]["at"]}
     if delivery:
         result["delivery"] = delivery
-    result["attempt"] = number
+    if number is not None:
+        result["attempt"] = number
+    # Preserve zero so the supervisor's numeric monitoring guard fails closed.
     result["expires_at"] = confirmed if confirmed is not None else 0
     result["state"] = ("valid" if confirmed is not None and confirmed > now + 120
                        else "expiring" if confirmed is not None else "unavailable")
+    if (confirmed is None and state.get("phase") in ("prepared", "staging", "allocating", "booting")
+            and delivery.get("state") not in ("retrying", "failed", "unavailable")):
+        result["state"] = "waiting"
     return result
 
 

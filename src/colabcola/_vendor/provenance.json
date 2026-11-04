@@ -1,0 +1,124 @@
+{
+  "changes": "Private namespace relocation only; no provider behavior changes.",
+  "providers": {
+    "colab_cli": {
+      "commit": "79cd126383e72b1e911f20b7030e4247f7861704",
+      "files": {
+        "LICENSE": {
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "source": "LICENSE",
+          "upstream_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        "__init__.py": {
+          "generated": true,
+          "sha256": "68ae272b79eb4267b5190d8c5c44120e882d0b4c8e79c0c3af5e408160c78ef7"
+        },
+        "client.py": {
+          "sha256": "d4e7f035f10136ef232d05159a5ee665b0abf7a6dff53bf34252d9b6a4390403",
+          "source": "src/colab_cli/client.py",
+          "upstream_sha256": "7081d2c9decbc9a4cafb4ab89202c7e7a644f72bd74a7e846bffce5344839a06"
+        },
+        "consumption.py": {
+          "sha256": "b6e936db0ddd6e4c31ef7b516c456be7549c34394a70a3d1356b679ec168a594",
+          "source": "src/colab_cli/consumption.py",
+          "upstream_sha256": "b6e936db0ddd6e4c31ef7b516c456be7549c34394a70a3d1356b679ec168a594"
+        },
+        "oauth_config.json": {
+          "sha256": "d3127103bea2884c9f8269d17bcfa74b21356837672bb5b46067cecfe219fc5d",
+          "source": "src/colab_cli/oauth_config.json",
+          "upstream_sha256": "d3127103bea2884c9f8269d17bcfa74b21356837672bb5b46067cecfe219fc5d"
+        },
+        "runtime.py": {
+          "sha256": "eec70c23fa630a7c246060d2715c56823c72de5942084c1fa374d035756e696b",
+          "source": "src/colab_cli/runtime.py",
+          "upstream_sha256": "e95adf8dc98c9a08dce1fff035839863cbe80c9571d36634c3bc3d0cfcf06bcb"
+        },
+        "state.py": {
+          "sha256": "563232b3b0bc201245e9c35a79df052ead53b6b8c90348aebe3fe8d1d23c83d3",
+          "source": "src/colab_cli/state.py",
+          "upstream_sha256": "563232b3b0bc201245e9c35a79df052ead53b6b8c90348aebe3fe8d1d23c83d3"
+        },
+        "utils.py": {
+          "sha256": "09e164e731e19353b735e40074e072a4f5711d8736d50c2087066857b450c857",
+          "source": "src/colab_cli/utils.py",
+          "upstream_sha256": "09e164e731e19353b735e40074e072a4f5711d8736d50c2087066857b450c857"
+        }
+      },
+      "repository": "https://github.com/googlecolab/google-colab-cli",
+      "version": "0.1.dev70"
+    },
+    "jupyter_kernel_client": {
+      "commit": "f18e982c3265df5e923aa9def101ab3fd737e139",
+      "files": {
+        "LICENSE": {
+          "sha256": "888ead28a5342901d93e31d09f37782edf695d2f14fbbdb08d3fcf6063f76b66",
+          "source": "LICENSE",
+          "upstream_sha256": "888ead28a5342901d93e31d09f37782edf695d2f14fbbdb08d3fcf6063f76b66"
+        },
+        "__init__.py": {
+          "sha256": "d07d9fbbfafc1b7939dcc7e76d67ed48df4a3419e4a2315c788c7569e3139744",
+          "source": "jupyter_kernel_client/__init__.py",
+          "upstream_sha256": "a71b7e1df006f82a60ae01ba6df7e01a7c68a207431d4ae4121e330d540eff07"
+        },
+        "_version.py": {
+          "sha256": "6b1048152c78e17007c94997929182c2127e17806dd0c9bc46bd0b866650df72",
+          "source": "jupyter_kernel_client/_version.py",
+          "upstream_sha256": "6b1048152c78e17007c94997929182c2127e17806dd0c9bc46bd0b866650df72"
+        },
+        "client.py": {
+          "sha256": "946b8c6218d314527b45179233c0424d54b33b1b65e2bef0b61b16acb59060ca",
+          "source": "jupyter_kernel_client/client.py",
+          "upstream_sha256": "d666344ceffd80d6d18a072e5a738069066e32471d97c238344edc108b8fda98"
+        },
+        "constants.py": {
+          "sha256": "63f874790a6c4cb8de5a4c4c08393e8ea91ddb4fbac2b1247993fe9dda19cb5e",
+          "source": "jupyter_kernel_client/constants.py",
+          "upstream_sha256": "63f874790a6c4cb8de5a4c4c08393e8ea91ddb4fbac2b1247993fe9dda19cb5e"
+        },
+        "konsoleapp.py": {
+          "sha256": "f06b616a7da05d392908deaf9e9b9ffc5c464ec9965923c71fe33d6ba6024b23",
+          "source": "jupyter_kernel_client/konsoleapp.py",
+          "upstream_sha256": "5b4e00b805931b0f0a2d4d31b462fe48a6862d6113e26cb973e6a8918f5c8204"
+        },
+        "log.py": {
+          "sha256": "721d21c125ad9b2be3a245687def983c3666f9010e4ac80e1346bd79f6bbacdd",
+          "source": "jupyter_kernel_client/log.py",
+          "upstream_sha256": "015cc01af761d04de75bb41ecd196a671c3d9e0ffa23a4073508f1c25ec58692"
+        },
+        "manager.py": {
+          "sha256": "07aeb4853a29a9b33b800309f8d1dcd4d1e6c5759906a051473cf65449cbffe5",
+          "source": "jupyter_kernel_client/manager.py",
+          "upstream_sha256": "1006dd646953741cec569185075df88bb306efeb50e418a2de1ff44d972feecb"
+        },
+        "models.py": {
+          "sha256": "0ca21a2b00d1d2b657f52bd7113eee1cc1474094fb8b121eabb72b4b84b498fb",
+          "source": "jupyter_kernel_client/models.py",
+          "upstream_sha256": "0ca21a2b00d1d2b657f52bd7113eee1cc1474094fb8b121eabb72b4b84b498fb"
+        },
+        "shell.py": {
+          "sha256": "4459b766e49d0b44459286a16c2d43157e19ca6a8f085bce5b8df56c9ff232fb",
+          "source": "jupyter_kernel_client/shell.py",
+          "upstream_sha256": "7acdc05a5670ec3d48860636e96c740dfcdc4cfd58c90210e59d416a170d5676"
+        },
+        "snippets.py": {
+          "sha256": "4b2354c51258e7e929d94a2ee1d85ca796d3f022d462f0afa7761c837fb6eae5",
+          "source": "jupyter_kernel_client/snippets.py",
+          "upstream_sha256": "4b2354c51258e7e929d94a2ee1d85ca796d3f022d462f0afa7761c837fb6eae5"
+        },
+        "utils.py": {
+          "sha256": "98ffaef260265d0ced4cd7b849f5d9374515027acbe7a8db7b6feb614d7c49d4",
+          "source": "jupyter_kernel_client/utils.py",
+          "upstream_sha256": "98ffaef260265d0ced4cd7b849f5d9374515027acbe7a8db7b6feb614d7c49d4"
+        },
+        "wsclient.py": {
+          "sha256": "6db983e51f99ca264fd15fa03c8cc6efd607fb3d460b70994ded5a8ffd1b8299",
+          "source": "jupyter_kernel_client/wsclient.py",
+          "upstream_sha256": "1a4456403b972990216012e079c5da0ff8a7c69fd3fcb72b19c20d74bd460bb1"
+        }
+      },
+      "repository": "https://github.com/googlecolab/jupyter-kernel-client",
+      "version": "0.8.0"
+    }
+  },
+  "schema": 1
+}

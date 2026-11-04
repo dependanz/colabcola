@@ -82,9 +82,9 @@ class GoogleDriveSettings:
 def default_google_drive_settings_path() -> Path:
     """Return the per-user settings location without creating it."""
 
-    configured = os.environ.get("COLABCOLA_CONFIG_HOME")
-    if configured:
-        return Path(configured).expanduser() / "google-drive.json"
+    if os.environ.get("COLABCOLA_CONFIG_HOME") or os.environ.get("COLABCOLA_PROFILE"):
+        from .profiles import config_home
+        return config_home() / "google-drive.json"
     if os.name == "nt" and os.environ.get("APPDATA"):
         return Path(os.environ["APPDATA"]) / "colabcola" / "google-drive.json"
     xdg = os.environ.get("XDG_CONFIG_HOME")

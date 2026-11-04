@@ -1,4 +1,179 @@
-# Development installation (0.1.0.dev10)
+# Development installation (0.1.0.dev24)
+
+This preview has not been published to PyPI. Python 3.12+ is required. Install the
+single development wheel in a fresh environment; managed execution currently uses
+Linux/Ubuntu WSL. Native Windows can package jobs and run local tests.
+
+```bash
+python3.12 -m venv "$HOME/.venvs/colabcola-dev24"
+source "$HOME/.venvs/colabcola-dev24/bin/activate"
+python -m pip install /path/to/colabcola-0.1.0.dev24-py3-none-any.whl
+python -m pip check
+colabcola lifecycle doctor
+colabcola login --profile danzel
+```
+
+A normal install resolves public Python dependencies and includes privately
+namespaced copies of the inspected Colab client and kernel fork, with upstream
+licenses, source hashes and reproducible vendoring provenance. No provider
+wheelhouse or consumer-written token helper is needed. The compatibility `[colab]`
+extra remains accepted but adds no dependencies. `gcloud` is a separate prerequisite
+for the automatic Cloud project setup route, not a Python dependency.
+
+## Personal project setup through login
+
+The canonical user walkthrough, illustrations and troubleshooting are in
+[README: user-owned project setup](README.md#user-owned-project-setup).
+Login prompts remain in the terminal; Google consent uses the browser.
+
+The implementation separates Cloud management from workload authorization:
+
+- The automatic path invokes `gcloud` with an isolated management configuration at
+  `CONFIG_HOME/cloud-setup/gcloud` and an explicitly selected account. Discovery
+  selects projects labeled `colabcola-managed=true`; an explicit `--project`
+  selects another existing project the user controls.
+- New-project intent and its exact ID are persisted before approval and creation.
+  An ambiguous permission/not-found response is not treated as proof of absence.
+  Resuming setup retains that ID and reconciles the approved operation.
+- Automatic checks require project permissions, unlinked billing and Drive API
+  enablement. Linked, enabled or unknown billing fails closed. The manual Console
+  route records project/API/billing confirmations as `self_reported`.
+- Desktop client import checks type, fixed Google endpoints and exact project
+  binding. OAuth-client creation and terms acceptance remain manual Google steps.
+- When a selected project needs a client, automatic discovery is bounded and
+  nonrecursive within the current user's Downloads locations. Linux uses XDG
+  Downloads or its home fallback; WSL additionally resolves the current Windows
+  Downloads folder. The native Windows helper uses the Known Folder location;
+  native Windows managed execution remains unsupported.
+- Only Google's `client_secret_*.json` names, including numbered copies, are
+  candidates. Files must be stable, regular, bounded and pass Desktop endpoint
+  and exact-project validation. Equivalent validated clients coalesce; distinct
+  matching clients require user selection. Discovery never chooses by recency.
+- Each scan is capped across all supplied locations at 8 directories, 2,048
+  directory entries and 64 matching filenames; each file is limited to 16 KiB.
+  An incomplete initial result falls back to manual selection. Incomplete results
+  during an active watch cannot establish uniqueness and are retried.
+- Interactive Linux/WSL login polls once per second with no overall timeout.
+  Auto-selection requires two matching complete scans. Submitted input takes
+  priority; unfinished path text is discarded before advancing to authorization.
+  `later`, blank input or Ctrl+C pauses. Ambiguity produces numbered choices or
+  an explicit path, never a newest-file heuristic.
+- Noninteractive login checks existing stable candidates without a background
+  download wait. `--drive-client`, a reusable imported client and
+  `--no-auto-client` bypass discovery. Restoration for a previously bound profile
+  additionally requires its exact recorded digest of the normalized client.
+  The source download is left untouched; selection logs an escaped path and
+  project ID, not client-secret or token values.
+- Colab authorization uses the pinned provider identity; Drive authorization uses
+  the personal Desktop client with PKCE and a loopback callback. Login verifies
+  matching stable Google identities and an owned, writable Drive workspace before
+  committing the profile. It lists assignments without allocating compute.
+
+The same `colabcola login --profile danzel` resumes setup with its saved project.
+A matching stable download can be detected on resume; `--drive-client PATH` selects one explicitly
+and `--no-auto-client` keeps manual path entry. `--status` reads local metadata
+without credentials or network, while `--force` requests consent again.
+A dev18 record stopped before creation intent was recorded may ask once whether
+its saved ID should be created or reused; that ID remains unchanged.
+
+The personal Drive client identifies the user's Cloud project for API use.
+Google controls account storage, Colab compute, quotas and applicable charges.
+Setup neither links billing nor buys a Colab subscription. Testing-token expiry,
+manual Production decisions and account migration are documented in the README.
+
+## Configuration and compatibility
+
+Named profiles live at `~/.colabcola/configs/NAME`. For a fresh configuration,
+choose a new, unused name; an existing name resumes its saved login:
+
+```bash
+colabcola login --profile danzel --status
+# An unused name reports state: not_configured without network access.
+colabcola login --profile danzel
+colabcola package --profile danzel -- python train.py
+colabcola --profile danzel train.colajob
+```
+
+Names are 1–64 lowercase letters, digits, underscores or hyphens, start with a
+letter or digit, and exclude Windows reserved device names. The same `--profile`
+option works after `login`, `package` and `run`, or before a direct job path.
+Explicit `--profile` overrides environment selections; combining it with
+`login --config-home` is an error. Login never changes a persistent active profile.
+
+Without an explicit selector, resolution is `COLABCOLA_CONFIG_HOME`, then
+`COLABCOLA_PROFILE`, then an existing `~/.config/colabcola`, then the new default
+`~/.colabcola/configs/default`. Legacy files are never moved, copied or deleted.
+Existing environment-selected directories remain supported. To use plain commands
+in one shell, clear a custom root only when intended, then set the profile:
+
+```bash
+unset COLABCOLA_CONFIG_HOME
+export COLABCOLA_PROFILE=danzel
+colabcola login --status
+```
+
+`login --config-home PATH` selects a directory for that invocation; it does not
+change future commands. Keep `COLABCOLA_CONFIG_HOME` set consistently when using
+this custom-path workflow. Offline status reports the absolute `config_home` and
+the profile name when using a named profile; it does not check Google credentials.
+`--force` renews consent, not the profile's account/project/client binding.
+
+Packaging does not read credentials or bind the job to an account. Its default
+`.run.json` account selector is resolved when preparing/executing. Prepared helper
+argv and existing explicit helper files keep their absolute configuration paths;
+they are not migrated. Resume with the same profile and frozen journal.
+Keep configuration, downloaded client JSON and user tokens outside workload
+projects. Cloud-management credentials remain separate from the narrow Drive token
+helper used by managed jobs.
+
+Existing working personal profiles and dev17 shared-client profiles bypass fresh
+project setup when no project/client change was requested; login explicitly states
+which configuration it reuses. A client-only configuration without a completed
+profile can be adopted through manual Drive-enabled/no-billing confirmations,
+recorded as user-reported rather than machine-verified checks. A fresh dev24 setup
+requires a personal client and never silently falls back to the bundled publisher
+client. The `publisher_oauth.json`
+resource remains only for compatibility with existing profiles. No new consumer
+needs an invitation to the publisher's test-user list for the personal Drive app.
+The separate Colab provider's eligibility and availability still depend on Google.
+
+## Build and verification
+
+From the development checkout, build one ordinary wheel:
+
+```bash
+python -m pip install build
+python -m build
+```
+
+For the staged development build and provenance output, use a fresh output directory:
+
+```bash
+python tools/build_development.py --output /path/to/named-profiles-dev24
+```
+
+The build includes the vendored provider sources and their provenance. It does not
+publish packages, read user credentials or launch compute. Local acceptance must
+exercise named-profile isolation and validation, selector precedence, offline
+status, fresh configuration, setup interruption/retry, client/account mismatch,
+legacy-profile reuse without migration, and package/run behavior with fake cloud
+services. Use temporary homes/configuration roots for all local checks; do not
+read a real account's saved login or contact Google to validate profile selection.
+Windows and WSL local checks are distinct from real Google acceptance. Earlier workload
+runs and another account's successful setup do not establish a new user's Google
+service eligibility, refresh-token lifetime or runtime availability.
+
+References: [Desktop OAuth and PKCE](https://developers.google.com/identity/protocols/oauth2/native-app),
+[Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth),
+[Testing restrictions](https://support.google.com/cloud/answer/15549945?hl=en).
+
+## Historical dev1-dev13 installation and evidence
+
+The sections below preserve earlier development history. Their separate provider
+wheelhouse, dependency and rebuild instructions do not describe the current dev24
+installation. Use the commands above for a fresh installation.
+
+### Historical development installation (0.1.0.dev10)
 
 This preview is local only. No PyPI release or open-source license for colabcola has
 been declared. The ordinary packager/compiler supports Python 3.11+. Unattended

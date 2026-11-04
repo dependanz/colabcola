@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-labelledby="project-title project-desc">
+<title id="project-title">One account, one exact project — schematic, not a screenshot</title>
+<desc id="project-desc">Install Colabcola and gcloud in Linux or WSL. The terminal selects a Cloud project; verify its exact ID and Google account in Console. Setup enables Drive without linking billing. Colab GPU allocation happens only when running a job.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="470" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">One account, one exact project</text>
+<rect x="32" y="107" width="275" height="258" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="343" y="107" width="275" height="258" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="654" y="107" width="274" height="258" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="52" y="144" class="card-title">1  Terminal</text><text x="52" y="185" class="body">Linux / Ubuntu WSL</text>
+<text x="52" y="212" class="body">Python 3.12+ environment</text>
+<text x="52" y="239" class="body">Colabcola + gcloud</text><text x="52" y="294" class="mono">colabcola login</text><text x="52" y="330" class="small">Select or create a project</text><path d="M308 230h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="363" y="144" class="card-title">2  Cloud project</text><text x="363" y="185" class="body">Exact project ID</text>
+<text x="363" y="212" class="body">Your setup Google account</text>
+<text x="363" y="239" class="body">Google Drive API enabled</text><rect x="363" y="275" width="222" height="34" rx="17" fill="#d8eee9"/><text x="377" y="299" class="small">No billing linked</text><path d="M619 230h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="674" y="144" class="card-title">3  Console browser</text><text x="674" y="185" class="body">Check account menu</text>
+<text x="674" y="212" class="body">Check project picker</text>
+<text x="674" y="239" class="body">Reopen link after switching</text><text x="674" y="299" class="small">Account hint ≠ guarantee</text><text x="32" y="414" class="note">Project setup stores the OAuth app. It does not start a Colab runtime.</text>
+</svg>

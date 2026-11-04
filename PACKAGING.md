@@ -4,6 +4,95 @@
 or import your program, install packages locally, access credentials, upload files
 or allocate a runtime. No workload-specific builder or directory layout is required.
 
+## From installation to a first run
+
+Use Python 3.12+ on Linux or Ubuntu WSL for managed execution. Native Windows can
+package jobs; runtime control currently uses Linux/WSL. This preview is not on PyPI.
+Install the publisher-provided development wheel in a virtual environment:
+
+```bash
+python3.12 -m venv "$HOME/.venvs/colabcola-dev24"
+source "$HOME/.venvs/colabcola-dev24/bin/activate"
+python -m pip install /path/to/colabcola-0.1.0.dev24-py3-none-any.whl
+colabcola login --profile danzel
+```
+
+Follow [README: user-owned project setup](README.md#user-owned-project-setup)
+for the complete illustrated first login. The example profile is stored at
+`~/.colabcola/configs/danzel`; choose an unused name for a fresh setup. Check
+`colabcola login --profile danzel --status` first: an unused name reports
+`not_configured` without network access. Existing named logins are reused, and
+`--force` renews consent rather than resetting them. Automatic Cloud project setup
+needs `gcloud` in the same Linux/WSL environment; the manual route records its project/API/billing checks as
+self-reported. Login prompts are in the terminal, with Google Console and consent
+steps in the browser. After you create the Desktop client, keep its downloaded
+`client_secret_*.json` in Downloads; login can detect the stable matching file and
+continue without a path prompt. Distinct matching clients require your selection;
+`--drive-client PATH` or `--no-auto-client` keeps explicit control. Client creation
+and Google consent remain manual. Login does not allocate compute.
+
+From your existing project, package its normal command:
+
+```bash
+cd /path/to/your/project
+colabcola package --profile danzel --save-colaml training.colaml -- python train.py --data data
+```
+
+The questions cover data mappings, dependencies, GPU, outputs, checkpoints and
+workload time. For a bounded first GPU run, choose T4, declare the program's real
+outputs (for example `outputs/**`), choose no checkpoint if it cannot resume, and
+choose 10 minutes for workload time. With no explicit limit overrides this gives
+one runtime maximum and 900 seconds for the entire managed run. Inputs already
+inside the project need no extra mapping. Review dependencies; `none` means require
+the detected packages in Colab, not that those imports are ignored. Packaging is
+offline and never imports or executes the workload locally.
+
+```bash
+colabcola --profile danzel train.colajob
+```
+
+That command performs preflight, uploads the frozen inputs, requests compute,
+shows progress, recovers artifacts and releases the owned runtime. Keep the
+supervising computer awake and connected. Repeating the same job/journal opens
+its existing run; after completion it does not launch another runtime.
+
+A new run from the saved recipe needs a new workspace outside any existing
+managed-job folder:
+
+```bash
+colabcola run --profile danzel --colaml training.colaml \
+  --run-dir "$HOME/colabcola-runs/training-002" --non-interactive
+```
+
+This last command starts a new bounded run. Reusing its exact run directory
+reconnects to that frozen run and does not reset its time or runtime allowance.
+A future published release replaces only the wheel-install line with
+`python -m pip install colabcola`; the personal-project setup remains part of login.
+
+## Select the login used for execution
+
+`--profile NAME` is accepted after `login`, `package` and `run`. For direct job
+execution, use `colabcola --profile NAME JOB.colajob`. Packaging stays offline and
+does not bind a portable job to an account: use the intended profile again when
+preparing or executing, and keep it unchanged when resuming a frozen journal.
+Existing explicit helpers and prepared journals retain their absolute paths;
+they are not migrated when a profile is selected.
+
+To keep examples without flags on one profile for a shell session:
+
+```bash
+# Clear a custom root only if that is the selection you intend to replace.
+unset COLABCOLA_CONFIG_HOME
+export COLABCOLA_PROFILE=danzel
+```
+
+An explicit profile overrides environment selections. Otherwise
+`COLABCOLA_CONFIG_HOME` takes precedence over `COLABCOLA_PROFILE`, followed by an
+existing `~/.config/colabcola`, or `~/.colabcola/configs/default` on a new install.
+Legacy files are left in place. Profiles do not create a persistent active-account
+switch. See [profile selection and existing logins](README.md#profile-selection-and-existing-logins)
+for names, custom paths and offline status.
+
 ## Command-first guided packaging
 
 From the directory where the command normally runs:
@@ -80,7 +169,7 @@ checkpoint option. No checkpoint state exists unless the program writes it.
 
 limits also accepts timeout_seconds, max_seconds (total unattended lifecycle bound),
 max_runtimes and seed. Default total bound leaves at least 60 seconds beyond the
-workload timeout; execution still requires separately configured Drive access.
+workload timeout; execution uses the account profile selected when preparing/running.
 Optional [execution] holds drive_parent, token_command, runtime_version,
 provider_backend and [compute] high_mem / minimum_gpu_memory_bytes. The default
 backend is legacy/non-REST with runtime latest. A100 does not guarantee 80 GB;
@@ -88,7 +177,9 @@ minimum memory is checked when executing. These settings never authorize a launc
 
 An omitted output filename defaults to <script/module/command>.colajob in the current
 directory. --output changes it. The packager also creates a sibling .files immutable
-snapshot, and a .run.json only when Drive execution settings are supplied. Generated
+snapshot, and a .run.json containing the requested GPU and bounds. Its default
+account selector resolves the selected local login only at preparation/execution;
+it does not pin a named profile during packaging. Generated
 answers default to no save and never overwrite an existing .colaml. Answers and
 host-only credential helper configuration are excluded from the portable payload.
 
@@ -187,7 +278,10 @@ JobSpecs continue to work.
 
 ## Execute with bounded managed Colab supervision
 
-Add these options while packaging to generate the adjacent `.run.json` as well:
+After `colabcola login --profile danzel`, a new package can run through
+`colabcola --profile danzel JOB.colajob`. The generated `.run.json` resolves the
+selected local account at preparation/execution. For an explicit legacy
+Drive configuration, these options remain available:
 
 ```text
 --drive-parent DRIVE_FOLDER_ID --token-command /path/to/drive-helper.json
@@ -196,9 +290,10 @@ Add these options while packaging to generate the adjacent `.run.json` as well:
 
 The helper file contains a credential-free command argv array. Credentials remain in
 host stores; the helper is never included in the remote payload. The generated config
-retains the requested GPU model. Without these host settings, packaging produces the
-portable job only; configure managed execution before submitting it. See LIFECYCLE.md.
-The current managed provider supports explicit 60Ã¢â‚¬â€œ86400-second segments, 1Ã¢â‚¬â€œ3 attempts,
+retains the requested GPU model. Without these explicit host settings, execution
+resolves the selected local login. Packaging itself needs no login and never reads
+credentials. See LIFECYCLE.md.
+The current managed provider supports explicit 60ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“86400-second segments, 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“3 attempts,
 and the configured WSL host. Native Windows packaging works; native Windows provider
 execution remains separate work.
 
@@ -324,10 +419,10 @@ are optional and saved/replayed by `--save-colaml`;no custom job builder is need
 See LIFECYCLE.md for commit,interruption,recovery and size-limit boundaries.
 
 
-## Run a recipe in one command (dev13)
+## Run a recipe in one command
 
 ```sh
-colabcola run --colaml experiment.colaml --run-dir runs/experiment-1
+colabcola run --colaml experiment.colaml --run-dir "$HOME/colabcola-runs/experiment-1"
 ```
 
 This uses the general packager, prepares the managed journal, runs built-in preflight,
@@ -349,8 +444,11 @@ for admission checks without staging/allocation. `--non-interactive` requires co
 recipe answers. `--approve SHA256` and `--expect-job-id SHA256` are optional exact
 identity guards; an expected job guard is retained on reconnect. Existing assignment
 overrides use the same repeatable `--allow-active-assignment ENDPOINT` as managed jobs.
-Recipe execution requires execution.drive_parent and execution.token_command. Packaging
-failure retains its evidence; do not reset or overwrite the incomplete workspace.
+Recipe execution uses the selected local account profile. Keep the same explicit
+`--profile NAME` or environment selection used for login and preparation. Explicit
+`execution.drive_parent` and `execution.token_command` remain supported for legacy
+configurations. Packaging failure retains its evidence; do not reset or overwrite
+the incomplete workspace.
 
 For an existing portraits recipe, select a NEW SIBLING folder; never the dev11 folder:
 

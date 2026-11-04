@@ -170,12 +170,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.report()["exit_code"],2)
         self.assertEqual(self.call("--prepare-only"),2) # retained guard is not silently dropped
 
-    def test_missing_execution_config_is_explained_and_incomplete_folder_is_not_reused(self):
+    def test_missing_login_keeps_frozen_package_for_retry_after_setup(self):
+        import os
         data=dict(self.mapping);del data["execution"];self.recipe.unlink();save_answers(self.recipe,data)
-        self.assertEqual(self.call("--prepare-only"),2)
-        self.assertIn("execution.drive_parent",self.err.getvalue())
-        self.assertEqual(self.call("--prepare-only"),2)
-        self.assertIn("NEW --run-dir",self.err.getvalue())
+        with mock.patch.dict(os.environ, {"COLABCOLA_CONFIG_HOME":str(self.root/"empty-account")}):
+            self.assertEqual(self.call("--prepare-only"),2)
+            self.assertIn("colabcola login",self.err.getvalue())
+            record=json.loads((self.workspace/"workflow.json").read_text())
+            self.assertEqual(record["phase"],"ready")
+            frozen=(self.workspace/"recipe.colajob").read_bytes()
+            self.assertEqual(self.call("--prepare-only"),2)
+            self.assertIn("colabcola login",self.err.getvalue())
+            self.assertEqual((self.workspace/"recipe.colajob").read_bytes(),frozen)
 
     def test_changed_frozen_job_is_rejected(self):
         self.assertEqual(self.call("--prepare-only"),0,self.err.getvalue())

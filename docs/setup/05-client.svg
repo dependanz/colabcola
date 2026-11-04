@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-labelledby="client-title client-desc">
+<title id="client-title">Download JSON; login detects your client — schematic, not a screenshot</title>
+<desc id="client-desc">Create a Desktop app client and save its JSON to Downloads with Google's default filename. Login detects one stable valid client for the selected project, or asks you to choose a candidate or enter a path. Client creation and Google consent remain manual.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#183746}
+.heading{font-size:27px;font-weight:700}.card-title{font-size:21px;font-weight:650}
+.body{font-size:18px}.small{font-size:16px}.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:17px}
+.label{font-size:14px;letter-spacing:1px;fill:#425d6c}.note{font-size:17px;fill:#375966}
+</style>
+<rect width="960" height="470" rx="18" fill="#eef4f7"/>
+<text x="32" y="35" class="label">COLABCOLA SETUP · SCHEMATIC, NOT A GOOGLE SCREENSHOT</text>
+<text x="32" y="78" class="heading">Download JSON; login detects your client</text>
+<rect x="32" y="109" width="275" height="249" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="343" y="109" width="275" height="249" rx="14" fill="#ffffff" stroke="#bdcbd5"/><rect x="654" y="109" width="274" height="249" rx="14" fill="#ffffff" stroke="#bdcbd5"/><text x="52" y="147" class="card-title">1  Create client</text><text x="52" y="190" class="body">Application type:</text>
+<text x="52" y="217" class="body">Desktop app</text>
+<text x="52" y="244" class="body">Name: Colabcola Desktop</text><rect x="52" y="289" width="112" height="34" rx="17" fill="#d8eee9"/><text x="66" y="313" class="small">Create</text><path d="M308 226h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="363" y="147" class="card-title">2  Save the file</text><text x="363" y="190" class="body">Download JSON now</text>
+<text x="363" y="217" class="body">Save to Downloads</text>
+<text x="363" y="244" class="body">Keep Google's filename</text><text x="363" y="313" class="small">Before closing the dialog</text><path d="M619 226h32m-8 -8l8 8 -8 8" fill="none" stroke="#537385" stroke-width="3"/><text x="674" y="147" class="card-title">3  Automatic import</text><text x="674" y="190" class="body">One stable matching file</text>
+<text x="674" y="217" class="body">Or choose / enter a path</text>
+<text x="674" y="244" class="body">No newest-file guess</text><text x="674" y="313" class="small">Never paste JSON contents</text><text x="32" y="403" class="mono">client_secret_*.json in your Downloads folder</text><text x="32" y="436" class="note">Use --no-auto-client for a path prompt. Enter later or a blank line to pause.</text>
+</svg>

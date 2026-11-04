@@ -14,7 +14,7 @@ from colabcola.lifecycle_provider import dependency_report, verify_provider
 class InstallationTests(unittest.TestCase):
     def test_missing_provider_has_install_guidance(self):
         with mock.patch('colabcola.lifecycle_provider.importlib.resources.files', side_effect=ModuleNotFoundError):
-            with self.assertRaisesRegex(LifecycleError, 'development wheelhouse'):
+            with self.assertRaisesRegex(LifecycleError, 'reinstall the colabcola wheel'):
                 verify_provider()
 
     def test_different_provider_rejected_before_auth(self):
@@ -39,7 +39,5 @@ class InstallationTests(unittest.TestCase):
 
     def test_installed_provider_identity(self):
         import importlib.util
-        if importlib.util.find_spec('colab_cli') is None:
-            self.skipTest('optional provider not installed')
         with mock.patch('colabcola.lifecycle_provider.credentials', side_effect=AssertionError('credentials accessed')):
             self.assertTrue(dependency_report()['provider_source_verified'])

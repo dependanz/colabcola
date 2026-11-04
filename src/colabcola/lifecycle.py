@@ -595,7 +595,7 @@ def main(argv=None):
         if args.command == "doctor":
             from .lifecycle_provider import dependency_report
             result = {**dependency_report(), "platform": sys.platform,
-                      "host_supported": sys.platform.startswith("linux") or sys.platform == "darwin",
+                      "host_supported": sys.platform.startswith("linux") or sys.platform == "win32",
                       "runtime_selection": "legacy (primary Colab CLI): latest; rest: deferred beta, requires allowlist",
                       "primary_provider_backend": "legacy", "live_provider_verified": False,
                       "credentials_checked": False, "network_accessed": False}
