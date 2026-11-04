@@ -1,5 +1,6 @@
 """Recipe-to-run command: preserve inputs, freeze one job, reuse one journal."""
 from __future__ import annotations
+from .console import ConsoleUI
 import argparse
 import contextlib
 from datetime import datetime, timezone
@@ -145,16 +146,16 @@ def _execute(args, workspace, record, fresh):
     from .managed import run_managed
     job = workspace / record["job_file"]
     if fresh:
-        print("colabcola: Packaging recipe into " + str(workspace),file=sys.stderr,flush=True)
+        ConsoleUI().say("Package: Packaging recipe into " + str(workspace))
         result = _package(Path(record["recipe"]),job,args.non_interactive)
         atomic(workspace/"packaging.json",result)
         record.update(phase="ready",job_id=result["job_id"])
         atomic(workspace/"workflow.json",record)
     else:
-        print("colabcola: Reusing frozen job and journal in " + str(workspace),file=sys.stderr,flush=True)
+        ConsoleUI().say("Run: reconnecting to frozen job in " + str(workspace))
         recipe = Path(record["recipe"])
         if not recipe.is_file() or digest(recipe.read_bytes()) != record["recipe_sha256"]:
-            print("colabcola: Recipe changed or is absent; reconnecting with this workspace's frozen inputs",file=sys.stderr,flush=True)
+            ConsoleUI().say("Run: Recipe changed or is absent; using this workspace's frozen inputs")
     invocation = load_job_invocation(job)
     actual = build_bundle(invocation).job_id
     expected = record.get("expected_job_id") or args.expect_job_id
@@ -163,8 +164,8 @@ def _execute(args, workspace, record, fresh):
     if expected and not record.get("expected_job_id"):
         record["expected_job_id"] = expected
         atomic(workspace/"workflow.json",record)
-    print("colabcola: Job " + actual,file=sys.stderr,flush=True)
-    print("colabcola: Automatic command log: " + str(workspace/"launch.log"),file=sys.stderr,flush=True)
+    ConsoleUI().say("Job: " + actual)
+    ConsoleUI().say("Logs: " + str(workspace/"launch.log"))
     command = SubmissionCommand(job_file=job,job_args=(),output=None,drive_config=None,
         prepare_only=args.prepare_only,preflight_only=args.preflight_only,approve=args.approve,
         allow_active_assignments=tuple(args.allow_active_assignment),
@@ -178,7 +179,7 @@ def main(argv=None):
         with selected(args.profile):
             return _run(args)
     except LifecycleError as exc:
-        print("colabcola run: " + _redact(str(exc)),file=sys.stderr)
+        ConsoleUI().error(_redact(str(exc)), command="run")
         return 2
 
 
@@ -198,12 +199,12 @@ def _run(args):
                         try:
                             code = _execute(args,workspace,record,fresh)
                         except KeyboardInterrupt:
-                            print("colabcola run: interrupted; repeat the same workspace to inspect/reconnect",file=sys.stderr)
+                            ConsoleUI().error("interrupted; repeat the same workspace to inspect/reconnect", command="run")
                             code = 130
                         except (OSError,ValueError,SpecError,BundleError,LifecycleError) as exc:
-                            print("colabcola run: " + _redact(str(exc)),file=sys.stderr)
+                            ConsoleUI().error(_redact(str(exc)), command="run")
                         except Exception as exc:
-                            print("colabcola run: " + type(exc).__name__ + "; inspect this workspace before reconnecting",file=sys.stderr)
+                            ConsoleUI().error(type(exc).__name__ + "; inspect this workspace before reconnecting", command="run")
                 finally:
                     out.finish();err.finish()
                     journal = workspace/Path(record["job_file"]).with_suffix(".run")
@@ -222,5 +223,5 @@ def _run(args):
                     atomic(workspace/"cli-exit.json",report)
             return code
     except (OSError,ValueError,SpecError,BundleError,LifecycleError) as exc:
-        print("colabcola run: " + _redact(str(exc)),file=sys.stderr)
+        ConsoleUI().error(_redact(str(exc)), command="run")
         return 2

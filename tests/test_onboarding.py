@@ -329,7 +329,7 @@ class OnboardingTests(unittest.TestCase):
                 operation.side_effect = self.http_error({"error": {"message": "PRIVATE-MESSAGE"}})
                 try:
                     self.assertEqual(self.run_login(), 2)
-                    self.assertEqual(self.stderr.getvalue(), "colabcola login: setup failed at " + stage + "; HTTP 403\n")
+                    self.assertEqual(self.stderr.getvalue(), "[colabcola] Error: login: setup failed at " + stage + "; HTTP 403\n")
                     self.assertFalse((self.home / "profile.json").exists())
                     self.assertFalse((self.home / "drive-helper.json").exists())
                     self.assert_no_secrets()
@@ -383,7 +383,7 @@ class OnboardingTests(unittest.TestCase):
                 self.files.list.return_value.execute.side_effect = self.http_error(body)
                 self.stdout, self.stderr = io.StringIO(), io.StringIO()
                 self.assertEqual(self.run_login(), 2)
-                self.assertEqual(self.stderr.getvalue(), "colabcola login: setup failed at Drive folder lookup; HTTP 403\n")
+                self.assertEqual(self.stderr.getvalue(), "[colabcola] Error: login: setup failed at Drive folder lookup; HTTP 403\n")
                 self.files.create.assert_not_called()
                 self.assert_no_secrets()
 
@@ -403,7 +403,7 @@ class OnboardingTests(unittest.TestCase):
                 self.files.list.return_value.execute.side_effect = self.http_error(b"{}", status)
                 self.stdout, self.stderr = io.StringIO(), io.StringIO()
                 self.assertEqual(self.run_login(), 2)
-                self.assertEqual(self.stderr.getvalue(), "colabcola login: setup failed at Drive folder lookup\n")
+                self.assertEqual(self.stderr.getvalue(), "[colabcola] Error: login: setup failed at Drive folder lookup\n")
                 self.assert_no_secrets()
 
     def test_authorization_and_colab_failures_report_the_stage_without_exception_text(self):
@@ -681,7 +681,7 @@ class OnboardingTests(unittest.TestCase):
                  mock.patch("webbrowser.open", side_effect=AssertionError("documentation browser forbidden")) as browser:
                 self.stdout, self.stderr = io.StringIO(), io.StringIO()
                 self.assertEqual(self.run_login(), 2)
-                self.assertEqual(self.stderr.getvalue(), "colabcola login: Setup paused; rerun colabcola login\n")
+                self.assertEqual(self.stderr.getvalue(), "[colabcola] Error: login: Setup paused; rerun colabcola login\n")
                 bind.assert_not_called(); browser.assert_not_called()
         self.assertFalse(self.home.exists())
         self.patches["colabcola.lifecycle_provider.credentials"].assert_not_called()

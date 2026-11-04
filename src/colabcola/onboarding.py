@@ -15,6 +15,7 @@ import re
 import stat
 import sys
 
+from .console import ConsoleUI, emit_json
 from .lifecycle_io import LifecycleError, atomic
 from . import profiles
 
@@ -258,7 +259,7 @@ def _login_credentials(force):
         except Exception:
             credential = None
     if credential is None:
-        print("Authorize Google Colab access. Drive authorization follows separately. Credentials stay on this computer.", file=sys.stderr)
+        ConsoleUI().say("Login: authorize Google Colab access; Drive authorization follows separately. Credentials stay on this computer.")
         _no_links(provider.auth_path())
         try:
             provider.login(scopes=_required_scopes())
@@ -277,7 +278,7 @@ def _login_drive_credentials(force, email, subject):
             return drive_oauth.credentials(minimum_seconds=600)
         except drive_oauth.DriveOAuthError:
             pass
-    print("Authorize per-file Google Drive access using the same Google account as Colab.", file=sys.stderr)
+    ConsoleUI().say("Login: authorize per-file Google Drive access using the same Google account as Colab.")
     _no_links(config_home() / "drive-oauth.json")
     return drive_oauth.login(login_hint=email, expected_subject=subject)
 
@@ -360,11 +361,11 @@ def _login_client_configuration(root, profile, project=None, client_json=None, *
     _no_links(root / "project-setup.json")
     if (profile is not None or (root / PROFILE_FILE).is_file()) and project is None and client_json is None and not (root / "project-setup.json").exists():
         if local.exists():
-            print("Reusing the existing local Drive OAuth client. Cloud project billing was not checked by this login.", file=sys.stderr)
+            ConsoleUI().say("Login: reusing the existing local Drive OAuth client. Cloud project billing was not checked by this login.")
             client = drive_oauth.preflight_client()["installed"]
             return {"mode": "existing_user_client", "project_id": client["project_id"], "cloud_checks": "not_checked"}
-        print("Reusing the existing shared-client profile (legacy). New installations use a personal Google Cloud project. "
-              "Use --config-home NEW_DIRECTORY to set up a separate personal profile.", file=sys.stderr)
+        ConsoleUI().say("Login: reusing the existing shared-client profile (legacy). New installations use a personal Google Cloud project. "
+                        "Use --config-home NEW_DIRECTORY to set up a separate personal profile.")
         return {"mode": "legacy_shared_client", "cloud_checks": "not_checked"}
     try:
         return project_setup.ensure_personal_client(root, project=project, client_json=client_json,
@@ -402,11 +403,11 @@ def main(argv=None):
                     raise OnboardingError(str(exc)) from None
                 if profile and setup_status["mode"] == "not_configured":
                     setup_status["mode"] = "existing_configuration"
-                print(json.dumps({"state": "configured" if profile else "not_configured", "config_home": str(root),
+                emit_json({"state": "configured" if profile else "not_configured", "config_home": str(root),
                                   "profile": profiles.profile_name(root),
                                   "drive_parent": profile["drive_parent"] if profile else None,
                                   "project_setup": setup_status,
-                                  "credentials_checked": False, "network_accessed": False}))
+                                  "credentials_checked": False, "network_accessed": False})
                 return 0
             _check_host()
             if args.drive_parent is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,240}", args.drive_parent):
@@ -451,21 +452,21 @@ def main(argv=None):
             _no_links(root / PROFILE_FILE)
             atomic(root / HELPER_FILE, _helper_argv())
             atomic(root / PROFILE_FILE, {"schema": 1, "drive_parent": parent})
-            print(json.dumps({"state": "configured", "config_home": str(root), "profile": profiles.profile_name(root), "drive_parent": parent,
+            emit_json({"state": "configured", "config_home": str(root), "profile": profiles.profile_name(root), "drive_parent": parent,
                               "colab_access_verified": True, "active_assignments": assignments,
                               "account_email": colab_account["email"], "same_google_account_verified": True,
                               "runtime_allocated": False,
                               "project_setup": {key: setup[key] for key in ("mode", "project_id", "project_number", "cloud_checks", "stage") if key in setup},
-                              "next_command": "colabcola package -- python YOUR_SCRIPT.py"}))
+                              "next_command": "colabcola package -- python YOUR_SCRIPT.py"})
             return 0
     except KeyboardInterrupt:
-        print("colabcola login: interrupted; rerun login to finish setup", file=sys.stderr)
+        ConsoleUI().error("interrupted; rerun login to finish setup", command="login")
         return 130
     except OnboardingError as exc:
-        print("colabcola login: " + str(exc), file=sys.stderr)
+        ConsoleUI().error(exc, command="login")
         return 2
     except Exception as exc:
-        print("colabcola login: " + _setup_failure("local configuration", exc), file=sys.stderr)
+        ConsoleUI().error(_setup_failure("local configuration", exc), command="login")
         return 2
 
 
@@ -484,10 +485,10 @@ def token_main(argv=None):
             print(json.dumps({"access_token": credential.token, "expires_at": _expiry(credential, "Drive")}))
             return 0
     except OnboardingError as exc:
-        print("colabcola: " + str(exc), file=sys.stderr)
+        ConsoleUI().error(exc)
         return 2
     except Exception as exc:
-        print("colabcola: " + _setup_failure("Drive token renewal", exc), file=sys.stderr)
+        ConsoleUI().error(_setup_failure("Drive token renewal", exc))
         return 2
 
 

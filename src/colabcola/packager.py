@@ -1,5 +1,6 @@
 """Offline packaging of ordinary Python scripts, modules, and command sequences."""
 from __future__ import annotations
+from .console import ConsoleUI, emit_json
 import argparse
 import fnmatch
 import json
@@ -382,8 +383,8 @@ def main(argv=None):
                 result['questions_asked']=questions
                 result['answers_file']=str(save_path) if save_path else None
                 if save_path: save_answers(save_path, answers)
-            print(json.dumps(result,indent=2))
+            emit_json(result, indent=2)
             return 0
     except (SpecError,BundleError,LifecycleError,OSError,ValueError,EOFError,KeyboardInterrupt) as exc:
-        print(f'colabcola package: {exc}',file=sys.stderr)
+        ConsoleUI().error(exc, command='package')
         return 2

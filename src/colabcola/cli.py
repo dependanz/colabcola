@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ._version import __version__
+from .console import ConsoleUI, emit_json
 from .compiler import (
     compile_drive_controller_invocation,
     compile_invocation,
@@ -298,7 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with selected(options.profile):
                 return lifecycle_main(arguments[1:])
         except LifecycleError as exc:
-            print(f"colabcola: {exc}", file=sys.stderr)
+            ConsoleUI().error(exc)
             return 2
     if arguments and arguments[0] == "run":
         from .workflow import main as workflow_main
@@ -311,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with selected(command.profile):
             return _execute(command)
     except LifecycleError as exc:
-        print(f"colabcola: {exc}", file=sys.stderr)
+        ConsoleUI().error(exc)
         return 2
 
 
@@ -325,9 +325,8 @@ def _execute(command: Command) -> int:
             )
             create_google_drive_backend(settings, force_authorize=True)
             settings_path = write_google_drive_settings(settings, command.drive_config)
-            print(
-                json.dumps(
-                    {
+            emit_json(
+                {
                         "colab_oauth_client_id": settings.colab_oauth_client_id,
                         "colab_secret_name": settings.colab_secret_name,
                         "drive_scope": GOOGLE_DRIVE_SCOPE,
@@ -339,21 +338,18 @@ def _execute(command: Command) -> int:
                         ),
                         "settings_path": settings_path.as_posix(),
                         "state": "google_drive_configured",
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                },
+                sort_keys=True,
+                separators=(",", ":"),
             )
             return 0
 
         if isinstance(command, ValidateCommand):
             invocation = load_job_invocation(command.job_file)
-            print(
-                json.dumps(
-                    _validation_summary(invocation),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+            emit_json(
+                _validation_summary(invocation),
+                sort_keys=True,
+                separators=(",", ":"),
             )
             return 0
 
@@ -467,14 +463,8 @@ def _execute(command: Command) -> int:
                     "warnings": list(result.warnings),
                 }
     except (OSError, BundleError, DriveTransportError, SpecError, LifecycleError, ValueError) as exc:
-        print(f"colabcola: {exc}", file=sys.stderr)
+        ConsoleUI().error(exc)
         return 2
 
-    print(
-        json.dumps(
-            response,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    )
+    emit_json(response, sort_keys=True, separators=(",", ":"))
     return 0

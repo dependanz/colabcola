@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import zipfile
+from .console import ConsoleUI, emit_json
 from .lifecycle import TERMINAL, prepare, supervise, verify_final, recover_terminal_final
 from .lifecycle_io import (LifecycleError, atomic, digest, encoded, read_regular, verified_inputs,
                            safe_file, ARTIFACT_BYTES, MAX_MEMBERS)
@@ -36,15 +37,7 @@ class Progress:
         self.log_positions = {}
         self.existing_run = False
         self.preflight_checks = []
-        # Rich is presentation-only, and never writes to machine-readable stdout.
-        # Use plain text for redirected output, CI, and tests.
-        self._rich = None
-        if callable(getattr(self.stream, "isatty", None)) and self.stream.isatty():
-            try:
-                from rich.console import Console
-                self._rich = Console(file=self.stream, highlight=False, markup=False)
-            except ImportError:
-                pass
+        self._console = ConsoleUI(self.stream)
 
     def preflight_checked(self, name):
         """Collect successful checks without printing fourteen repetitive lines."""
@@ -76,22 +69,7 @@ class Progress:
                 self.saved_snapshots[key] = identity
 
     def say(self, message):
-        # Workload strings cannot inject terminal escape sequences.
-        message = "".join(c if c.isprintable() else " " for c in str(message))
-        if self._rich is None:
-            print("[colabcola] " + message, file=self.stream, flush=True)
-            return
-        from rich.text import Text
-        line = Text("[colabcola] ", style="dim cyan")
-        if ": " in message and not message.startswith("["):
-            stage, detail = message.split(": ", 1)
-            stage_style = "bold red" if stage in {"Error", "Failure"} else (
-                "bold green" if stage == "Result" and detail.startswith("SUCCESS") else "bold")
-            line.append(stage + ": ", style=stage_style)
-            line.append(detail)
-        else:
-            line.append(message)
-        self._rich.print(line)
+        self._console.say(message)
 
     def show_logs(self, snapshot, final=False):
         root = snapshot.get("local_directory")
@@ -258,11 +236,11 @@ def _report_result(state, plan, directory, progress, *, existing=False):
         progress.say("The journal records completion, but verified successful final artifacts are required for a successful command")
     progress.say("Result: " + ("SUCCESS - verified final artifacts" if success else
                "INCOMPLETE - inspect the journal and saved artifacts"))
-    print(json.dumps({"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
+    emit_json({"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
                       "result_directory": final_directory, "completed_artifact_directory": intermediate_directory,
                       "final_artifacts_status": final_status, "completed_outputs_status": completed_status,
                       "final_terminal_state": terminal_state, "viewing_existing_run": existing,
-                      "run_success": success, "reason": state.get("reason"), "hardware": state.get("hardware")}, indent=2))
+                      "run_success": success, "reason": state.get("reason"), "hardware": state.get("hardware")}, indent=2)
     return 0 if success else 3
 
 
@@ -383,12 +361,12 @@ def run_managed(command, invocation):
     progress.say("Workspace: " + str(directory))
     if command.prepare_only:
         validate_prepared(plan)
-        print(json.dumps({"state": "prepared", "job_id": plan["job_id"], "run_dir": str(directory),
+        emit_json({"state": "prepared", "job_id": plan["job_id"], "run_dir": str(directory),
                           "approval_sha256": approval, "gpu": plan["gpu"],
                           "max_attempts": plan["max_attempts"], "max_seconds": plan["max_seconds"],
                           "provider_backend": plan.get("provider_backend", "legacy"),
                           "runtime_version": plan.get("runtime_version", "latest"),
-                          "high_mem": plan.get("high_mem", False)}, indent=2))
+                          "high_mem": plan.get("high_mem", False)}, indent=2)
         return 0
     if existing:
         if not state.get("final") and state.get("attempts"):
