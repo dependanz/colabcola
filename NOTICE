@@ -1,0 +1,24 @@
+Colab Cola
+Copyright 2026 Colab Cola contributors
+
+Except where otherwise indicated, Colab Cola's original source code is
+licensed under the Apache License, Version 2.0. See the root LICENSE file.
+
+This distribution incorporates separately licensed third-party source:
+
+Google Colab CLI
+  Upstream: https://github.com/googlecolab/google-colab-cli
+  Vendored path: src/colabcola/_vendor/colab_cli/
+  License: Apache License, Version 2.0 (Apache-2.0)
+  License text: src/colabcola/_vendor/colab_cli/LICENSE
+
+Datalayer Jupyter Kernel Client
+  Copyright (c) 2025, Datalayer
+  Vendored path: src/colabcola/_vendor/jupyter_kernel_client/
+  License: BSD 3-Clause License (BSD-3-Clause)
+  License text: src/colabcola/_vendor/jupyter_kernel_client/LICENSE
+
+The separate copyright notices, conditions, and disclaimers of these
+third-party components remain applicable. Nothing in this NOTICE changes
+the licensing of those components or suggests their authors endorse
+Colab Cola.

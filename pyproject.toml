@@ -1,12 +1,19 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "colabcola"
 dynamic = ["version"]
-description = "Package batch GPU jobs into self-contained notebooks for Google Colab."
+description = "Package, run, and recover Python workloads on Google Colab from the command line."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = [
+  "LICENSE",
+  "NOTICE",
+  "src/colabcola/_vendor/colab_cli/LICENSE",
+  "src/colabcola/_vendor/jupyter_kernel_client/LICENSE",
+]
 requires-python = ">=3.12"
 dependencies = [
   "packaging>=24,<27",
@@ -30,6 +37,11 @@ dependencies = [
 [project.optional-dependencies]
 # Compatibility extra: the default installation now includes the private providers.
 colab = []
+
+[project.urls]
+Homepage = "https://github.com/dependanz/colabcola"
+Repository = "https://github.com/dependanz/colabcola"
+Issues = "https://github.com/dependanz/colabcola/issues"
 
 [tool.setuptools]
 include-package-data = false
