@@ -178,8 +178,9 @@ def _oauth_instructions(project, account=None):
          "A quoted Windows C:\\... path is accepted in WSL.")
 
 
-def ensure_personal_client(root: Path, *, project=None, client_json=None, input_fn=None, auto_client=True):
-    """Configure the user's own Drive client; never silently select a publisher client."""
+def ensure_personal_client(root: Path, *, project=None, client_json=None, input_fn=None,
+                           auto_client=True, use_bundled_client=False):
+    """Configure a user execution project and safely bind its Drive OAuth client."""
     from .cloud_project import CloudProjectClient, CloudProjectError
     root = _safe(root)
     ask_input = input if input_fn is None else input_fn
@@ -323,6 +324,25 @@ def ensure_personal_client(root: Path, *, project=None, client_json=None, input_
                 _save(root, record, stage="drive_enabled", drive_enabled=True, cloud_checks="online_verified")
         _save(root, record, stage="awaiting_client")
         _say("Testing authorizations with Drive scope normally expire after seven days. Moving a personal app to Production is your manual choice; Colabcola does not publish the app or accept terms for you.")
+        bundled_selected = False
+        if (use_bundled_client and supplied is None and existing is None
+                and not protected and record["client_sha256"] is None):
+            from importlib import resources
+
+            resource = resources.files("colabcola").joinpath("publisher_oauth.json")
+            if not resource.is_file():
+                raise ProjectSetupError(
+                    "Bundled Colab Cola Desktop OAuth client missing; "
+                    "reinstall Colab Cola or use --drive-client PATH"
+                )
+
+            with resources.as_file(resource) as bundled_path:
+                supplied, supplied_sha = _client(bundled_path)
+
+            bundled_selected = True
+            _say("Using Colab Cola's bundled Desktop OAuth client for Drive. "
+                 "Execution project: " + selected)
+
         if supplied is None and existing is None:
             _oauth_instructions(selected, record["cloud_account_email"])
             from .client_handoff import choose_client
@@ -349,7 +369,7 @@ def ensure_personal_client(root: Path, *, project=None, client_json=None, input_
                 existing is not None
                 and record.get("client_sha256") == chosen_sha
             )
-            if not (explicitly_supplied or previously_bound):
+            if not (explicitly_supplied or previously_bound or bundled_selected):
                 raise ProjectSetupError(
                     "Cross-project OAuth client requires explicit "
                     "--drive-client PATH or an existing verified profile binding"

@@ -369,6 +369,7 @@ def _login_client_configuration(root, profile, project=None, client_json=None, *
         return {"mode": "legacy_shared_client", "cloud_checks": "not_checked"}
     try:
         return project_setup.ensure_personal_client(root, project=project, client_json=client_json,
+                                                    use_bundled_client=(auto_client and client_json is None and profile is None),
                                                     **({"auto_client": False} if not auto_client else {}))
     except project_setup.ProjectSetupError as exc:
         raise OnboardingError(str(exc)) from None
@@ -384,7 +385,7 @@ def main(argv=None):
     parser.add_argument("--drive-parent", help="explicit owned Drive folder ID; replaces the saved destination only after verification")
     parser.add_argument("--project", help="reuse this Google Cloud project instead of choosing interactively")
     parser.add_argument("--drive-client", type=Path, help="import the Desktop OAuth JSON downloaded from your project's Console")
-    parser.add_argument("--no-auto-client", action="store_true", help="enter the Desktop OAuth JSON path manually instead of detecting Downloads")
+    parser.add_argument("--no-auto-client", action="store_true", help="use manual OAuth client selection instead of the bundled default or Downloads detection")
     parser.add_argument("--force", action="store_true", help="request Google consent again; does not replace an existing project or client")
     parser.add_argument("--status", action="store_true", help="inspect configuration only; no credential reads or network")
     args = parser.parse_args(argv)

@@ -166,7 +166,7 @@ class PublicWorkflowTests(unittest.TestCase):
             "colabcola.onboarding._drive_files": mock.Mock(side_effect=drive_files),
         }.items():
             self.stack.enter_context(mock.patch(name, value))
-        # Exercise the real default personal-project guide with a synthetic
+        # Exercise the manual-client project guide with a synthetic
         # downloaded Desktop client and manual Console confirmations. No gcloud
         # executable, Cloud account, network or user configuration is consulted.
         downloaded = self.root / "downloaded-desktop.json"
@@ -179,7 +179,7 @@ class PublicWorkflowTests(unittest.TestCase):
         administrator.available.return_value = False
         self.stack.enter_context(mock.patch("colabcola.cloud_project.CloudProjectClient", return_value=administrator))
         with mock.patch("builtins.input", side_effect=["manual", "fixture-project", "yes", str(downloaded)]):
-            self.assertEqual(self.invoke("login"), 0, self.err.getvalue())
+            self.assertEqual(self.invoke("login", "--no-auto-client"), 0, self.err.getvalue())
         self.assertIn("self-reported", self.err.getvalue())
         self.assertIn("https://console.cloud.google.com/auth/clients?project=fixture-project", self.err.getvalue())
         administrator.authenticate.assert_not_called()

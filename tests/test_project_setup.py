@@ -81,6 +81,79 @@ class ProjectSetupTests(unittest.TestCase):
         # credential field and all synthetic secret values must stay private.
         self.assertNotRegex(text, r'["\']client_secret["\']\s*:')
 
+    def test_bundled_client_uses_separate_existing_execution_project(self):
+        package = self.base / "fake-package"
+        self.write_client(package / "publisher_oauth.json", project="publisher-project")
+
+        with mock.patch("importlib.resources.files", return_value=package):
+            result = self.run_setup(
+                ["yes"], project="fixture-project", use_bundled_client=True
+            )
+
+        self.assertEqual(result["stage"], "ready")
+        self.assertEqual(result["project_id"], "fixture-project")
+        saved = json.loads((self.root / setup.CLIENT_FILE).read_text())
+        self.assertEqual(saved["installed"]["project_id"], "publisher-project")
+        self.cloud.ensure_drive.assert_called_once_with("fixture-project")
+        self.cloud.create.assert_not_called()
+        self.assert_no_leaks()
+
+    def test_bundled_client_does_not_determine_new_execution_project(self):
+        package = self.base / "fake-package"
+        self.write_client(package / "publisher_oauth.json", project="publisher-project")
+
+        with mock.patch("importlib.resources.files", return_value=package):
+            result = self.run_setup(["new", "yes"], use_bundled_client=True)
+
+        self.assertNotEqual(result["project_id"], "publisher-project")
+        self.assertTrue(result["project_id"].startswith("colabcola-"))
+        self.cloud.create.assert_called_once_with(result["project_id"])
+        self.cloud.ensure_drive.assert_called_once_with(result["project_id"])
+        self.assert_no_leaks()
+
+    def test_bundled_client_never_replaces_ready_profile(self):
+        original = self.ready()
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+
+        with mock.patch("importlib.resources.files",
+                        side_effect=AssertionError("Bundled client was accessed")):
+            result = self.run_setup(use_bundled_client=True)
+
+        self.assertEqual(result, original)
+        self.assertEqual(
+            {p.name: p.read_bytes() for p in self.root.iterdir()}, before
+        )
+
+    def test_onboarding_uses_bundled_client_only_for_default_selection(self):
+        from colabcola import onboarding
+
+        with mock.patch(
+            "colabcola.project_setup.ensure_personal_client",
+            return_value={"stage": "ready"},
+        ) as delegate:
+            onboarding._login_client_configuration(
+                self.root, None, project="fixture-project"
+            )
+            self.assertTrue(
+                delegate.call_args.kwargs["use_bundled_client"]
+            )
+
+            onboarding._login_client_configuration(
+                self.root, None, project="fixture-project",
+                auto_client=False
+            )
+            self.assertFalse(
+                delegate.call_args.kwargs["use_bundled_client"]
+            )
+
+            onboarding._login_client_configuration(
+                self.root, None, project="fixture-project",
+                client_json=self.download
+            )
+            self.assertFalse(
+                delegate.call_args.kwargs["use_bundled_client"]
+            )
+
     def test_existing_project_one_concrete_approval_enables_drive_and_imports_client(self):
         def enable(identity):
             saved = json.loads((self.root / setup.SETUP_FILE).read_text())
