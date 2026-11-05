@@ -1,6 +1,6 @@
-# Colab Cola
-
-**Run your Python workloads on Google Colab, directly from the command line.**
+<p align="center">
+  <img src="docs/assets/colabcola-banner.png" alt="Colab Cola — package and run Python workloads on Google Colab" width="100%">
+</p>
 
 Colab Cola packages Python scripts, modules, dependencies, and inputs into reproducible jobs. Submit them to Google Colab, monitor execution, and recover verified results from Google Drive — without building a notebook launcher yourself.
 
