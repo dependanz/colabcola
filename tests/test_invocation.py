@@ -280,12 +280,11 @@ class InvocationTests(unittest.TestCase):
     def test_primary_main_reports_nonblocking_archive_warning(self) -> None:
         output = self.root / "warning.ipynb"
         stdout = io.StringIO()
-        stderr = io.StringIO()
         with (
             mock.patch("colabcola.bundle.ARCHIVE_WARNING_BYTES", 1),
             mock.patch("colabcola.notebook.ARCHIVE_WARNING_BYTES", 1),
+            self.assertWarnsRegex(RuntimeWarning, "warning threshold"),
             contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(stderr),
         ):
             result = main(
                 [
@@ -302,7 +301,6 @@ class InvocationTests(unittest.TestCase):
         receipt = json.loads(stdout.getvalue())
         self.assertEqual(len(receipt["warnings"]), 1)
         self.assertIn("warning threshold", receipt["warnings"][0])
-        self.assertIn("RuntimeWarning", stderr.getvalue())
         notebook = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(
             notebook["metadata"]["colabcola"]["warnings"], receipt["warnings"]

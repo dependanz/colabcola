@@ -303,7 +303,7 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         self.assertIn(f'2/2 files verified | {total}/{total} bytes received',log)
         self.assertIn('MiB/s',log)
         self.assertIn('16000/'+str(len(DATA_A))+' bytes | downloading',host.getvalue())
-        self.assertIn('runtime/transfer.log',host.getvalue())
+        self.assertIn('[attempt 1 | transfer.log]',host.getvalue())
         self.assertNotIn('https://',log)
         self.assertEqual(result['terminal_state'],'success')
 
