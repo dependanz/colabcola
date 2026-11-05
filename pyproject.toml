@@ -62,3 +62,6 @@ colabcola = ["_hifigan/*.json", "publisher_oauth.json"]
 "colabcola._vendor" = ["provenance.json"]
 "colabcola._vendor.colab_cli" = ["oauth_config.json", "LICENSE"]
 "colabcola._vendor.jupyter_kernel_client" = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
