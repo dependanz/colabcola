@@ -194,8 +194,9 @@ def ensure_personal_client(root: Path, *, project=None, client_json=None, input_
         supplied, supplied_sha = _client(client_json) if client_json is not None else (None, None)
         requested = _project_id(project) if project is not None else None
         protected = any(_safe(root / name).exists() for name in ("profile.json", "drive-oauth.json", "colab-oauth.json"))
-        if supplied and requested and supplied["installed"]["project_id"] != requested:
-            raise ProjectSetupError("Desktop OAuth JSON belongs to another project; choose JSON for the exact --project ID")
+        # The OAuth client's owning project may differ from the user's
+        # execution project. Cross-project clients must be explicitly supplied
+        # or already bound to this profile.
         selected = requested or (supplied["installed"]["project_id"] if supplied else None)
         previous_project = record["project_id"] if record else existing["installed"]["project_id"] if existing else None
         if ((selected and previous_project and selected != previous_project and protected)
@@ -206,8 +207,7 @@ def ensure_personal_client(root: Path, *, project=None, client_json=None, input_
         if record and selected and selected != record["project_id"]:
             raise ProjectSetupError("A different project is already selected for this setup; resume it or use a new --config-home")
         if existing and record:
-            if (existing["installed"]["project_id"] != record["project_id"]
-                    or record["client_sha256"] not in (None, existing_sha)):
+            if record["client_sha256"] not in (None, existing_sha):
                 raise ProjectSetupError("Local Drive client differs from the recorded setup binding; preserve it and use a new --config-home")
             if record["stage"] == "ready" and (supplied is None or supplied_sha == existing_sha):
                 return dict(record)
@@ -340,7 +340,20 @@ def ensure_personal_client(root: Path, *, project=None, client_json=None, input_
                 supplied, supplied_sha = _client(selection)
         chosen, chosen_sha = (supplied, supplied_sha) if supplied is not None else (existing, existing_sha)
         if chosen["installed"]["project_id"] != selected:
-            raise ProjectSetupError("Desktop OAuth JSON belongs to another project; use the exact project shown in the saved setup and retry --drive-client PATH")
+            explicitly_supplied = (
+                client_json is not None
+                and supplied is not None
+                and supplied_sha == chosen_sha
+            )
+            previously_bound = (
+                existing is not None
+                and record.get("client_sha256") == chosen_sha
+            )
+            if not (explicitly_supplied or previously_bound):
+                raise ProjectSetupError(
+                    "Cross-project OAuth client requires explicit "
+                    "--drive-client PATH or an existing verified profile binding"
+                )
         if existing and chosen_sha != existing_sha and protected:
             raise ProjectSetupError("Existing account credentials cannot be rebound to another OAuth client; use a new --config-home")
         if record["client_sha256"] and chosen_sha != record["client_sha256"] and protected:

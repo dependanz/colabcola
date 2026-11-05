@@ -403,15 +403,47 @@ class ProjectSetupTests(unittest.TestCase):
         restored = self.run_setup(client_json=self.download)
         self.assertEqual(restored["stage"], "ready"); self.factory.assert_not_called()
 
-    def test_wrong_project_json_rejected_before_mutation_or_import(self):
-        other = self.base / "other.json"; self.write_client(other, project="another-project")
-        with self.assertRaisesRegex(setup.ProjectSetupError, "another project"):
-            self.run_setup(project="fixture-project", client_json=other)
-        self.factory.assert_not_called(); self.assertFalse(self.root.exists())
-        with self.assertRaisesRegex(setup.ProjectSetupError, "another project"):
+    def test_explicit_cross_project_client_binds_and_resumes(self):
+        other = self.base / "other.json"
+        self.write_client(other, project="another-project")
+        result = self.run_setup(["yes"], project="fixture-project", client_json=other)
+        self.assertEqual(result["stage"], "ready")
+        self.assertEqual(result["project_id"], "fixture-project")
+        saved_client = json.loads((self.root / setup.CLIENT_FILE).read_text())
+        self.assertEqual(saved_client["installed"]["project_id"], "another-project")
+        self.assertEqual(result["client_sha256"], setup._client(self.root / setup.CLIENT_FILE)[1])
+        self.cloud.ensure_drive.assert_called_once_with("fixture-project")
+        self.cloud.create.assert_not_called()
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+        self.factory.reset_mock()
+        self.cloud.reset_mock()
+        self.assertEqual(self.run_setup(), result)
+        self.factory.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
+        self.assert_no_leaks()
+
+    def test_cross_project_client_without_flag_is_rejected_before_import(self):
+        other = self.base / "other.json"
+        self.write_client(other, project="another-project")
+        with self.assertRaisesRegex(setup.ProjectSetupError, "requires explicit"):
             self.run_setup(["yes", str(other)], project="fixture-project")
         self.assertEqual(setup.status(self.root)["stage"], "awaiting_client")
         self.assertFalse((self.root / setup.CLIENT_FILE).exists())
+        self.cloud.create.assert_not_called()
+        self.assert_no_leaks()
+
+    def test_explicit_cross_project_client_cannot_replace_protected_profile(self):
+        self.ready()
+        (self.root / "profile.json").write_text("PRIVATE-OLD-PROFILE")
+        (self.root / "drive-oauth.json").write_text("PRIVATE-OLD-TOKEN")
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+        other = self.base / "other.json"
+        self.write_client(other, project="another-project")
+        self.factory.reset_mock()
+        with self.assertRaisesRegex(setup.ProjectSetupError, "new --config-home"):
+            self.run_setup(client_json=other)
+        self.factory.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
 
     def test_local_import_wins_without_cloud_signin_after_manual_confirmation(self):
         self.write_client(self.root / setup.CLIENT_FILE)
