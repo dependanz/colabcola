@@ -6,68 +6,22 @@ or allocate a runtime. No workload-specific builder or directory layout is requi
 
 ## From installation to a first run
 
-Use Python 3.12+ on Linux or Ubuntu WSL for managed execution. Native Windows can
-package jobs; runtime control currently uses Linux/WSL. This preview is not on PyPI.
-Install the publisher-provided development wheel in a virtual environment:
+Python 3.12+ is required. Native Windows PowerShell and Ubuntu WSL have
+passed bounded live CPU execution and checkpoint-recovery tests; native
+Linux and macOS require separate validation.
 
-```bash
-python3.12 -m venv "$HOME/.venvs/colabcola-dev24"
-source "$HOME/.venvs/colabcola-dev24/bin/activate"
-python -m pip install /path/to/colabcola-0.1.0.dev24-py3-none-any.whl
-colabcola login --profile danzel
-```
+~~~bash
+python -m pip install colabcola
+colabcola login --profile research
+colabcola package --profile research --save-colaml training.colaml -- python train.py
+colabcola run --profile research --colaml training.colaml --run-dir ./runs/training-001
+~~~
 
-Follow [README: user-owned project setup](README.md#user-owned-project-setup)
-for the complete illustrated first login. The example profile is stored at
-`~/.colabcola/configs/danzel`; choose an unused name for a fresh setup. Check
-`colabcola login --profile danzel --status` first: an unused name reports
-`not_configured` without network access. Existing named logins are reused, and
-`--force` renews consent rather than resetting them. Automatic Cloud project setup
-needs `gcloud` in the same Linux/WSL environment; the manual route records its project/API/billing checks as
-self-reported. Login prompts are in the terminal, with Google Console and consent
-steps in the browser. After you create the Desktop client, keep its downloaded
-`client_secret_*.json` in Downloads; login can detect the stable matching file and
-continue without a path prompt. Distinct matching clients require your selection;
-`--drive-client PATH` or `--no-auto-client` keeps explicit control. Client creation
-and Google consent remain manual. Login does not allocate compute.
-
-From your existing project, package its normal command:
-
-```bash
-cd /path/to/your/project
-colabcola package --profile danzel --save-colaml training.colaml -- python train.py --data data
-```
-
-The questions cover data mappings, dependencies, GPU, outputs, checkpoints and
-workload time. For a bounded first GPU run, choose T4, declare the program's real
-outputs (for example `outputs/**`), choose no checkpoint if it cannot resume, and
-choose 10 minutes for workload time. With no explicit limit overrides this gives
-one runtime maximum and 900 seconds for the entire managed run. Inputs already
-inside the project need no extra mapping. Review dependencies; `none` means require
-the detected packages in Colab, not that those imports are ignored. Packaging is
-offline and never imports or executes the workload locally.
-
-```bash
-colabcola --profile danzel train.colajob
-```
-
-That command performs preflight, uploads the frozen inputs, requests compute,
-shows progress, recovers artifacts and releases the owned runtime. Keep the
-supervising computer awake and connected. Repeating the same job/journal opens
-its existing run; after completion it does not launch another runtime.
-
-A new run from the saved recipe needs a new workspace outside any existing
-managed-job folder:
-
-```bash
-colabcola run --profile danzel --colaml training.colaml \
-  --run-dir "$HOME/colabcola-runs/training-002" --non-interactive
-```
-
-This last command starts a new bounded run. Reusing its exact run directory
-reconnects to that frozen run and does not reset its time or runtime allowance.
-A future published release replaces only the wheel-install line with
-`python -m pip install colabcola`; the personal-project setup remains part of login.
+New profiles use the bundled Desktop OAuth client by default, not a
+manually created OAuth app. You still select an execution project and
+complete Google consent. See [user setup](USER_SETUP.md).
+Packaging itself does not allocate compute. Keep the host supervisor
+online for execution and recovery; reuse the run directory to resume.
 
 ## Select the login used for execution
 
@@ -90,7 +44,7 @@ An explicit profile overrides environment selections. Otherwise
 `COLABCOLA_CONFIG_HOME` takes precedence over `COLABCOLA_PROFILE`, followed by an
 existing `~/.config/colabcola`, or `~/.colabcola/configs/default` on a new install.
 Legacy files are left in place. Profiles do not create a persistent active-account
-switch. See [profile selection and existing logins](README.md#profile-selection-and-existing-logins)
+switch. See [profile selection and existing logins](USER_SETUP.md#profile-selection-and-existing-logins)
 for names, custom paths and offline status.
 
 ## Command-first guided packaging
@@ -219,7 +173,7 @@ colabcola package -o jobs/train.colajob --project . --gpu T4 --artifact 'outputs
 Relative imports work normally. For an uninstalled `src/` layout, use `--project src`
 when that is the root from which the original Python command works. Automatic editable
 installation of projects and native build-system provisioning are not implemented.
-The [GaussianAvatars example](examples/gaussian_avatar/README.md) prepares an ordinary
+The [GaussianAvatars example](../examples/gaussian_avatar/README.md) prepares an ordinary
 module-based native-build pilot and documents FLAME/data acquisition. Its bounded T4 CUDA build, 200-iteration training and saved-model rendering
 pilots passed; those results do not establish convergence or held-out quality.
 
@@ -294,8 +248,8 @@ retains the requested GPU model. Without these explicit host settings, execution
 resolves the selected local login. Packaging itself needs no login and never reads
 credentials. See LIFECYCLE.md.
 The current managed provider supports explicit 60ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“86400-second segments, 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“3 attempts,
-and the configured WSL host. Native Windows packaging works; native Windows provider
-execution remains separate work.
+on supported supervising hosts. Native Windows CPU execution and recovery
+have been live-tested; GPU coverage requires separate validation.
 
 ```bash
 colabcola --prepare-only jobs/experiment.colajob
@@ -334,7 +288,7 @@ Set --max-seconds explicitly for longer execution, and leave setup/transfer marg
 around --timeout. New plans renew short-lived Drive access while the supervisor
 remains awake and connected. Existing plans keep their original bounds and policy.
 The 24-hour ceiling is a colabcola limit, not a promised Colab runtime lifetime.
-See [LongCat preparation](LONGCAT_READINESS.md) for the supplied workload's proposed
+See LongCat preparation (historical evidence archived) for the supplied workload's proposed
 three-hour envelope and remaining live-validation and output-size gates.
 
 
@@ -346,7 +300,7 @@ space and a 6 GiB snapshot envelope for ZIP/log overhead. Output hashing, ZIP64
 creation and recovery stream files in bounded memory. Interrupted downloads reuse
 verified chunks. This does not change the 512 MiB prepared-input limit.
 
-The [ordinary runtime renewal probe](examples/runtime_renewal/README.md) demonstrates
+The [ordinary runtime renewal probe](../examples/runtime_renewal/README.md) demonstrates
 a prepared CPU-only dated-image and sustained Drive test through the same packager.
 Its timed live execution remains a separate authorization.
 
@@ -369,8 +323,8 @@ records control Python separately from workload Python, executable/prefix and th
 verified archive identity. Invalid hashes, unsupported hosts, failed installs,
 wrong Python or failed package checks stop the workload without a host fallback.
 
-The first profile supports Linux x86_64 only; native Windows can package it but
-cannot execute its Linux interpreter. Recovery starts with a new isolated environment
+The isolated workload interpreter targets Linux x86_64 on Colab. A Windows
+supervisor does not run the Linux interpreter locally. Recovery starts with a new isolated environment
 on each new runtime. Workload checkpoint/continuation remains the script's responsibility.
 
 Isolated installs select a complete host GCC/G++ toolchain, or Clang/Clang++ when
@@ -457,5 +411,5 @@ colabcola run --colaml portraits-2026-10/longcat.colaml --run-dir portraits-2026
 ```
 
 The run-dir is the workflow root; its generated journal is longcat.run inside it.
-These commands run in the installed controller environment (Ubuntu WSL for the current
-live-verified provider path). They do not migrate or upgrade an older controller.
+These commands run on the supervising host; Windows CPU and Ubuntu WSL
+have passed bounded execution and recovery tests. They do not migrate or upgrade an older controller.

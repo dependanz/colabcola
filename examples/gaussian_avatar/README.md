@@ -143,7 +143,7 @@ Both fixes passed a fresh live replay: the single command displayed 298 training
 updates across 15 verified snapshots before completion, with no client-cleanup warning.
 The one-T4 run completed in 963.540 seconds, recovered all outputs and independently
 confirmed runtime release. The evidence is recorded in
-[NONREST_REVALIDATION.md](../../NONREST_REVALIDATION.md).
+archived non-REST revalidation notes (historical evidence archived).
 
 The longer non-REST pilot passed on2026-10-15: one T4 released in1038.612 seconds
 within3600,5000 iterations/4999 optimizer updates,63 outputs cold-readback verified.

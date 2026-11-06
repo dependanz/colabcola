@@ -5,14 +5,14 @@
 ## Unattended lifecycle
 
 The opt-in lifecycle CLI prepares, starts, inspects, cancels and resumes bounded managed
-jobs. See [LIFECYCLE.md](../LIFECYCLE.md) for setup and evidence boundaries.
+jobs. See [LIFECYCLE.md](LIFECYCLE.md) for setup and evidence boundaries.
 The provider has passed native Windows CPU execution and a live
 checkpoint/fresh-runtime recovery proof. WSL has also been tested; native Linux
 and macOS still require separate validation.
 
 Drive token renewal and publication after initial-token expiry passed the bounded
 CPU probe and later multi-hour LongCat runs on the primary adapter. See
-[non-REST revalidation](../NONREST_REVALIDATION.md) for the exact tested workloads and
+non-REST revalidation (historical evidence archived) for the exact tested workloads and
 limits. Beta REST integration remains deferred.
 
 Managed results now support 5 GiB of workload artifacts with streamed ZIP64 and
@@ -25,14 +25,14 @@ files, including module-sequence progress. Runtime capture forwards small update
 promptly; the worker checks for changed logs every five seconds, plus transfer
 and polling time. Unchanged verified members are reused, and the CLI displays a
 recovered snapshot before slower provider checks. This is periodic delivery,
-not a five-second latency guarantee. See [live progress](../LIFECYCLE.md#live-progress-from-the-single-command)
+not a five-second latency guarantee. See [live progress](LIFECYCLE.md#live-progress-from-the-single-command)
 for display bounds, full log locations and local/live verification status.
 
 
 Managed jobs include built-in preflight before uploading or allocating:
 `colabcola JOB.colajob`. For checks only use
 `colabcola --preflight-only JOB.colajob`; `--prepare-only` remains offline.
-See [LIFECYCLE.md](../LIFECYCLE.md) for existing-assignment overrides, integrity,
+See [LIFECYCLE.md](LIFECYCLE.md) for existing-assignment overrides, integrity,
 GPU model/memory reporting and development-controller support boundaries.
 
 

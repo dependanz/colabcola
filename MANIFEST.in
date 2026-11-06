@@ -1,4 +1,4 @@
-include README.md DEVELOPMENT.md PACKAGING.md LIFECYCLE.md USER_SETUP.md DESIGN.md
+include README.md
 include pyproject.toml MANIFEST.in
 recursive-include src/colabcola *.py *.json
 recursive-include src/colabcola/_vendor LICENSE

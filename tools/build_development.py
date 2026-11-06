@@ -35,9 +35,15 @@ def main(argv=None):
         paths = [p for p in (root / "src/colabcola").rglob("*")
                  if p.is_file() and (p.suffix in (".py", ".json") or p.name == "LICENSE")
                  and "__pycache__" not in p.parts]
-        paths += [root / name for name in ("pyproject.toml", "MANIFEST.in", "README.md", "DEVELOPMENT.md",
-                  "PACKAGING.md", "LIFECYCLE.md", "USER_SETUP.md", "tools/build_development.py", "tools/vendor_provider.py")]
-        paths += sorted((root / "docs/setup").glob("*.svg"))
+        paths += [root / name for name in (
+            "pyproject.toml", "MANIFEST.in", "README.md",
+            "LICENSE", "NOTICE",
+            "tools/build_development.py", "tools/vendor_provider.py"
+        )]
+        paths += sorted(
+            p for p in (root / "docs").rglob("*")
+            if p.is_file() and p.suffix.lower() in {".md", ".svg", ".png"}
+        )
         for path in paths:
             relative = path.relative_to(root)
             destination = stage / relative

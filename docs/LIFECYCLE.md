@@ -6,37 +6,27 @@ restores after confirmed runtime loss, verifies local artifacts and releases own
 Live allocation, GPU execution, deliberate runtime replacement, checkpoint continuation,
 Drive publication, local verification and compute release passed the bounded WSL/T4 proof.
 
-## Setup (dev17)
+## Current setup (v0.1.0)
 
-Dev17 uses two authorizations behind one `colabcola login` command: the pinned
-Colab provider's identity for Colab, and a publisher-owned Desktop OAuth client
-for per-file Drive access. Both must resolve to the same Google account before
-a Drive workspace or profile is created. The Drive callback uses loopback + PKCE;
-its tokens and renewal path are separate from Colab's.
+~~~bash
+python -m pip install colabcola
+colabcola login --profile research
+colabcola login --profile research --status
+~~~
 
-The wheel must contain the publisher's configured `publisher_oauth.json` resource.
-A build without it stops before consent with publisher setup instructions.
-The publisher development app remains External / Testing; its Drive refresh tokens
-expire after seven days. Public release and production OAuth approval are separate.
-Live new-account acceptance must be recorded separately from mocked tests.
+New profiles use the bundled production Desktop OAuth client. The
+execution project is separate from the OAuth publisher's project.
+Colab and Drive grants must belong to the same account; tokens remain
+in private host configuration and never enter job archives.
+Login checks account and workspace permissions without allocating.
+`--status` is offline; actual launch preflight rechecks cloud access.
 
-Install the built Colabcola wheel in Python 3.12+ and run `colabcola login` in
-Ubuntu WSL/Linux. The installed package includes its inspected provider code.
-The login command guides Google consent for Colab and limited Drive access,
-checks Colab assignments without allocating, and creates/reuses the app's Drive folder.
-It generates the credential-free helper internally; consumers do not write one.
+Native Windows CPU runtime management/recovery and Ubuntu WSL have
+passed bounded live tests. Other host/GPU configurations require their
+own validation. Keep the supervisor connected for monitoring/cleanup.
+See [user setup](USER_SETUP.md).
 
-`colabcola login --status` is offline. `--force` explicitly repeats authorization.
-`--config-home DIR` (or `COLABCOLA_CONFIG_HOME`) selects an isolated per-user configuration.
-The default remains `~/.config/colabcola`. OAuth tokens are kept in a private host
-files (`colab-oauth.json` and `drive-oauth.json`) with mode 0600 on Linux; they are never job payload or journal members.
-Running requires usable refresh authorization and an awake, connected supervisor.
-Native Windows runtime control remains unverified; Windows users should use WSL.
-
-Existing `lifecycle login` and explicit Drive helper configurations are retained for
-legacy prepared jobs. No existing credentials or prepared plans are migrated automatically.
-The development tests use empty configuration roots and simulated Google endpoints;
-live acceptance of each new authorization path is reported separately.
+The dated experiment reports below preserve historical test scope.
 
 ## Job and CLI
 
@@ -57,7 +47,7 @@ backend requests dated images through Google's documented Runtime.version field;
 --provider-backend rest for a job declaring YYYY.MM. It never substitutes Latest.
 This new backend is offline-tested, not live-verified on this account. Exact
 Python/package/GPU preflight remains mandatory. --high-mem requests host RAM, not
-a particular GPU memory capacity. See LONGCAT_READINESS.md for the migration gates.
+a particular GPU memory capacity. See archived LongCat readiness notes for the migration gates.
 
     colabcola lifecycle prepare JOB.colajob --run-dir NEW_RUN_DIR --drive-parent EXACT_FOLDER_ID --token-command HELPER_ARGV.json --gpu T4 --max-attempts 2 --max-seconds 900 --fault-after-checkpoint
 
@@ -121,7 +111,7 @@ billing ceiling. Resume supervision to reconcile and release uncertain allocatio
 
 Local evidence covers Windows regressions, transport faults and actual Linux worker
 destruction/restoration with a filesystem store. The bounded live recovery proof also
-passes as recorded below. Hyperplus reconstruction metrics are measured; no convergence or quality threshold is claimed. Public-product OAuth onboarding remains separate work.
+passes as recorded below. Hyperplus reconstruction metrics are measured; no convergence or quality threshold is claimed. Public-product OAuth onboarding was validated separately for v0.1.0.
 
 Live update 2026-10-15: T4 allocation, exact current-runtime preflight, embedded-wheel
 installation, 2000-step Hyperplus GPU training, Drive checkpoint/log/final publication,
@@ -246,7 +236,7 @@ owned endpoint is absent after unassign before the supervisor records release.
 A delayed response or observation keeps cleanup pending and consumes no new runtime.
 
 Existing bounded GPU proofs used this adapter. Revalidation is tracked in
-NONREST_REVALIDATION.md. The fresh CPU renewal probe explicitly requests Latest
+archived non-REST revalidation notes. The fresh CPU renewal probe explicitly requests Latest
 and records the actual Python version without claiming a dated environment.
 
 
@@ -424,7 +414,7 @@ on one A100 80 GB with a fresh `kernel-v1` journal. The same kernel/request was
 tracked across 363 busy observations. All 8 videos, 8 pre-final Drive commits,
 three natural token rotations, post-expiry publication, cold recovery and
 independent runtime absence passed within 10800 seconds. See
-`NONREST_REVALIDATION.md` and the mapped `danzel_longcat_example/acceptance.json`.
+`archived non-REST revalidation notes` and the mapped `danzel_longcat_example/acceptance.json`.
 This observes continuity for that bounded run. The older Google termination
 causes remain unconfirmed and old journals are not migrated. CLI logs still
 show measured delivery delay; timely progress remains a separate follow-up.

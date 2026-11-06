@@ -92,8 +92,8 @@ reuses its journal without extending its budget. The general packaging route pas
 2026-10-15: two T4 runtimes, step-50 restoration, 24 completed fits and verified
 Drive/local artifacts, with both runtimes released in 353.4 seconds. This replay
 used `--recovery-probe-wait 45` and `fault_after_checkpoint: true` in the execution
-configuration. See [the revalidation evidence](../../NONREST_REVALIDATION.md).
+configuration. See the revalidation evidence (historical evidence archived).
 
 The checkpoints are this program's own optional restart format. Other scripts can
 run without any checkpoint code; after runtime loss they restart from the beginning.
-See [the general packaging guide](../../PACKAGING.md) for modules and command sequences.
+See [the general packaging guide](../../docs/PACKAGING.md) for modules and command sequences.
