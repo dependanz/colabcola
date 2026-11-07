@@ -270,25 +270,66 @@ The status footer uses concise telemetry, independent of the long, varying
 performance strings in the terminal, so its text should not repeatedly
 resize the graphical window.
 
-### Optional isolated v9 experiment
+### v9 observed results
 
-To compare with v6 while changing only the remote renderer frequency,
-run a separate, explicitly authorized 12 FPS renderer / 6 Hz pull trial:
+The real v9 trial (`--fps 12 --poll-hz 6`) **did not reproduce v7's
+slowdown**. The remote Tesla T4 consistently rendered around **11.9–12.0 FPS**;
+the local client delivered **5.3–5.9 FPS** at a 6 Hz pull limit, with
+**171–187 ms** typical pull RTT and **328–359 ms** input acknowledgments.
+CUDA render plus device-to-host copy was around **1 ms**, compression around
+**6–9 ms**, and frame publication around **0–1 ms**. The owned runtime was
+confirmed released.
+
+Across separate sessions, 6/6, 6/12, and 12/6 settings all performed near
+5–6 received FPS, while 12/12 delivered only ~2.3 FPS. This suggests a
+possible **interaction** between those settings, but per-session Colab proxy
+variation remains an alternative explanation. We should not claim a
+specific GPU, GIL, codec, or network root cause yet.
+
+### v10 in-session controlled sweep (new; not live-verified)
+
+A single optional `--benchmark-sweep` run now compares **five phases within
+the same owned Colab runtime and Jupyter kernel connection**:
+
+| Phase | Render rate | Host pull cap |
+| --- | --- | --- |
+| 1 | 6 FPS | 6 Hz |
+| 2 | 12 FPS | 6 Hz |
+| 3 | 6 FPS | 12 Hz |
+| 4 | 12 FPS | 12 Hz |
+| 5 | 6 FPS | 6 Hz (baseline repeat) |
+
+Rate changes use an authenticated and run-ID-scoped Jupyter Comm control
+message. The remote worker validates and applies a new rate in its own loop;
+its timing sidecar includes a control sequence and active target so the host
+can distinguish requested from actually applied changes. Each phase lasts
+12 seconds by default; its first 2 seconds are excluded from measurements.
+A per-phase line reports received FPS, median frame-pull RTT, fresh replies,
+rate confirmation, and measured remote renderer throughput. The final
+baseline checks for drift across the one session.
+
+Only one frame request remains in flight. The original streaming default
+and file-polling fallback are unchanged. A requested control change is
+never allowed to allocate additional GPUs or start another kernel.
+
+For another **real, optional T4 allocation**, with a new run directory:
 
 ```powershell
 colabcola --profile pypi-new-account-test bridge colab `
-  --run-dir I:\colabcola-bridge-t4-proof-v9 `
-  --transport comm --gpu T4 --fps 12 --poll-hz 6 `
-  --max-seconds 180 --confirm-allocation
+  --run-dir I:\colabcola-bridge-t4-proof-v10 `
+  --transport comm --gpu T4 `
+  --fps 6 --poll-hz 6 `
+  --benchmark-sweep --benchmark-phase-seconds 12 `
+  --max-seconds 240 --confirm-allocation
 ```
 
-This can consume compute units. The remote timing instrumentation should
-distinguish whether a higher renderer target actually increases frame
-production and whether it inflates the render-copy or compression cost.
-Also compare frame-pull RTT and ACKs, and confirm terminal `phase: released`.
-The existing Python job runner and checkpoint recovery are unaffected.
-No unmodified desktop application or generic local GPU virtualization is
-claimed.
+The viewport opens automatically, and the benchmark closes it after all
+phases complete. Closing it early terminates the sweep and releases the
+owned runtime. A new allocation may consume Colab compute units; no live
+v10 performance figures are claimed. Afterward confirm the journal has
+`phase: released`, or retry `bridge cleanup` using the same profile and
+run directory. The existing Python job runner and checkpoint recovery are
+unaffected.
 
 ## Architecture boundary
 
