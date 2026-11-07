@@ -87,6 +87,8 @@ def release_owned(provider: GoogleProvider, directory: Path, state: dict) -> boo
             raise LifecycleError("allocation mismatch; refusing to release unrelated runtime")
         if not endpoint and recorded and provider.lookup(recorded):
             raise LifecycleError("saved runtime remains assigned but allocation reconciliation failed")
+        if not endpoint and not recorded and provider.assignments():
+            raise LifecycleError("allocation outcome uncertain; active assignment exists")
         if endpoint:
             save(directory, state, "releasing", endpoint=endpoint)
             provider.release(endpoint)
