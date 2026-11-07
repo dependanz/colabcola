@@ -181,7 +181,10 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 payloads = encoder.encode(frame)
                 if len(payloads) != 1:
                     raise RuntimeError("live H.264 expected one packet per input frame")
-                payload = payloads[0]
+                encoded = payloads[0]
+                # A PyAV Packet exposes .size rather than a guaranteed
+                # __len__. Validate the actual encoded byte payload.
+                payload = bytes(encoded)
                 stage = "packet-validate"
                 if not 0 < len(payload) <= 2 * 1024 * 1024:
                     raise RuntimeError("live H.264 packet exceeds bounded size")
@@ -193,8 +196,8 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 stage = "packet-send"
                 writer.sendall(packet_bytes(VideoAccessUnit(
                     seq=seq, pts_ns=round(seq * 1e9 / fps),
-                    capture_ns=captured_at, data=bytes(payload),
-                    keyframe=bool(payload.is_keyframe),
+                    capture_ns=captured_at, data=payload,
+                    keyframe=bool(encoded.is_keyframe),
                 )))
                 seq += 1
             # Only useful on normal completion. B-frames disabled, so this
