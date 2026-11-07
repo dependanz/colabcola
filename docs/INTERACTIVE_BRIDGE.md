@@ -8,14 +8,17 @@ restriction.
 
 ## Status
 
-This branch contains two experimental paths: a **loopback-only** Python
-graphics/input demonstration and an opt-in **managed Colab T4** renderer over
-the authenticated Jupyter Contents API. The T4 path can allocate compute
-only with explicit confirmation. Neither path changes the existing batch
-runner, checkpoint-recovery behavior, nor opens a public listening port.
-The Jupyter Contents polling bridge was verified against a real T4. The
-persistent Jupyter Comm path remains experimental and has not yet established
-a successful live Colab connection.
+The branch contains a **loopback-only** Python graphics/input demo
+and a **managed Colab Tesla T4** bridge. The original Jupyter Contents
+polling transport and the persistent authenticated Jupyter Comm transport
+have both been verified on real managed T4 allocations. The latter now
+defaults to two bounded in-flight frame credits (only when explicitly
+selected); its real v14 run delivered approximately 9.42 unique frames
+per second and matched the local Tk image-configuration rate. Live
+performance varies between allocations and is not guaranteed.
+The default transport remains file polling. All T4 allocations require
+explicit confirmation, and none of this modifies the released Python
+batch runner, checkpoint recovery, or public network bindings.
 
 ## Try it on Windows (two PowerShell terminals)
 
@@ -568,6 +571,80 @@ limit 3 Hz are not raised automatically.
 No screen compositor confirmation, GPU-to-display frame timing,
 or input-to-photon latency is claimed. This feature remains
 experimental and does not imply general application virtualization.
+
+## Feasibility of low-latency encoded video (codec proof only)
+
+The next research question is whether a **persistent temporal video codec**
+can replace independent zlib-compressed RGB frames, while using only the
+existing authenticated kernel communication path for Colab. This is
+**technically feasible**, but a suitable *continuous packet sender* and
+receiver have **not yet been implemented or Colab-live-validated**.
+
+### Offline reproducible codec comparison
+
+Install FFmpeg locally if available (with the optional `libx264` encoder).
+This script uses only local CPU-generated frames and has **no Colab API
+calls, runtime allocations, sockets, streaming server, or package-level
+FFmpeg dependency**:
+
+```powershell
+python -m colabcola.bridge_video_benchmark --width 640 --height 360 --fps 12 --frames 24 --pattern scene
+```
+
+A separate offline Linux run of that experiment generated 24 synthetic
+frames approximating the remote glow-and-wave scene:
+
+| Codec/metric | Observed local result |
+| --- | ---: |
+| zlib(level=1), independent RGB frames | 3,777,090 bytes total |
+| H.264/AVC libx264, ultrafast/zerolatency, CRF 23 | 81,267 bytes total |
+| Size ratio H.264/zlib | 0.0215 (about 46× smaller) |
+| H.264 PSNR vs original 8-bit RGB frames | 43.74 dB |
+| Decoded frames | 24 of 24 |
+
+The H.264 output is a **single encoded sequence with inter-frame
+prediction**, whereas the zlib baseline compresses each RGB frame
+independently. H.264 is lossy and the comparison is strongly
+**scene-dependent**; moving games, camera changes and complex geometry
+may compress very differently. FFmpeg batch encode/decode process times
+do not measure live, per-frame latency. The official real T4 bridge
+render+compression measurements were produced by a different pipeline.
+
+The current hosted Jupyter frame protocol remains request-tagged
+Base64-encoded zlib frames. The offline proof is an existence test for
+a video codec, **not** a claim of real-time H.264 streaming through
+Colab, 60 FPS, or support for unmodified game applications.
+
+### Next experimental design (not yet implemented)
+
+1. Introduce bounded, versioned **encoded-video packet metadata**
+   (session ID, sequence, presentation timestamp, codec, keyframe marker,
+   packet size), independently of the provider.
+2. Add an authenticated, paced **push** sender instead of requiring one
+   shell-channel frame request per encoded frame; cap the receiver buffer
+   and define keyframe recovery on loss or resynchronization.
+3. Decode the packets in a local video decoder. Compare end-to-end
+   delivered FPS, frame age, input ACK, and bandwidth against the proven
+   two-credit zlib baseline **on the same synthetic application**.
+4. Only after local tests, evaluate whether a bounded managed-Colab
+   research visualization is consistent with the latest Google Colab
+   usage rules. **Do not deploy a general media-serving platform,
+   remote desktop, public streaming endpoint, reverse tunnel, or
+   provider-limit bypass.**
+
+Google's current restrictions distinguish media serving unrelated
+to interactive compute (restricted for all managed runtimes) from
+additional free-tier restrictions on remote control without a positive
+compute-unit balance. The service also requires authorized access.
+Do not assume a custom Jupyter-based transport is automatically
+approved. Official references:
+
+- https://research.google.com/colaboratory/faq.html
+- https://research.google.com/colaboratory/tos_v6.html
+
+For providers supporting dedicated streaming, a separately implemented
+WebRTC/RTP or similar media transport could be substituted, without
+changing the application-facing frame/input interface.
 
 ## Architecture boundary
 
