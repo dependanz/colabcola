@@ -251,3 +251,34 @@ def test_remote_frame_rejects_oversized_encoded_body():
         bridge.decode_remote_file_record({
             "type": "file", "format": "base64", "content": "A" * (3 * 1024 * 1024)
         })
+
+
+def test_bridge_transfer_telemetry_handles_skipped_and_repeated_ack():
+    from colabcola.bridge_telemetry import BridgeTransferMeter
+
+    meter = BridgeTransferMeter()
+    meter.sent(1, 10.0)
+    meter.record("put", 0.75)
+    meter.sent(2, 11.0)
+    meter.record("get", 1.25)
+    meter.record("decode", 0.009)
+    # The runtime may only apply the latest input; seq 1 is skipped.
+    assert meter.received_ack(2, 12.3) == pytest.approx(1300)
+    assert meter.received_ack(2, 13.0) is None
+    stats = meter.flush()
+    assert stats == {"get": 1250, "put": 750, "decode": 9, "ack": 1300}
+    # Crucially, we cannot repeat the last input time as a new measurement.
+    assert meter.flush() == {"get": None, "put": None, "decode": None, "ack": None}
+    meter.sent(3, 14.0)
+    assert meter.received_ack(3, 14.2) == pytest.approx(200)
+
+
+def test_bridge_transfer_telemetry_does_not_accept_unseen_ack():
+    from colabcola.bridge_telemetry import BridgeTransferMeter
+
+    meter = BridgeTransferMeter()
+    assert meter.received_ack(1, 5.0) is None
+    meter.sent(1, 6.0)
+    assert meter.received_ack(0, 6.5) is None
+    with pytest.raises(ValueError, match="timing stage"):
+        meter.record("password", 1.0)
