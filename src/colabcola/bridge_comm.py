@@ -266,6 +266,46 @@ class KernelCommBridge:
             return sequence, ack, ppm, len(binary)
         raise LifecycleError("kernel frame timeout; no reply to last pull")
 
+    def probe_small_message_rtt(self, samples: int = 8) -> int:
+        """Measure tiny shell→IOPub Comm round trip before streaming starts.
+
+        Runs before frame requests, so consuming the IOPub queue cannot
+        interfere with outstanding video. Never reports frame performance.
+        """
+        if type(samples) is not int or not 1 <= samples <= 16:
+            raise ValueError("invalid ping sample count")
+        if self.wire is None or not self.comm_id:
+            raise LifecycleError("kernel bridge not attached")
+        durations = []
+        for seq in range(1, samples + 1):
+            sent_at = time.monotonic()
+            self._send("ping", seq=seq)
+            expiry = sent_at + 5
+            while time.monotonic() < expiry:
+                if not self.wire.connection_ready.is_set():
+                    raise LifecycleError("kernel websocket disconnected during ping")
+                try:
+                    msg = self.wire.iopub_channel.get_msg(
+                        timeout=min(.25, max(.01, expiry - time.monotonic())))
+                except queue.Empty:
+                    continue
+                if msg.get("header", {}).get("msg_type") != "comm_msg":
+                    continue
+                contents = msg.get("content", {})
+                if contents.get("comm_id") != self.comm_id:
+                    continue
+                payload = contents.get("data")
+                if (not isinstance(payload, dict)
+                        or payload.get("v") != 1 or payload.get("run_id") != self.run_id):
+                    continue
+                if payload.get("kind") == "pong" and type(payload.get("seq")) is int:
+                    if payload["seq"] == seq:
+                        durations.append((time.monotonic() - sent_at) * 1000)
+                        break
+            else:
+                raise LifecycleError("tiny Comm ping timed out")
+        return round(median(durations))
+
     def request_frame(self):
         self._send("pull")
 
@@ -297,7 +337,7 @@ class KernelCommBridge:
 
 def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
                 frames: queue.Queue, stopped, deadline: float,
-                poll_hz: int = 6) -> None:
+                poll_hz: int = 6, probe_link: bool = False) -> None:
     """Exactly one outstanding frame request: no unbounded transport backlog."""
     meter = BridgeTransferMeter()
     last_seq = -1
@@ -314,6 +354,9 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
     print("[colabcola] Persistent kernel Comm connected", flush=True)
     offer_update(frames, ("status", f"Kernel Comm · {gpu}"))
     try:
+        if probe_link:
+            baseline = peer.probe_small_message_rtt(samples=8)
+            print(f"[colabcola] tiny Comm RTT p50 {baseline} ms (8 samples, no frame payload)", flush=True)
         while not stopped.is_set() and time.monotonic() < deadline:
             start = time.monotonic()
             latest = None
