@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import struct
 import threading
+from statistics import median
 import time
 import zlib
 
@@ -53,6 +54,11 @@ def start(directory: str, fps: int, run_id: str):
             cx, cy, phase = 0.5, 0.5, 0.0
             seq, applied_seq = 0, 0
             started = time.monotonic()
+            metrics_since = started
+            render_samples = []
+            compress_samples = []
+            publish_samples = []
+            publish_count = 0
             publish_status(directory, state="ready", device="cuda", gpu=name,
                            memory_bytes=memory, run_id=run_id, width=WIDTH, height=HEIGHT)
             while not (directory / "stop").exists():
@@ -83,18 +89,46 @@ def start(directory: str, fps: int, run_id: str):
                     except (OSError, UnicodeError, ValueError, KeyError):
                         pass  # A concurrently replaced event is retried next frame.
                 seconds = time.monotonic() - started
+                render_start = time.monotonic()
                 glow = torch.exp(-42 * ((x - cx) ** 2 + (y - cy) ** 2))
                 wave = torch.sin(x * 10 + seconds * 2 + phase) * 0.5 + 0.5
                 r = (45 + 170 * glow + 35 * wave).clamp(0, 255)
                 g = (30 + 100 * y + 65 * glow).clamp(0, 255)
                 b = (90 + 95 * x + 50 * (1 - wave)).clamp(0, 255)
                 pixels = torch.stack((r, g, b), dim=-1).to(torch.uint8).cpu().numpy().tobytes()
+                # Includes CUDA kernels, synchronization, D2H transfer and CPU array conversion.
+                render_copy_ms = (time.monotonic() - render_start) * 1000
                 ppm = f"P6\n{WIDTH} {HEIGHT}\n255\n".encode() + pixels
+                compress_start = time.monotonic()
                 compressed = zlib.compress(ppm, level=1)
+                compress_ms = (time.monotonic() - compress_start) * 1000
                 if len(compressed) > 2 * 1024 * 1024:
                     raise RuntimeError("frame exceeds bridge transport bound")
                 packed = HEADER.pack(MAGIC, seq, applied_seq, WIDTH, HEIGHT) + compressed
+                publish_start = time.monotonic()
                 atomic_bytes(directory / "frame.bin", packed)
+                publish_ms = (time.monotonic() - publish_start) * 1000
+                render_samples.append(render_copy_ms)
+                compress_samples.append(compress_ms)
+                publish_samples.append(publish_ms)
+                publish_count += 1
+                now = time.monotonic()
+                if now - metrics_since >= 1:
+                    elapsed = now - metrics_since
+                    metrics = {
+                        "schema": 1, "run_id": run_id, "seq": seq,
+                        "renderer_fps": round(publish_count / elapsed, 2),
+                        "render_copy_ms": round(median(render_samples), 2),
+                        "compress_ms": round(median(compress_samples), 2),
+                        "publish_ms": round(median(publish_samples), 2),
+                    }
+                    atomic_bytes(directory / "render-metrics.json",
+                                 (json.dumps(metrics, separators=(",", ":"), allow_nan=False) + "\n").encode())
+                    metrics_since = now
+                    render_samples.clear()
+                    compress_samples.clear()
+                    publish_samples.clear()
+                    publish_count = 0
                 seq += 1
                 time.sleep(max(0, 1 / fps - (time.monotonic() - tick)))
             publish_status(directory, state="stopped", device="cuda", gpu=name, run_id=run_id)
