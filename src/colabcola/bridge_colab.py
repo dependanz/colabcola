@@ -326,7 +326,8 @@ def run_colab(args) -> int:
                                 def work(outgoing, frames, stopped):
                                     stream_comm(
                                         peer, details["gpu"], outgoing, frames,
-                                        stopped, deadline, args.poll_hz)
+                                        stopped, deadline, args.poll_hz,
+                                        probe_link=getattr(args, "probe_link", False))
                             run_viewer("127.0.0.1", 0, "", width=640, height=360,
                                        title="Colab Cola · T4 (kernel Comm)",
                                        worker=work)
