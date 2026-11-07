@@ -347,8 +347,11 @@ def main(argv: list[str] | None = None) -> int:
                 return cleanup_colab(args)
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
-            if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= 6:
-                parser.error("colab FPS must be 1..12 and poll-hz must be 1..6")
+            max_poll_hz = 12 if args.transport == "comm" else 6
+            if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= max_poll_hz:
+                parser.error(
+                    f"colab FPS must be 1..12 and {args.transport} poll-hz must be 1..{max_poll_hz}"
+                )
             if not 120 <= args.max_seconds <= 1800:
                 parser.error("colab --max-seconds must be within 120..1800")
             return run_colab(args)
