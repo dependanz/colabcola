@@ -809,8 +809,9 @@ These are **CPU-only, precomputed RGB scenes with a same-process
 local socketpair**. No render/capture workload, real network
 conditions, Jupyter proxy, remote CUDA, external listeners, GUI
 compositor, or game input are included. In-process stream
-performance for the full 640×360 benchmark on Windows and
-on real managed Colab has not yet been measured.
+performance for the full 640×360 benchmark on Windows
+**has now been measured**, while real managed Colab video streaming
+remains untested.
 
 A Windows Python 3.12 / PyAV 19.0.2 test exposed a timing-clock
 precision issue for very small (96×64) frames: the previously
@@ -847,6 +848,66 @@ packet interface could alternatively be implemented using another
 appropriately licensed FFmpeg integration or a platform-native
 codec API. Do not assume the existing Colab Jupyter kernel can or
 should be used as a general video-serving platform.
+
+### v18 measured on Windows (PyAV 19.0.2, Python 3.12)
+
+After the high-resolution timing fix, the user reran the optional in-process
+H.264 test at 640×360 on Windows. **All four PyAV-specific regression tests
+passed**; both live-paced synthetic scenes decoded every frame:
+
+| Metric | 12 FPS glow scene | 60 FPS moving square |
+| --- | ---: | ---: |
+| Decoded frames | 24/24 | 48/48 |
+| Decoded before source finished | 23/24 | 47/48 |
+| Active decoded cadence | 12.04 FPS | 60.58 FPS |
+| Median capture-to-decoded RGB | **2.285 ms** | **1.865 ms** |
+| Median capture-to-packet | 1.710 ms | 1.403 ms |
+| Median packet-to-local-socket | 0.121 ms | 0.098 ms |
+| Median socket-to-decoded RGB | 0.456 ms | 0.354 ms |
+| H.264 bytes | 76,329 | 26,377 |
+
+These Windows results corroborate Linux's approximately 2–3 ms
+in-process benchmark. They are not measurements of GPU frame capture,
+network transfer, local display configuration, or input-to-photon latency.
+
+### v19 live, input-responsive H.264 local demo (new; experimental)
+
+`src/colabcola/bridge_video_live.py` introduces a separate,
+bounded **live frame source** rather than replaying precomputed images.
+It renders an animated moving stripe and an input-controlled marker.
+Mouse movement and arrow keys alter the marker in the producer before
+the next H.264 frame is encoded. A persistent in-process PyAV encoder
+sends complete access units over the existing bounded binary socketpair
+format to an independent decoder, which forwards RGB images through the
+existing Tk viewer's bounded frame queue.
+
+The new local pipeline measures capture-to-decoded RGB latency, encoding
+and decoding cost, and **input-application-to-decoded-frame** latency.
+This last metric starts when the producer processes an input event,
+**not** when the user physically presses a key or when the desktop
+compositor presents the resulting frame. The GUI additionally reports
+local Tk image-configuration FPS when enabled.
+
+For a no-GPU, no-Colab *headless* smoke check (PyAV/NumPy must be installed):
+
+```powershell
+python -m pytest -q tests/test_bridge_video_live.py
+python -m colabcola.bridge_video_live --width 640 --height 360 --fps 12 --frames 24 --max-seconds 5
+```
+
+To show the interactive local viewer:
+
+```powershell
+python -m colabcola.bridge_video_live --show --width 640 --height 360 --fps 30 --max-seconds 30
+```
+
+Move the mouse over the image or use the arrow keys. The viewer
+closes automatically after its bounded frame budget (or can be
+closed manually). This test **does not allocate a Colab GPU, access the
+network, open a public listener, or modify the existing batch runner**.
+It does not prove remote encoded-video streaming or lost-reference
+recovery. The new live module is a separate optional experiment; no
+provider-side media integration is implied.
 
 ## Architecture boundary
 
