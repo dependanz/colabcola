@@ -67,10 +67,25 @@ def test_credit_sweep_five_phases_single_peer_and_bounded_requests(monkeypatch, 
     assert [f"credits {c}" in output for c in sweep.CREDITS] == [True] * 5
     assert "Credit sweep completed in one owned T4 session" in output
     assert stopped.is_set()
-    assert peer.max_outstanding == 4
+    # With an 180ms simulated RTT, the 12Hz pacing naturally needs only
+    # two overlapping requests even when the configured credit cap is 4.
+    assert 1 < peer.max_outstanding <= 4
     assert peer.requests == []
     assert peer.all_ids == list(range(1, len(peer.all_ids) + 1))
     assert len(peer.all_ids) > 80
+
+
+def test_slow_transport_exercises_all_four_available_credits(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(sweep, "time", clock)
+    peer = FakePeer(clock, delay=.52)
+    stopped = threading.Event()
+    sweep.run_credit_sweep(
+        peer, "Tesla T4", queue.Queue(), queue.Queue(maxsize=2),
+        stopped, deadline=100, phase_seconds=10)
+    assert stopped.is_set()
+    assert peer.max_outstanding == 4
+    assert not peer.requests
 
 
 def test_credit_phase_summary_has_postwarmup_metrics():
