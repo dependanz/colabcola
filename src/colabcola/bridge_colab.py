@@ -18,6 +18,7 @@ import uuid
 import zlib
 
 from .bridge_demo import run_viewer
+from .bridge_telemetry import BridgeTransferMeter
 from .lifecycle_io import LifecycleError, atomic
 from .lifecycle_provider import GoogleProvider
 from .lifecycle import run_lock
@@ -194,14 +195,12 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
     """Conservative single-threaded request loop for the first real-GPU proof."""
     seq = 0
     last_seq = -1
-    acked = 0
-    pending = {}
+    meter = BridgeTransferMeter()
     start = time.monotonic()
     last_stats = start
     seen = 0
     transferred = 0
     last_frame_at = start
-    last_input_latency_ms = None
     print("[colabcola] Interactive T4 bridge connected; close the viewer to release compute", flush=True)
     try:
         offer_update(frames, ("status", f"Connected · {gpu} · remote rendering"))
@@ -216,9 +215,12 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
             if event is not None:
                 seq += 1
                 record = {"run_id": run_id, "seq": seq, **event}
+                upload_started = time.monotonic()
+                meter.sent(seq, upload_started)
                 provider._upload(session, remote + "/input.json",
                                  (json.dumps(record, separators=(",", ":")) + "\n").encode())
-                pending[seq] = time.monotonic()
+                meter.record("put", time.monotonic() - upload_started)
+            fetch_started = time.monotonic()
             try:
                 packed = remote_file(provider, session, remote + "/frame.bin")
             except FileNotFoundError:
@@ -229,7 +231,10 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                     raise LifecycleError("remote renderer published no frame within 30 seconds")
                 time.sleep(0.15)
                 continue
+            meter.record("get", time.monotonic() - fetch_started)
+            decode_started = time.monotonic()
             frame_seq, ack, width, height, ppm = unpack_frame(packed)
+            meter.record("decode", time.monotonic() - decode_started)
             if width != 640 or height != 360:
                 raise LifecycleError("unexpected remote frame dimensions")
             if frame_seq > last_seq:
@@ -245,15 +250,17 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                     raise LifecycleError("remote renderer failed: " + str(status.get("message", "unknown"))[:160])
                 raise LifecycleError("remote renderer frame is stale for 30 seconds")
             now = time.monotonic()
-            if ack > acked and ack in pending:
-                last_input_latency_ms = round(1000 * (now - pending[ack]))
-                acked = ack
-                pending = {n: sent for n, sent in pending.items() if n > acked}
+            meter.received_ack(ack, now)
             if now - last_stats >= 2:
                 elapsed = max(now - last_stats, .001)
+                timings = meter.flush()
                 text = f"{gpu} · {seen / elapsed:.1f} FPS · {transferred / elapsed / 1024:.0f} KiB/s"
-                if last_input_latency_ms is not None:
-                    text += f" · input-to-frame {last_input_latency_ms} ms"
+                for stage in ("get", "put", "decode"):
+                    value = timings[stage]
+                    if value is not None:
+                        text += f" · {stage.upper()} p50 {value} ms"
+                if timings["ack"] is not None:
+                    text += f" · input ACK observed p50 {timings['ack']} ms"
                 offer_update(frames, ("status", text))
                 print("[colabcola] " + text, flush=True)
                 seen = 0
