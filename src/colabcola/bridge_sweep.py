@@ -7,6 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from statistics import median
+import queue
+import time
+
+from .bridge_colab import offer_update
+from .bridge_telemetry import BridgeTransferMeter
+from .lifecycle_io import LifecycleError
 
 
 SWEEP_PHASES = ((6, 6), (12, 6), (6, 12), (12, 12), (6, 6))
@@ -74,3 +80,84 @@ def sweep_phases(phase_seconds: int):
         PhaseMeasurement(renderer, pull, i + 1, phase_seconds)
         for i, (renderer, pull) in enumerate(SWEEP_PHASES)
     ]
+
+
+def run_rate_sweep(peer, gpu: str, outgoing: queue.Queue, frames: queue.Queue,
+                   stopped, deadline: float, phase_seconds: int = 12) -> None:
+    """Compare four rate combinations + repeat baseline on one owned kernel.
+
+    One frame request remains in flight at a time. A control ACK means only
+    the kernel accepted the change; renderer-side rate_seq confirms actual
+    application. A 2s warmup is excluded from each phase's sample window.
+    """
+    phases = sweep_phases(phase_seconds)
+    last_remote_seq = -1
+    input_seq = 0
+    control_seq = 0
+    previous_renderer_rate = phases[0].renderer_fps
+    ack_meter = BridgeTransferMeter()
+    finished = 0
+    print("[colabcola] Starting in-session rate sweep (single owned T4)", flush=True)
+    try:
+        for phase in phases:
+            if stopped.is_set() or time.monotonic() >= deadline:
+                break
+            phase.begin(time.monotonic())
+            if phase.renderer_fps != previous_renderer_rate:
+                control_seq += 1
+                peer.set_render_fps(control_seq, phase.renderer_fps)
+                previous_renderer_rate = phase.renderer_fps
+            heading = (f"phase {phase.phase}/{len(phases)}: "
+                       f"renderer {phase.renderer_fps} FPS, pulls {phase.pull_hz} Hz")
+            print("[colabcola] " + heading, flush=True)
+            offer_update(frames, ("status", heading))
+            while not stopped.is_set() and time.monotonic() - phase.start < phase_seconds:
+                begin = time.monotonic()
+                if begin >= deadline:
+                    break
+                latest = None
+                while True:
+                    try:
+                        latest = outgoing.get_nowait()
+                    except queue.Empty:
+                        break
+                if latest:
+                    input_seq += 1
+                    ack_meter.sent(input_seq, time.monotonic())
+                    peer.send_input(input_seq, latest)
+                requested = time.monotonic()
+                peer.request_frame()
+                seq, ack, pixels, size = peer.next_frame(
+                    min(8.0, max(0.1, deadline - time.monotonic())))
+                received = time.monotonic()
+                fresh = seq > last_remote_seq
+                if fresh:
+                    last_remote_seq = seq
+                    offer_update(frames, ("frame", pixels))
+                ack_meter.received_ack(ack, received)
+                phase.collect(
+                    now=received, rtt_ms=(received - requested) * 1000,
+                    size=size, fresh=fresh,
+                    metrics=getattr(peer, "latest_renderer_metrics", None),
+                    required_rate_seq=control_seq)
+                interval = 1 / phase.pull_hz
+                pause = max(0.0, interval - (time.monotonic() - begin))
+                if pause:
+                    time.sleep(pause)
+            now = time.monotonic()
+            if stopped.is_set() or now >= deadline and now - phase.start < phase_seconds:
+                print("[colabcola] Sweep interrupted; preserving partial measurements", flush=True)
+                break
+            finished += 1
+            report = phase.summary(now)
+            print("[colabcola] SWEEP " + report, flush=True)
+            offer_update(frames, ("status", report))
+        if finished == len(phases):
+            print("[colabcola] Sweep completed; ending the owned interactive session", flush=True)
+        else:
+            print(f"[colabcola] Sweep completed {finished}/{len(phases)} phases", flush=True)
+    except Exception as exc:
+        print("[colabcola] Sweep stopped: " + type(exc).__name__, flush=True)
+        raise LifecycleError("in-session rate sweep interrupted") from None
+    finally:
+        stopped.set()
