@@ -8,11 +8,12 @@ restriction.
 
 ## Status
 
-This branch contains a **loopback transport prototype**, not a managed Colab
-graphics session. It never allocates Colab compute, modifies a current job,
-opens a public listening port, or changes checkpoint-recovery behavior. It
-demonstrates the independent input/output loop that a future provider adapter
-will transport.
+This branch contains two experimental paths: a **loopback-only** Python
+graphics/input demonstration and an opt-in **managed Colab T4** renderer over
+the authenticated Jupyter Contents API. The T4 path can allocate compute
+only with explicit confirmation. Neither path changes the existing batch
+runner, checkpoint-recovery behavior, nor opens a public listening port.
+The managed T4 implementation is not yet live-validated.
 
 ## Try it on Windows (two PowerShell terminals)
 
@@ -122,23 +123,24 @@ The initial protocol is a bounded, versioned length-prefixed JSON stream.
 - Local to remote: handshake and normalized mouse/keyboard input events.
 - Remote to local: handshake result and sequential frames, currently base64
   encoded binary PPM images. The viewer drops stale queued frames.
-- Transport: asyncio streams over **loopback TCP only**. Arbitrary binds are
-  rejected deliberately; authentication alone does not encrypt traffic.
-- Renderer: tiny Python scene with CPU execution or optional torch/CUDA.
-- Presentation: optional Tk local viewer, loaded only for the view command.
+- Loopback transport: asyncio TCP streams on localhost only; arbitrary public
+  binds are rejected.
+- Managed Colab transport: authenticated Jupyter file snapshots, zlib-compressed
+  PPM frames, and bounded latest-input writes to the **owned** T4 session.
+- Renderer: tiny Python scene on CPU, local torch/CUDA, or remote Tesla T4.
+- Presentation: Tk graphical viewer on the user's local machine.
 
 The protocol lives in `src/colabcola/bridge_protocol.py`, distinct from the
 Colab allocator, credential handling, and frozen batch execution plans.
 
 ## Remaining integration work (not implemented here)
 
-1. **Colab transport adapter:** use an authorized, owned Colab kernel/session
-   and an explicitly designed, outbound-compatible channel. Do not assume
-   that arbitrary incoming TCP ports can be opened on a Colab runtime.
-2. **Session management:** attach, reconnect, cancel, release, and distinguish
-   network disconnection from runtime loss. Preserve existing run journals.
-3. **Frame pipeline:** use a suitable image/video codec and frame pacing,
-   with throughput, latency, and input-to-photon measurements.
+1. **Colab acceptance:** validate the real managed T4 launch, authenticated
+   frame retrieval, input acknowledgements, and guaranteed owned cleanup.
+2. **Session management:** reattach, recover after local supervisor restart,
+   and distinguish network disconnection from runtime loss.
+3. **Frame pipeline:** move beyond REST polling to lower-latency transport,
+   use a suitable codec, and verify frame pacing and input-to-photon latency.
 4. **Unmodified applications:** isolate a supported capture/input backend
    from the runtime supervisor; general GUI applications need a graphical
    environment, rendering capture, and device event injection.
@@ -152,12 +154,12 @@ checkpoint rather than preserving its exact on-screen state.
 ## Verification
 
 ```bash
-python -m pytest -q tests/test_bridge.py
+python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py
 ```
 
-The tests cover protocol bounds, version checks, malformed inputs,
-authenticated handshakes, real loopback frame transmission and input acceptance,
-and CLI routing. Live Colab, Windows Tk rendering, network delays, and
+The offline tests cover bounded protocol framing, actual loopback
+input/frame exchange, Tk frame decoding, fake-provider allocation ownership,
+frame integrity, cleanup, and CLI routing. Live Colab, network delays, and
 GPU input-to-photon latency remain unverified by this suite.
 
 Colab Cola and its use of Google services remain subject to provider terms
