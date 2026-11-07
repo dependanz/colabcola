@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import base64
+import importlib.resources
 from pathlib import Path
 import argparse
 import json
@@ -172,3 +174,49 @@ def test_colab_cli_profile_dispatch_without_live_google(monkeypatch):
     monkeypatch.setattr(bridge, "run_colab", offline)
     assert cli_main(["--profile", "example", "bridge", "colab", "--preflight-only"]) == 0
     assert called == {"profile": "example", "preflight_only": True}
+
+
+def test_packaged_remote_worker_compiles():
+    source = importlib.resources.files("colabcola").joinpath(
+        "bridge_colab_runtime.py"
+    ).read_text(encoding="utf-8")
+    compile(source, "bridge_colab_runtime.py", "exec")
+
+
+def test_authenticated_remote_frame_fetch():
+    payload = make_frame()
+    class Transport:
+        def _contents(self, session, method, path):
+            assert method == "GET"
+            assert path.endswith("frame.bin")
+            return {"type": "file", "format": "base64", "content": base64.b64encode(payload).decode()}
+    assert bridge.remote_file(Transport(), object(), "content/bridge/frame.bin") == payload
+
+
+def test_boot_uploads_worker_to_owned_colab_kernel():
+    rid = "a" * 32
+    class Transport:
+        def __init__(self):
+            self.commands = []
+            self.files = []
+        def _execute(self, session, code):
+            self.commands.append(code)
+        def _upload(self, session, path, content):
+            self.files.append((path, content))
+        def _json_file(self, session, path):
+            assert path == f"content/colabcola-bridge/{rid}/status.json"
+            return {
+                "run_id": rid, "state": "ready", "device": "cuda",
+                "gpu": "Tesla T4", "width": 640, "height": 360,
+            }
+
+    provider = Transport()
+    remote, facts = bridge.start_worker(provider, object(), rid, 6)
+    assert remote == f"content/colabcola-bridge/{rid}"
+    assert facts["device"] == "cuda" and facts["gpu"] == "Tesla T4"
+    assert len(provider.commands) == 2
+    assert "runpy.run_path" in provider.commands[1]
+    assert "BRIDGE_RUN_ID" in provider.commands[1]
+    assert len(provider.files) == 1
+    assert provider.files[0][0] == remote + "/bridge_colab_runtime.py"
+    compile(provider.files[0][1], "uploaded_worker.py", "exec")
