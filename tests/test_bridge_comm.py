@@ -46,6 +46,10 @@ class FakeWire:
         self.connection_ready = threading.Event()
         self.connection_ready.set()
         self.commands = []
+        self._on_open = lambda socket: self.connection_ready.set()
+        self._on_close = lambda socket, code, message: self.connection_ready.clear()
+        self._run_websocket = lambda: None
+        self.connection_thread = None
     def execute(self, code, **options):
         compile(code, "comm_bootstrap.py", "exec")
         self.commands.append(code)
@@ -314,3 +318,66 @@ def test_bootstrap_failure_reports_stage_without_exception_value(monkeypatch):
         peer.open()
     assert "SENSITIVE_TOKEN" not in str(error.value)
     assert clients and clients[0].stopped
+
+
+def test_websocket_probe_filters_sensitive_errors():
+    from colabcola.bridge_ws_probe import KernelWebSocketProbe
+    wire = FakeWire()
+    wire.connection_ready.clear()
+    probe = KernelWebSocketProbe()
+    probe.install(wire)
+    wire._on_open(None)
+    wire._on_close(None, 1006, "secret close content")
+    assert probe.opened and probe.closed
+    assert probe.close_code == 1006
+    text = probe.summary(wire)
+    assert "opened=1" in text and "connected=0" in text
+    assert "secret" not in text
+    wire._on_open(None)
+    assert wire.connection_ready.is_set()
+
+
+def test_comm_bridge_failed_websocket_never_submits_and_cleans_both(monkeypatch):
+    """A failed connection may be retried, but never execute workload code."""
+    from colabcola import bridge_comm
+
+    class NotReady:
+        def is_set(self):
+            return False
+        def wait(self, timeout=None):
+            return False
+
+    clients = []
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self._manager = SimpleNamespace(client=FakeWire())
+            self._manager.client.connection_ready = NotReady()
+            self.stopped = False
+            clients.append(self)
+        def start(self):
+            pass
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(bridge_comm, "safe_client_class", lambda base: FakeClient)
+    monkeypatch.setattr(bridge_comm.time, "sleep", lambda duration: None)
+
+    class Provider:
+        def _execute(self, session, code):
+            pass
+        def _upload(self, session, name, content):
+            pass
+        def _kernel(self, session):
+            return {"id": "owned-kernel"}
+
+    peer = bridge_comm.KernelCommBridge(
+        Provider(), SimpleNamespace(url="https://example.invalid", token="VERY_SENSITIVE_TOKEN"),
+        "e" * 32, 6
+    )
+    with pytest.raises(LifecycleError, match="did not open after 2 pre-execution connections") as error:
+        peer.open()
+    assert len(clients) == 2
+    assert all(client.stopped for client in clients)
+    assert all(not client._manager.client.commands for client in clients)
+    assert "VERY_SENSITIVE_TOKEN" not in str(error.value)
+    assert "opened=0" in str(error.value)
