@@ -187,13 +187,17 @@ async def stream_viewer(
                 await send_message(writer, {"v": PROTOCOL_VERSION, "type": "input", **event})
 
         task = asyncio.create_task(transmit())
+        pending_read = asyncio.create_task(read_message(reader))
         sequence = -1
         try:
             while not stopped.is_set():
-                try:
-                    message = await asyncio.wait_for(read_message(reader), timeout=0.3)
-                except asyncio.TimeoutError:
+                # Keep one read task alive across timeouts: cancelling a partial
+                # length-prefixed read could otherwise desynchronize the stream.
+                done, _ = await asyncio.wait((pending_read,), timeout=0.3)
+                if not done:
                     continue
+                message = pending_read.result()
+                pending_read = asyncio.create_task(read_message(reader))
                 if message["type"] == "error":
                     raise RuntimeError(message.get("message", "remote error"))
                 if message["type"] != "frame" or message["seq"] <= sequence:
@@ -211,10 +215,8 @@ async def stream_viewer(
                 frames.put(("frame", payload))
         finally:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            pending_read.cancel()
+            await asyncio.gather(task, pending_read, return_exceptions=True)
     except (OSError, ValueError, RuntimeError, asyncio.IncompleteReadError, BridgeProtocolError) as exc:
         frames.put(("status", f"Disconnected: {type(exc).__name__}: {exc}"))
     finally:
