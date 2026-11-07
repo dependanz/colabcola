@@ -122,6 +122,9 @@ def test_no_congestion_does_not_restart_real_h264_encoder():
     assert result["fixed_high_rate"] == result["adaptive_rate"]
     assert result["fixed_high_rate"]["actually_decoded_frames"] == 24
     assert result["fixed_high_rate"]["quality_decoded_frames"] == 24
+    assert result["fixed_high_rate"]["matched_frame_count"] == 24
+    assert result["fixed_high_rate"]["matched_frame_rgb_psnr_db"] == (
+        result["adaptive_rate"]["matched_frame_rgb_psnr_db"])
 
 
 def test_real_encoder_target_bitrate_changes_encoded_bytes_and_rgb_quality():
@@ -191,5 +194,9 @@ def test_seeded_bandwidth_collapse_is_deterministic_and_bounded():
     for policy in ("adaptive_rate", "fixed_high_rate"):
         assert a[policy]["actually_decoded_frames"] <= a[policy]["delivered_frames"] <= 90
         assert a[policy]["quality_decoded_frames"] == a[policy]["actually_decoded_frames"]
+        assert 0 <= a[policy]["matched_frame_count"] <= a[policy]["quality_decoded_frames"]
+        assert a[policy]["matched_frame_count"] == a["fixed_high_rate"]["matched_frame_count"]
+        if a[policy]["matched_frame_count"]:
+            assert a[policy]["matched_frame_rgb_psnr_db"] is not None
     assert a["controller"]["requests_sent"] <= 8
     assert a["adaptive_rate"]["wire_bytes"] > 0
