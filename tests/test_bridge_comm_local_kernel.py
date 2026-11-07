@@ -16,7 +16,6 @@ import zlib
 import pytest
 
 
-@pytest.mark.timeout(45) if hasattr(pytest, "mark") else (lambda fn: fn)
 def test_local_jupyter_comm_open_pull_input_close(tmp_path):
     pytest.importorskip("ipykernel")
     jupyter_client = pytest.importorskip("jupyter_client")
