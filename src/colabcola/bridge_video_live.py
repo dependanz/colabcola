@@ -365,9 +365,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="optional exact frame budget, capped by --max-seconds")
     parser.add_argument("--show", action="store_true",
                         help="display the live source in the local Tk viewer")
+    parser.add_argument("--viewer-poll-ms", type=int, default=None,
+                        help="local Tk frame queue poll interval, 5..100 ms; default 30 ms")
     args = parser.parse_args(argv)
     if not 1 <= args.max_seconds <= MAX_LIVE_SECONDS:
         parser.error("--max-seconds must be 1..180")
+    if args.viewer_poll_ms is not None:
+        if not args.show:
+            parser.error("--viewer-poll-ms requires --show")
+        if not 5 <= args.viewer_poll_ms <= 100:
+            parser.error("--viewer-poll-ms must be in 5..100")
     frame_budget = args.frames if args.frames is not None else args.fps * args.max_seconds
     if frame_budget > args.fps * args.max_seconds:
         parser.error("--frames cannot exceed the explicit time budget")
@@ -380,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
                        outgoing, frames, stopped, width=args.width,
                        height=args.height, fps=args.fps, max_frames=frame_budget,
                        timed_frames=True),
-                   viewer_stats=True, timestamp_local_input=True)
+                   viewer_stats=True, timestamp_local_input=True,
+                   poll_interval_ms=(args.viewer_poll_ms if args.viewer_poll_ms is not None else 30))
     else:
         stopped = threading.Event()
         run_live_stream(queue.Queue(maxsize=64), queue.Queue(maxsize=2),
