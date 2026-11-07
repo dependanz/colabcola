@@ -289,11 +289,17 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     label.bind("<Motion>", mouse)
     root.bind("<KeyPress>", lambda e: enqueue({"event": "key", "key": e.keysym[:32]}))
     root.protocol("WM_DELETE_WINDOW", lambda: (stopped.set(), root.destroy()))
+    failures = []
+
     def dispatch() -> None:
-        if worker is not None:
-            worker(outgoing, frames, stopped)
-        else:
-            asyncio.run(stream_viewer(host, port, token, outgoing, frames, stopped))
+        try:
+            if worker is not None:
+                worker(outgoing, frames, stopped)
+            else:
+                asyncio.run(stream_viewer(host, port, token, outgoing, frames, stopped))
+        except Exception as exc:
+            failures.append(exc)
+            stopped.set()
 
     thread = threading.Thread(target=dispatch, daemon=True)
     thread.start()
@@ -301,12 +307,14 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     root.mainloop()
     stopped.set()
     thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
+    if failures:
+        raise failures[0]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="colabcola bridge",
-        description="Experimental loopback graphics and input bridge (no Colab allocation).",
+        description="Experimental interactive bridge: local loopback or one managed Colab T4.",
     )
     sub = parser.add_subparsers(dest="action", required=True)
     for name in ("serve", "view"):
