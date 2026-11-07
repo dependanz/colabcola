@@ -23,6 +23,7 @@ import threading
 import time
 
 from .bridge_colab import offer_update
+from .bridge_viewer_stats import LocalFrameTiming
 from .bridge_video_stream import VideoAccessUnit, packet_bytes, receive_packet
 
 MAX_LIVE_SECONDS = 180
@@ -123,7 +124,8 @@ def make_live_codecs(width: int, height: int, fps: int):
 
 def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                     *, width: int = 640, height: int = 360,
-                    fps: int = 30, max_frames: int = 120) -> dict:
+                    fps: int = 30, max_frames: int = 120,
+                    timed_frames: bool = False) -> dict:
     """Run one bounded live interactive source and independently decode it.
 
     Returned metrics use the same local high-resolution clock. Received frame
@@ -131,6 +133,8 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
     physical monitor presenting the result.
     """
     validate_live(width, height, fps, max_frames)
+    if type(timed_frames) is not bool:
+        raise ValueError("timed frames must be a boolean")
     av, np, encoder, decoder = make_live_codecs(width, height, fps)
     base = live_background(width, height, np)
     writer, reader = socket.socketpair()
@@ -143,6 +147,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
     encode_costs_ms = []
     decode_costs_ms = []
     input_acks_ms = []
+    input_callback_to_decode_ms = []
     delivered = 0
     input_changes = 0
     first_decode = None
@@ -155,6 +160,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
             scene = LiveScene()
             latest_input_seq = 0
             latest_input_at = 0
+            latest_input_callback_ns = None
             start = time.perf_counter()
             seq = 0
             while seq < max_frames and not stopped.is_set():
@@ -171,6 +177,15 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 if event is not None and scene.apply(event):
                     latest_input_seq += 1
                     latest_input_at = time.perf_counter_ns()
+                    callback_ns = event.get("_ui_callback_ns")
+                    # Keep callback timestamps local. They are never sent
+                    # over the socket or accepted as a provider input field.
+                    if (type(callback_ns) is int
+                            and 0 < callback_ns <= latest_input_at
+                            and latest_input_at - callback_ns <= 180 * 1_000_000_000):
+                        latest_input_callback_ns = callback_ns
+                    else:
+                        latest_input_callback_ns = None
                 captured_at = time.perf_counter_ns()
                 stage = "render"
                 rgb = render_live_rgb(scene, base, seq)
@@ -189,7 +204,8 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 if not 0 < len(payload) <= 2 * 1024 * 1024:
                     raise RuntimeError("live H.264 packet exceeds bounded size")
                 now = time.perf_counter_ns()
-                metadata = (seq, captured_at, latest_input_seq, latest_input_at)
+                metadata = (seq, captured_at, latest_input_seq, latest_input_at,
+                            latest_input_callback_ns)
                 meta.put(metadata, timeout=3)
                 sent_frames.append(seq)
                 encode_costs_ms.append((now - captured_at) / 1e6)
@@ -242,7 +258,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
             for image in decoded:
                 if not pending:
                     raise RuntimeError("live H.264 decoder produced unsolicited frame")
-                seq, captured, ack_seq, input_at = pending.popleft()
+                seq, captured, ack_seq, input_at, callback_ns = pending.popleft()
                 pixels = image.to_ndarray(format="rgb24").tobytes()
                 if len(pixels) != width * height * 3:
                     raise RuntimeError("live H.264 RGB shape mismatch")
@@ -254,9 +270,17 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 last_decode = now
                 if ack_seq > last_input_latency_seq and input_at:
                     input_acks_ms.append((now - input_at) / 1e6)
+                    if callback_ns is not None:
+                        input_callback_to_decode_ms.append((now - callback_ns) / 1e6)
                     last_input_latency_seq = ack_seq
                     input_changes += 1
-                offer_update(frames, ("frame", ppm_header + pixels))
+                if timed_frames:
+                    timing = LocalFrameTiming(
+                        captured_ns=captured, decoded_ns=now,
+                        input_callback_ns=callback_ns)
+                    offer_update(frames, ("frame-timed", (ppm_header + pixels, timing)))
+                else:
+                    offer_update(frames, ("frame", ppm_header + pixels))
                 window_count += 1
             now_sec = time.perf_counter()
             if now_sec - last_report >= 2:
@@ -274,7 +298,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
         for image in decoder.decode(None):
             if not pending:
                 raise RuntimeError("live H.264 flush emitted unsolicited frame")
-            seq, captured, ack_seq, input_at = pending.popleft()
+            seq, captured, ack_seq, input_at, callback_ns = pending.popleft()
             pixels = image.to_ndarray(format="rgb24").tobytes()
             now = time.perf_counter_ns()
             decoded_ages_ms.append((now - captured) / 1e6)
@@ -282,9 +306,17 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
             last_decode = now
             if ack_seq > last_input_latency_seq and input_at:
                 input_acks_ms.append((now - input_at) / 1e6)
+                if callback_ns is not None:
+                    input_callback_to_decode_ms.append((now - callback_ns) / 1e6)
                 last_input_latency_seq = ack_seq
                 input_changes += 1
-            offer_update(frames, ("frame", ppm_header + pixels))
+            if timed_frames:
+                timing = LocalFrameTiming(
+                    captured_ns=captured, decoded_ns=now,
+                    input_callback_ns=callback_ns)
+                offer_update(frames, ("frame-timed", (ppm_header + pixels, timing)))
+            else:
+                offer_update(frames, ("frame", ppm_header + pixels))
         thread.join(timeout=5)
         if thread.is_alive():
             raise RuntimeError("live H.264 source shutdown timeout")
@@ -308,6 +340,9 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
             "input_events_observed_in_decoded_frames": input_changes,
             "input_applied_to_decoded_p50_ms": round(median(input_acks_ms), 3)
             if input_acks_ms else None,
+            "input_callback_to_decoded_p50_ms": round(
+                median(input_callback_to_decode_ms), 3
+            ) if input_callback_to_decode_ms else None,
             "scope": "live local generated frames and input; no Colab, GPU, remote network or compositor",
         }
         print("[colabcola] Live local H.264: " + str(result), flush=True)
@@ -343,8 +378,9 @@ def main(argv: list[str] | None = None) -> int:
                    title="Colab Cola · Live H.264 local proof",
                    worker=lambda outgoing, frames, stopped: run_live_stream(
                        outgoing, frames, stopped, width=args.width,
-                       height=args.height, fps=args.fps, max_frames=frame_budget),
-                   viewer_stats=True)
+                       height=args.height, fps=args.fps, max_frames=frame_budget,
+                       timed_frames=True),
+                   viewer_stats=True, timestamp_local_input=True)
     else:
         stopped = threading.Event()
         run_live_stream(queue.Queue(maxsize=64), queue.Queue(maxsize=2),
