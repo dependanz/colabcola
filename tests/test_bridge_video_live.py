@@ -154,4 +154,35 @@ def test_live_h264_tk_viewer_opens_and_exits_cleanly():
             fps=12, max_frames=8, timed_frames=True,
         ),
         viewer_stats=True, timestamp_local_input=True,
+        poll_interval_ms=8,
     )
+
+
+def test_live_cli_local_viewer_poll_requires_show_and_bounded_interval(monkeypatch):
+    from colabcola.bridge_video_live import main
+    from colabcola import bridge_demo
+
+    seen = []
+    monkeypatch.setattr(bridge_demo, "run_viewer",
+                        lambda *args, **kwargs: seen.append(kwargs))
+    base = ["--width", "96", "--height", "64", "--fps", "12",
+            "--max-seconds", "1", "--frames", "8"]
+
+    assert main(base + ["--show"]) == 0
+    assert seen[-1]["poll_interval_ms"] == 30
+    assert main(base + ["--show", "--viewer-poll-ms", "8"]) == 0
+    assert seen[-1]["poll_interval_ms"] == 8
+
+    for extra in (["--viewer-poll-ms", "8"],
+                  ["--show", "--viewer-poll-ms", "4"],
+                  ["--show", "--viewer-poll-ms", "101"]):
+        with pytest.raises(SystemExit) as e:
+            main(base + extra)
+        assert e.value.code == 2
+
+
+def test_invalid_viewer_poll_interval_rejected_before_creating_tk():
+    from colabcola.bridge_demo import run_viewer
+    for invalid in (0, 4, 101, -1, 8.5, True, None):
+        with pytest.raises(ValueError, match="Tk poll interval"):
+            run_viewer("127.0.0.1", 0, "", poll_interval_ms=invalid)
