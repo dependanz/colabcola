@@ -151,7 +151,7 @@ def test_live_h264_tk_viewer_opens_and_exits_cleanly():
         title="Colab Cola · Live H.264 Tk smoke",
         worker=lambda outgoing, frames, stopped: run_live_stream(
             outgoing, frames, stopped, width=96, height=64,
-            fps=12, max_frames=8,
+            fps=12, max_frames=8, timed_frames=True,
         ),
-        viewer_stats=True,
+        viewer_stats=True, timestamp_local_input=True,
     )
