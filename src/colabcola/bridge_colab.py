@@ -316,7 +316,13 @@ def run_colab(args) -> int:
                             save(args.run_dir, state, "running", gpu_name=details["gpu"],
                                  transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
-                            if getattr(args, "benchmark_sweep", False):
+                            if getattr(args, "benchmark_credits", False):
+                                from .bridge_credit_sweep import run_credit_sweep
+                                def work(outgoing, frames, stopped):
+                                    run_credit_sweep(
+                                        peer, details["gpu"], outgoing, frames, stopped,
+                                        deadline, args.credit_phase_seconds)
+                            elif getattr(args, "benchmark_sweep", False):
                                 from .bridge_sweep import run_rate_sweep
                                 def work(outgoing, frames, stopped):
                                     run_rate_sweep(
