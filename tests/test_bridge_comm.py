@@ -249,11 +249,11 @@ def test_remote_comm_bootstrap_failure_writes_sanitized_report(tmp_path):
     root.mkdir()
     renderer = tmp_path / "failed_renderer.py"
     renderer.write_text(
-        "from pathlib import Path\\n"
-        "import json\\n"
-        "def start(directory, fps, run_id):\\n"
+        "from pathlib import Path\n"
+        "import json\n"
+        "def start(directory, fps, run_id):\n"
         " Path(directory, 'status.json').write_text(json.dumps("
-        "{'state':'failed','run_id':run_id}))\\n",
+        "{'state':'failed','run_id':run_id}))\n",
         encoding="utf-8",
     )
     path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
