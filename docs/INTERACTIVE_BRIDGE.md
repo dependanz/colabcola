@@ -441,6 +441,55 @@ three frame requests in flight in this test, and displays only new frames.
 The delivered FPS measures unique frames queued for the Tk viewer,
 not input-to-photon latency or guaranteed application display FPS.
 
+### v13 credit-window sweep (implemented, not Colab-live verified)
+
+The successful v12 pipeline delivered roughly **9.38 unique FPS** with
+`--inflight 3` at a 12 FPS remote renderer and 12 Hz pull rate. RTT
+medians were typically **156–172 ms**, input ACK observation **187–281 ms**,
+and 227/231 replies were fresh. The owned T4 was confirmed released.
+
+The new opt-in `--benchmark-credits` mode holds remote rendering at
+12 FPS and request pacing at 12 Hz, varying **only the maximum number of
+outstanding frame requests** within one owned T4 and one kernel WebSocket:
+
+| Phase | Maximum outstanding frame requests |
+| --- | ---: |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3 |
+| 4 | 4 |
+| 5 | 1 (repeated baseline) |
+
+Each phase has a 12-second duration by default, with the first two
+seconds excluded from performance measurements. At each boundary the host
+stops issuing new requests and **drains all pending responses** before
+changing its credit limit. Monotonic request IDs and frame sequences
+remain intact throughout the run. Per-phase reports show unique received
+FPS, response RTT median, fresh/total response count, observed input
+acknowledgment median, and most recent remote renderer rate.
+
+The comparison will show whether two credits capture most of the
+benefit of three, and whether four increase throughput or simply
+increase buffering. The single-credit default and existing rate sweep
+remain unchanged. The benchmark automatically ends after all five
+phases and invokes the same owned T4 cleanup. This path is experimental
+and should not be interpreted as production-ready streaming.
+
+Example of an **optional** real T4 allocation (may consume compute units):
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v13 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --benchmark-credits --credit-phase-seconds 12 `
+  --max-seconds 240 --confirm-allocation
+```
+
+Use a new run directory. Verify `phase: released` afterward, and
+retry `bridge cleanup` only if release is unconfirmed. The benchmark
+cannot be combined with the link probe, old renderer-rate sweep,
+or a manually selected `--inflight > 1`.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
