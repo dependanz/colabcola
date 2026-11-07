@@ -612,3 +612,82 @@ def test_kernel_comm_frame_reader_handles_rate_ack_and_rate_metrics():
     }
     with pytest.raises(ValueError):
         peer.set_render_fps(3, 100)
+
+
+def test_tiny_comm_ping_rtt_and_identity_filtering(monkeypatch):
+    from colabcola import bridge_comm
+    rid = "b" * 32
+    messages = [comm_msg({"v": 1, "kind": "pong", "run_id": "wrong", "seq": 1})]
+    for i in range(1, 9):
+        messages.append(comm_msg({"v": 1, "kind": "pong", "run_id": rid, "seq": i}))
+    peer = KernelCommBridge(None, None, rid, 6)
+    peer.wire = FakeWire(messages)
+    peer.comm_id = "my-comm"
+    assert isinstance(peer.probe_small_message_rtt(8), int)
+    outbound = [m["content"]["data"] for m in peer.wire.shell_channel.sent]
+    assert [(m["kind"], m["seq"]) for m in outbound] == [("ping", i) for i in range(1, 9)]
+    with pytest.raises(ValueError):
+        peer.probe_small_message_rtt(17)
+
+
+def test_remote_comm_handler_replies_to_bounded_tiny_ping(tmp_path, monkeypatch):
+    import runpy
+    import sys
+    from types import ModuleType
+
+    rid = "d" * 32
+    root = tmp_path / "owned"
+    root.mkdir()
+    fake_renderer = tmp_path / "fake_renderer.py"
+    fake_renderer.write_text(
+        "from pathlib import Path\n"
+        "import json\n"
+        "def start(directory, fps, run_id):\n"
+        " Path(directory, 'status.json').write_text(json.dumps("
+        "{'state':'ready','run_id':run_id,'device':'cuda','gpu':'Tesla T4',"
+        "'width':640,'height':360}))\n"
+        "def atomic_bytes(path, body):\n"
+        " Path(path).write_bytes(body)\n"
+    )
+    created = []
+    class FakeComm:
+        def __init__(self, **kwargs):
+            self.messages = []
+            created.append(self)
+        def on_msg(self, callback):
+            self.callback = callback
+        def send(self, message):
+            self.messages.append(message)
+        def close(self):
+            pass
+    kernel = ModuleType("ipykernel")
+    kernelcomm = ModuleType("ipykernel.comm")
+    kernelcomm.Comm = FakeComm
+    kernel.comm = kernelcomm
+    monkeypatch.setitem(sys.modules, "ipykernel", kernel)
+    monkeypatch.setitem(sys.modules, "ipykernel.comm", kernelcomm)
+    path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
+    runpy.run_path(str(path), run_name="__main__", init_globals={
+        "BRIDGE_DIRECTORY": str(root), "BRIDGE_RUN_ID": rid,
+        "BRIDGE_FPS": 6, "BRIDGE_RENDERER_PATH": str(fake_renderer),
+    })
+    peer = created[0]
+    peer.callback({"content": {"data": {"v": 1, "run_id": rid, "kind": "ping", "seq": 3}}})
+    assert peer.messages == [{"v": 1, "run_id": rid, "kind": "pong", "seq": 3}]
+    peer.callback({"content": {"data": {"v": 1, "run_id": rid, "kind": "ping", "seq": True}}})
+    peer.callback({"content": {"data": {"v": 1, "run_id": "wrong", "kind": "ping", "seq": 4}}})
+    assert len(peer.messages) == 1
+
+
+def test_cli_requires_explicit_comm_probe_opt_in(monkeypatch):
+    from colabcola.cli import main
+    from colabcola import bridge_colab
+    calls = []
+    monkeypatch.setattr(bridge_colab, "run_colab", lambda args: calls.append(args.probe_link) or 0)
+    base = ["--profile", "example", "bridge", "colab", "--preflight-only"]
+    assert main(base + ["--transport", "comm", "--probe-link"]) == 0
+    assert calls == [True]
+    for args in (["--probe-link"], ["--transport", "comm", "--probe-link", "--benchmark-sweep"]):
+        with pytest.raises(SystemExit) as error:
+            main(base + args)
+        assert error.value.code == 2
