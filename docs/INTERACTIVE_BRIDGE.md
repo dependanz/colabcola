@@ -47,6 +47,74 @@ For a shared local secret, set the same `COLABCOLA_BRIDGE_TOKEN` environment
 variable in both terminals before connecting. An absent variable means an
 empty secret, appropriate only for this loopback-only demo.
 
+## Managed Colab T4 proof (new, not yet live-validated)
+
+This proof uses the same authorized Colab provider as the Python job runner.
+A standalone PyTorch scene computes **on the remote Tesla T4**; the viewer
+displays 640×360 frames on the host and sends mouse/arrow-key events back.
+
+The transport is deliberately conservative: an authenticated Jupyter Contents
+API transfers zlib-compressed frame snapshots and the latest input event.
+This is a *polling bridge*, **not** TCP tunneling, remote desktop, or general
+application virtualization. We expect lower FPS and higher latency than the
+localhost demo. A faster Jupyter websocket or permitted provider-native
+streaming channel can replace it without changing the session interface.
+
+**Before allocating compute**, close other assigned Colab runtimes and run:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab --preflight-only
+```
+
+For an actual allocation, choose a **fresh**, empty run directory and confirm:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v1 `
+  --gpu T4 --fps 6 --poll-hz 3 --max-seconds 600 `
+  --confirm-allocation
+```
+
+This allocates a real GPU and may consume compute units. The viewer should
+open automatically after the remote renderer reports a Tesla T4. Close it to
+release the runtime. The maximum session budget is measured from allocation
+start, not from the first rendered frame.
+
+If cleanup cannot be confirmed, retry only the owned allocation using the
+durable local journal:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge cleanup `
+  --run-dir I:\colabcola-bridge-t4-proof-v1
+```
+
+Do **not** delete a run directory reporting `needs_cleanup` until the
+owned allocation has been confirmed absent. Allocation identity is recorded
+before the allocation request. Other people's or independently allocated
+runtimes must never be released automatically.
+
+The first managed T4 integration is experimental, and still needs the live
+Windows/Colab proof. There is no claim of measured remote frame rate,
+interactive latency, or confirmed cross-provider behavior yet.
+
+### Verification
+
+```powershell
+python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py
+```
+
+The offline suite uses a fake provider for allocation, frame decoding, and
+cleanup cases; it does not allocate a GPU.
+
+### Usage boundaries
+
+Google's managed Colab service restricts remote-control activity on the free
+tier with no positive compute-unit balance, and separately restricts abusive
+proxy, tunneling, and media-serving workloads. This experiment uses the normal
+authenticated Colab kernel and file APIs for a research visualization. Users
+remain responsible for the current Google Colab terms and their plan's
+compute-unit balance. It does not bypass usage limits.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
