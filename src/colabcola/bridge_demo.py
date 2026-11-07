@@ -228,6 +228,12 @@ async def stream_viewer(
                 pass
 
 
+def photoimage_from_ppm(master, data: bytes):
+    """Decode raw PPM bytes for Tk; Base64 is only for network transport."""
+    import tkinter as tk
+    return tk.PhotoImage(master=master, data=data, format="PPM")
+
+
 def run_viewer(host: str, port: int, token: str) -> None:
     # Tk stays on the main thread; network I/O stays on a dedicated asyncio loop.
     import tkinter as tk
@@ -267,7 +273,7 @@ def run_viewer(host: str, port: int, token: str) -> None:
                 if kind == "status":
                     status.set(data)
                 elif kind == "frame":
-                    image = tk.PhotoImage(data=base64.b64encode(data).decode("ascii"), format="PPM")
+                    image = photoimage_from_ppm(root, data)
                     label.configure(image=image, text="", width=WIDTH, height=HEIGHT)
                     label.image = image
         except queue.Empty:
