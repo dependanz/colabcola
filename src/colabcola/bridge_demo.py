@@ -329,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
     remote = sub.add_parser("colab", help="allocate one managed T4 for an interactive GPU scene")
     remote.add_argument("--run-dir", type=Path)
     remote.add_argument("--gpu", choices=("T4",), default="T4")
+    remote.add_argument("--transport", choices=("files", "comm"), default="files",
+                        help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
     remote.add_argument("--max-seconds", type=int, default=600)
