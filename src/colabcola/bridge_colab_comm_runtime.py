@@ -134,6 +134,13 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
             # The renderer's rate_seq metric confirms later application.
             comm.send({"v": 1, "kind": "rate_ack", "run_id": run_id,
                        "seq": request_seq, "fps": requested_fps})
+        elif kind == "ping":
+            # Small payload, same authenticated shell→IOPub Comm path as frames.
+            # No frame reads, CUDA work, or additional sockets.
+            ping_seq = event.get("seq")
+            if type(ping_seq) is int and 0 < ping_seq <= 10000:
+                comm.send({"v": 1, "kind": "pong", "run_id": run_id,
+                           "seq": ping_seq})
         elif kind == "pull":
             try:
                 body = (root / "frame.bin").read_bytes()
