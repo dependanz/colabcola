@@ -1122,6 +1122,30 @@ recovery point. This is conservative and intentionally sacrifices
 continuity to avoid presenting corrupted reconstructed frames.
 No dynamic keyframe-request feedback or retransmission is implemented.
 
+### Verified local results (initial v23 CI)
+
+The first branch CI proved **real H.264 reference-chain recovery**
+using PyAV on synthetic 128×72, 24 FPS frames with an IDR every
+12 frames. The virtual FIFO link tests produced:
+
+| Model condition | Link delivered | Actually decoded | Decoded contiguous runs | IDR recoveries |
+| --- | ---: | ---: | --- | ---: |
+| 30 ms delay, ±10 ms jitter, 2,000 kbps, no loss | 36 / 36 | **36 / 36** | 0–35 | 0 |
+| 30 ms delay, explicit access-unit erasure at index 5 | 35 / 36 | **29 / 36** | 0–4, 12–35 | 1 |
+
+The erased predicted frame cost **7 decodable frames**: the
+erased frame itself plus six reference-dependent frames 6–11.
+The modeled receiver did **not** falsely count dependent frames as
+decoded; it opened a new H.264 decoder at IDR index 12.
+Virtual capture-to-arrival medians were about **28.6 ms** and
+**30.0 ms**, respectively. These are controlled simulator outcomes,
+not measured network or GUI timing.
+
+Branch CI passed **121 tests on Ubuntu**, exercising PyAV and real
+H.264 decoder recovery, and **115 tests on Windows**, with six
+unrelated tests skipped because that runner lacks the external
+FFmpeg executable. Neither OS test suite allocated Colab compute.
+
 ### Three useful offline runs
 
 From the experimental branch, with PyAV and NumPy already installed:
