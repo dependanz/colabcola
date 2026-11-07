@@ -529,3 +529,39 @@ def test_kernel_comm_repeated_stale_frames_trigger_bounded_failure(monkeypatch):
             StalePeer(), "Tesla T4", queue.Queue(), frames,
             stopped, deadline=300, poll_hz=12)
     assert stopped.is_set()
+
+
+def test_renderer_metrics_reject_unknown_identity_and_nonnumeric_values():
+    from colabcola.bridge_comm import validated_renderer_metrics
+    rid = "c" * 32
+    valid = {"schema": 1, "run_id": rid, "seq": 14,
+             "renderer_fps": 11.7, "render_copy_ms": 21.4,
+             "compress_ms": 3.2, "publish_ms": 0.9}
+    assert validated_renderer_metrics(valid, rid) == {
+        "seq": 14, "renderer_fps": 11.7, "render_copy_ms": 21.4,
+        "compress_ms": 3.2, "publish_ms": 0.9,
+    }
+    assert validated_renderer_metrics({**valid, "run_id": "wrong"}, rid) is None
+    assert validated_renderer_metrics({**valid, "seq": True}, rid) is None
+    assert validated_renderer_metrics({**valid, "render_copy_ms": "secret"}, rid) is None
+    assert validated_renderer_metrics({**valid, "renderer_fps": float("nan")}, rid) is None
+    assert validated_renderer_metrics({**valid, "compress_ms": float("inf")}, rid) is None
+
+
+def test_comm_frame_uses_sanitized_remote_renderer_telemetry():
+    from colabcola.bridge_comm import validated_renderer_metrics
+    rid = "b" * 32
+    metrics = {"schema": 1, "run_id": rid, "seq": 8,
+               "renderer_fps": 8.2, "render_copy_ms": 47.1,
+               "compress_ms": 2.1, "publish_ms": 0.2}
+    ppm = b"P6" + bytes((10,)) + b"640 360" + bytes((10,)) + b"255" + bytes((10,)) + bytes((0, 0, 0)) * (640 * 360)
+    binary = struct.pack("!4sIIII", b"CCB1", 9, 0, 640, 360) + zlib.compress(ppm)
+    message = comm_msg({
+        "v": 1, "run_id": rid, "kind": "frame",
+        "data": base64.b64encode(binary).decode("ascii"), "metrics": metrics,
+    })
+    peer = KernelCommBridge(None, None, rid, 6)
+    peer.wire = FakeWire((message,))
+    peer.comm_id = "my-comm"
+    assert peer.next_frame(.5)[0] == 9
+    assert peer.latest_renderer_metrics == validated_renderer_metrics(metrics, rid)
