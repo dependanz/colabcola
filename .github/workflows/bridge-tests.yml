@@ -6,6 +6,7 @@ on:
       - 'src/colabcola/bridge_protocol.py'
       - 'src/colabcola/bridge_demo.py'
       - 'src/colabcola/bridge_colab.py'
+      - 'src/colabcola/bridge_telemetry.py'
       - 'src/colabcola/bridge_colab_runtime.py'
       - 'src/colabcola/cli.py'
       - 'tests/test_bridge.py'
