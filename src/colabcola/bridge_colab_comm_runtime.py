@@ -124,8 +124,19 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
                 if not 20 < len(body) <= MAX_FRAME_BYTES:
                     return
                 # A frame is pushed only when the host requests it (bounded credit).
+                # Stats are a small, optional sidecar; never block a frame if
+                # the worker is updating it concurrently.
+                metrics = None
+                try:
+                    candidate = json.loads((root / "render-metrics.json").read_text(encoding="utf-8"))
+                    if (isinstance(candidate, dict) and candidate.get("schema") == 1
+                            and candidate.get("run_id") == run_id):
+                        metrics = candidate
+                except (FileNotFoundError, OSError, UnicodeError, ValueError):
+                    pass
                 comm.send({"v": 1, "kind": "frame", "run_id": run_id,
-                           "data": base64.b64encode(body).decode("ascii")})
+                           "data": base64.b64encode(body).decode("ascii"),
+                           "metrics": metrics})
             except (OSError, ValueError):
                 return
         elif kind == "close":
