@@ -176,7 +176,9 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
         def close(self):
             self.closed = True
     package = ModuleType("comm")
-    package.create_comm = lambda **kw: FakeComm(**kw)
+    def modern_api_must_not_be_used(**kw):
+        raise AssertionError("Colab-documented ipykernel Comm should take precedence")
+    package.create_comm = modern_api_must_not_be_used
     monkeypatch.setitem(sys.modules, "comm", package)
     kernel = ModuleType("ipykernel")
     legacy = ModuleType("ipykernel.comm")
@@ -264,3 +266,51 @@ def test_remote_comm_bootstrap_failure_writes_sanitized_report(tmp_path):
     assert report == {"schema": 1, "run_id": "c" * 32,
                       "state": "failed", "stage": "waiting_cuda",
                       "error_type": "RuntimeError"}
+
+
+def test_bootstrap_failure_reports_stage_without_exception_value(monkeypatch):
+    from colabcola import bridge_comm
+    run_id = "e" * 32
+    wire = FakeWire()
+    wire.shell_channel.messages.append({
+        "header": {"msg_type": "execute_reply"},
+        "parent_header": {"msg_id": "request-1"},
+        "content": {"status": "error", "ename": "ModuleNotFoundError",
+                    "evalue": "SENSITIVE_TOKEN_SHOULD_NOT_BE_PRINTED"},
+    })
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self._manager = SimpleNamespace(client=wire)
+            self.stopped = False
+        def start(self):
+            pass
+        def stop(self):
+            self.stopped = True
+
+    clients = []
+    def instantiate(_base):
+        def build(**kwargs):
+            result = FakeClient(**kwargs)
+            clients.append(result)
+            return result
+        return build
+    monkeypatch.setattr(bridge_comm, "safe_client_class", instantiate)
+
+    class FakeProvider:
+        def _execute(self, session, code):
+            pass
+        def _upload(self, session, name, body):
+            pass
+        def _kernel(self, session):
+            return {"id": "owned"}
+        def _json_file(self, session, path):
+            return {"schema": 1, "run_id": run_id, "state": "failed",
+                    "stage": "creating_comm", "error_type": "ModuleNotFoundError"}
+
+    session = SimpleNamespace(url="https://example.invalid", token="LOCAL_TEST_TOKEN")
+    peer = bridge_comm.KernelCommBridge(FakeProvider(), session, run_id, 6)
+    with pytest.raises(LifecycleError, match="stage=creating_comm, error_type=ModuleNotFoundError") as error:
+        peer.open()
+    assert "SENSITIVE_TOKEN" not in str(error.value)
+    assert clients and clients[0].stopped
