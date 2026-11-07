@@ -338,7 +338,8 @@ def run_colab(args) -> int:
                     print("[colabcola] Releasing only the owned T4 runtime...", flush=True)
                     if not release_owned(provider, args.run_dir, state):
                         raise LifecycleError("owned T4 release not confirmed; run bridge cleanup")
-                print("[colabcola] T4 release confirmed", flush=True)
+                    # Report verified release even if the workload itself failed.
+                    print("[colabcola] T4 release confirmed", flush=True)
                 return 0
         finally:
             provider.close()
