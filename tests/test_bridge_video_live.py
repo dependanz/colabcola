@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 
 import pytest
 
@@ -93,6 +94,45 @@ def test_live_scene_headless_60_fps_decodes_without_gpu():
     )
     assert result["decoded_frames"] == 24
     assert 35 <= result["live_decoded_fps"] <= 100
+
+
+
+def test_local_callback_timestamp_travels_through_encoded_packet_to_gui_queue():
+    _codec_available()
+    from colabcola.bridge_viewer_stats import LocalFrameTiming, ViewerPresentationMeter
+
+    events = queue.Queue(maxsize=16)
+    callback_ns = time.perf_counter_ns()
+    events.put_nowait({
+        "event": "mouse", "x": .75, "y": .25,
+        "_ui_callback_ns": callback_ns,
+    })
+    images = queue.Queue(maxsize=64)
+    result = run_live_stream(
+        events, images, threading.Event(), width=96, height=64,
+        fps=12, max_frames=12, timed_frames=True,
+    )
+    assert result["decoded_frames"] == 12
+    assert result["input_callback_to_decoded_p50_ms"] is not None
+    assert result["input_callback_to_decoded_p50_ms"] >= 0
+
+    timed = []
+    while not images.empty():
+        kind, data = images.get_nowait()
+        if kind == "frame-timed":
+            timed.append(data)
+    assert len(timed) == 12
+    assert all(isinstance(sample[1], LocalFrameTiming) for sample in timed)
+    assert all(sample[0].startswith(b"P6\\n96 64\\n255\\n") for sample in timed)
+    assert timed[0][1].input_callback_ns == callback_ns
+
+    meter = ViewerPresentationMeter(started_at=10.0)
+    for pixels, timing in timed[:2]:
+        meter.presented(1.0)
+        meter.configured_timed_frame(timing, time.perf_counter_ns())
+    summary = meter.report(12.0)
+    assert "input callback→Tk p50" in summary
+    assert "(1 changed frames)" in summary
 
 
 def test_live_h264_tk_viewer_opens_and_exits_cleanly():
