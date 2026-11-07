@@ -61,8 +61,8 @@ def decode_remote_file_record(record: object) -> bytes:
     max_encoded = ((_MAX_FRAME_BYTES + _FRAME_HEADER.size + 2) // 3) * 4
     if len(data) > max_encoded + 8192:
         raise LifecycleError("remote frame response exceeds encoded size limit")
-    whitespace = sum(character in " \\t\\r\\n" for character in data)
     clean = "".join(data.split())
+    whitespace = len(data) - len(clean)
     if len(clean) > max_encoded:
         raise LifecycleError("remote frame response exceeds encoded size limit")
     try:
