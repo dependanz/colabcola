@@ -34,7 +34,15 @@ def test_inprocess_streams_before_end_with_direct_codec_packets(fps, frames):
     assert report["decoded_before_source_finished"] >= frames // 2
     assert report["h264_bytes"] > 0
     assert report["h264_bytes"] < report["zlib_bytes"]
-    assert report["capture_to_decoded_p50_ms"] > 0
+    # Preserve a strictly positive measured duration at microsecond
+    # precision. Sub-0.05ms measurements legitimately rounded to 0.0
+    # with the old one-decimal millisecond formatting on Windows.
+    assert report["capture_to_decoded_p50_us"] > 0
+    assert report["capture_to_decoded_p50_ms"] >= 0
+    assert abs(
+        report["capture_to_decoded_p50_ms"] * 1000
+        - report["capture_to_decoded_p50_us"]
+    ) <= 0.51  # Both are independently rounded representations.
     for key in ("capture_to_packet_p50_ms", "packet_to_socket_p50_ms",
                 "socket_to_decoded_p50_ms"):
         assert report[key] >= 0
