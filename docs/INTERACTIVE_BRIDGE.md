@@ -286,7 +286,7 @@ possible **interaction** between those settings, but per-session Colab proxy
 variation remains an alternative explanation. We should not claim a
 specific GPU, GIL, codec, or network root cause yet.
 
-### v10 in-session controlled sweep (new; not live-verified)
+### v10 in-session controlled sweep (live verified)
 
 A single optional `--benchmark-sweep` run now compares **five phases within
 the same owned Colab runtime and Jupyter kernel connection**:
@@ -323,13 +323,55 @@ colabcola --profile pypi-new-account-test bridge colab `
   --max-seconds 240 --confirm-allocation
 ```
 
-The viewport opens automatically, and the benchmark closes it after all
-phases complete. Closing it early terminates the sweep and releases the
-owned runtime. A new allocation may consume Colab compute units; no live
-v10 performance figures are claimed. Afterward confirm the journal has
-`phase: released`, or retry `bridge cleanup` using the same profile and
-run directory. The existing Python job runner and checkpoint recovery are
-unaffected.
+The real v10 sweep ran successfully in
+`I:\colabcola-bridge-t4-proof-v10-2ndtry` after its original run directory
+was already occupied. It allocated one owned Tesla T4, ran all five phases
+and confirmed `released` in the journal. Phase results were:
+
+| Render FPS / pull Hz | Received unique FPS | Pull RTT p50 | Fresh replies |
+| --- | ---: | ---: | ---: |
+| 6 / 6 | 5.56 | 172 ms | 56/56 |
+| 12 / 6 | 5.66 | 172 ms | 57/57 |
+| 6 / 12 | 5.59 | 172 ms | 56/56 |
+| 12 / 12 | 5.66 | 172 ms | 57/57 |
+| 6 / 6 (repeat) | 5.47 | 172 ms | 55/56 |
+
+Across the sweep, 281 of 282 frame responses were fresh. Each phase
+confirmed its active renderer target (including 11.9 FPS at 12 FPS).
+The 12/12 phase **did not reproduce** v7's ~2.3 FPS regression.
+The repeated baseline was stable over this run. A transient provider or
+network condition in v7 is a stronger hypothesis than a deterministic
+12/12 workload interaction, but the cause of v7 remains unknown.
+
+The current host loop permits only one outstanding frame request. With an
+observed 172 ms RTT, its approximate throughput ceiling is
+`1 / 0.172 ≈ 5.81 FPS`, consistent with the observed 5.5–5.7 FPS.
+This is a ceiling from the protocol's sequential request/response design,
+not proof of an immutable Colab bandwidth ceiling or GPU limitation.
+
+### Optional tiny Comm RTT probe (new; not live verified)
+
+The experimental `--probe-link` option sends eight tiny identity-scoped
+Jupyter Comm ping/pong exchanges **before ordinary frame streaming starts**.
+It logs the median small-message round trip without transferring frame
+bytes or making additional HTTP requests. Comparing that value to the
+normal `pull RTT p50` distinguishes a fixed kernel/proxy round-trip
+overhead from the added cost of transferring a compressed frame.
+
+It uses the same owned kernel and does not alter the default transport.
+The option requires `--transport comm` and cannot be combined with the
+in-session rate sweep. It can consume compute units only if the separately
+explicitly confirmed Colab allocation is requested:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v11 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --probe-link --max-seconds 180 --confirm-allocation
+```
+
+Choose a fresh run directory, and confirm `phase: released` afterward.
+The Python job runner and checkpoint recovery are unchanged.
 
 ## Architecture boundary
 
