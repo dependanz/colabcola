@@ -226,7 +226,7 @@ def test_boot_uploads_worker_to_owned_colab_kernel():
 def test_remote_frame_accepts_wrapped_base64_contents():
     payload = make_frame()
     encoded = base64.b64encode(payload).decode("ascii")
-    folded = "\\r\\n".join(encoded[i:i + 76] for i in range(0, len(encoded), 76))
+    folded = (chr(13) + chr(10)).join(encoded[i:i + 76] for i in range(0, len(encoded), 76))
     assert bridge.decode_remote_file_record({
         "type": "file", "format": "base64", "content": folded,
     }) == payload
