@@ -44,14 +44,42 @@ def unpack_frame(body: bytes) -> tuple[int, int, int, int, bytes]:
     return seq, ack, width, height, pixels
 
 
-def remote_file(provider, session, location: str) -> bytes:
-    record = provider._contents(session, "GET", location)
+def decode_remote_file_record(record: object) -> bytes:
+    """Decode a Jupyter Contents binary file with bounded, safe diagnostics.
+
+    Some Contents implementations fold base64 into multiple lines. Allow only
+    ASCII base64 whitespace, then run strict validation on the normalized data.
+    Never log content, endpoints, headers, or authentication values.
+    """
+    if not isinstance(record, dict):
+        raise LifecycleError("remote frame response invalid: not a JSON object")
     if record.get("type") != "file" or record.get("format") != "base64":
-        raise LifecycleError("bridge transport expected a binary remote file")
+        raise LifecycleError("remote frame response invalid: expected file/base64")
+    data = record.get("content")
+    if not isinstance(data, str):
+        raise LifecycleError("remote frame response invalid: missing or non-string content")
+    max_encoded = ((_MAX_FRAME_BYTES + _FRAME_HEADER.size + 2) // 3) * 4
+    if len(data) > max_encoded + 8192:
+        raise LifecycleError("remote frame response exceeds encoded size limit")
+    whitespace = sum(character in " \\t\\r\\n" for character in data)
+    clean = "".join(data.split())
+    if len(clean) > max_encoded:
+        raise LifecycleError("remote frame response exceeds encoded size limit")
     try:
-        return base64.b64decode(record["content"], validate=True)
-    except (ValueError, KeyError) as exc:
-        raise LifecycleError("remote frame encoding invalid") from exc
+        content = base64.b64decode(clean, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise LifecycleError(
+            "remote frame Base64 invalid "
+            + f"(characters={len(data)}, whitespace={whitespace}, "
+            + f"error_type={type(exc).__name__})"
+        ) from None
+    if not 0 < len(content) <= _MAX_FRAME_BYTES + _FRAME_HEADER.size:
+        raise LifecycleError("remote frame decoded size invalid")
+    return content
+
+
+def remote_file(provider, session, location: str) -> bytes:
+    return decode_remote_file_record(provider._contents(session, "GET", location))
 
 
 def read_journal(directory: Path) -> dict:
