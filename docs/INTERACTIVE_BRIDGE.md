@@ -646,6 +646,71 @@ For providers supporting dedicated streaming, a separately implemented
 WebRTC/RTP or similar media transport could be substituted, without
 changing the application-facing frame/input interface.
 
+## Persistent H.264 streaming on local loopback (offline development proof)
+
+A second independent experiment now tests **actual progressive streaming**,
+not just whole-sequence codec size. The new module
+`src/colabcola/bridge_video_stream.py` uses:
+
+1. Precomputed deterministic RGB frames paced at the target frame rate;
+2. One **persistent FFmpeg/libx264** encoder, with B-frames disabled,
+   ultrafast/zerolatency settings and Annex B access-unit delimiters;
+3. A bounded versioned packet header containing codec identity, frame
+   sequence, source presentation timestamp, monotonic capture timestamp,
+   keyframe flag and encoded byte length, transmitted over a **local
+   socket pair** (no remotely accessible listener);
+4. One persistent FFmpeg H.264 decoder operating concurrently with
+   the producer, including decoder `-threads 1` to reduce buffering.
+
+The parser needs the **next access-unit delimiter** to identify the end
+of the previous access unit; this imposes a one-frame lookahead. The
+decoder may buffer additional frames. The implementation measures how
+many frames decode *before the source finishes* and the median local
+capture-to-RGB-decode age. It also validates packet lengths, source
+frame ordering and decoded-frame count. This proof does **not** implement
+cross-network error recovery, lost-reference recovery or a GUI viewer.
+
+Optional local command, with FFmpeg executable available:
+
+```powershell
+python -m pytest -q tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py
+
+python -m colabcola.bridge_video_stream `
+  --width 640 --height 360 `
+  --frames 24 --fps 12 --pattern scene
+```
+
+A developer-side Linux dry run using the matching synthetic scene
+produced **24/24 decoded frames**, of which **20 appeared before the
+source finished**, at approximately **12 FPS active decoding**.
+The median local source-to-decoded-frame age was about **256 ms**.
+Encoded size was about **81 KB**, versus **3.78 MB** for independent
+zlib frames. These performance observations depend on FFmpeg, CPU,
+scene and OS, and are not guaranteed on Windows or Colab. CI tests
+also verify progressive decoding and full frame recovery.
+
+A faster-rate local synthetic experiment (still precomputed frames):
+
+```powershell
+python -m colabcola.bridge_video_stream `
+  --width 640 --height 360 `
+  --frames 48 --fps 60 --pattern square
+```
+
+This is a **local media-codec demonstration**, not general application
+or game streaming. No CUDA, Colab allocation, owned runtime, Jupyter
+Comm, remote traffic, public server or provider-policy exception is
+involved. Its timestamps share the same local clock and must **not**
+be interpreted as synchronized timestamps across machines. The
+reported decoded-frame cadence is not compositor-presented FPS.
+
+**Important result:** even a functioning persistent video path can
+still buffer multiple frames. The local 12 FPS test's ~256 ms median
+source-to-decode age is far from the low latency expected of responsive
+game streaming. Before substituting video into the managed T4 bridge,
+improve the packetization/decoder delay, maintain bounded recovery
+semantics and verify the design against Colab's authorized usage rules.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
