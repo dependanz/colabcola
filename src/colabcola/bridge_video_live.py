@@ -150,6 +150,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
     last_input_latency_seq = 0
 
     def produce():
+        stage = "init"
         try:
             scene = LiveScene()
             latest_input_seq = 0
@@ -171,13 +172,17 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                     latest_input_seq += 1
                     latest_input_at = time.perf_counter_ns()
                 captured_at = time.perf_counter_ns()
+                stage = "render"
                 rgb = render_live_rgb(scene, base, seq)
+                stage = "frame-conversion"
                 frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
                 frame.pts = seq
+                stage = "encode"
                 payloads = encoder.encode(frame)
                 if len(payloads) != 1:
                     raise RuntimeError("live H.264 expected one packet per input frame")
                 payload = payloads[0]
+                stage = "packet-validate"
                 if not 0 < len(payload) <= 2 * 1024 * 1024:
                     raise RuntimeError("live H.264 packet exceeds bounded size")
                 now = time.perf_counter_ns()
@@ -185,6 +190,7 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 meta.put(metadata, timeout=3)
                 sent_frames.append(seq)
                 encode_costs_ms.append((now - captured_at) / 1e6)
+                stage = "packet-send"
                 writer.sendall(packet_bytes(VideoAccessUnit(
                     seq=seq, pts_ns=round(seq * 1e9 / fps),
                     capture_ns=captured_at, data=bytes(payload),
@@ -193,10 +199,13 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
                 seq += 1
             # Only useful on normal completion. B-frames disabled, so this
             # should not introduce a frame delay.
+            stage = "final-flush"
             for tail in encoder.encode(None):
                 raise RuntimeError("live H.264 encoder emitted unexpected delayed packet")
         except BaseException as exc:
-            failures.put(type(exc).__name__)
+            # Only static, allowlisted local stage names and exception types;
+            # never copy arbitrary exception content into logs.
+            failures.put(stage + ":" + type(exc).__name__)
         finally:
             try:
                 writer.shutdown(socket.SHUT_WR)
