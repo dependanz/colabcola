@@ -809,8 +809,20 @@ These are **CPU-only, precomputed RGB scenes with a same-process
 local socketpair**. No render/capture workload, real network
 conditions, Jupyter proxy, remote CUDA, external listeners, GUI
 compositor, or game input are included. In-process stream
-performance on Windows and on real managed Colab has not yet been
-tested.
+performance for the full 640×360 benchmark on Windows and
+on real managed Colab has not yet been measured.
+
+A Windows Python 3.12 / PyAV 19.0.2 test exposed a timing-clock
+precision issue for very small (96×64) frames: the previously
+reported median latency rounded to `0.0 ms` even though encoding
+and decoding completed successfully. In-process stage timestamps
+now use `time.perf_counter_ns()` for high-resolution elapsed time;
+the report includes `capture_to_decoded_p50_us` and three-decimal
+millisecond timings. The regression still requires a positive
+measurement. Windows CI now installs PyAV and NumPy explicitly:
+**94 tests passed, 6 optional FFmpeg-dependent tests skipped**.
+Linux CI passed **100 tests** on the same updated code. These
+are test-suite results, not Windows 640×360 performance claims.
 
 PyAV and NumPy remain **optional local-only development
 dependencies**, not dependencies of the released `colabcola`
