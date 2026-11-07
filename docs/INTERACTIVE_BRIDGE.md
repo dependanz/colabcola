@@ -510,11 +510,11 @@ repeated an older renderer sequence. The repeated single-credit
 baseline was somewhat faster, consistent with mild within-run variation.
 
 For this specific scene, **two credits are the preferred experimental
-configuration**. This is not yet a general recommendation across
-workloads, resolutions or Colab sessions; the single-credit default
-is intentionally unchanged.
+configuration**, now used as the ordinary Comm-streaming default after
+the additional v14 verification. This is not a general performance
+guarantee across workloads, resolutions, or Colab sessions.
 
-### Opt-in local Tk viewer measurement (not yet live tested)
+### Local Tk viewer measurement (live verified in v14)
 
 `--viewer-stats` independently measures frames that the local Tk
 event loop actually decodes and configures on the image label.
@@ -538,6 +538,36 @@ colabcola --profile pypi-new-account-test bridge colab `
 
 Look for `GUI configured` and `kernel Comm` lines in the same
 terminal. Always verify the owned journal ends with `phase: released`.
+
+### v14 observed results and Comm credit default
+
+The real v14 T4 run used **12 FPS remote rendering, 12 Hz pull pacing,
+two outstanding request credits, and the Tk viewer meter**. Across
+32 network reporting windows and 32 GUI measurement windows, the mean
+of the logged frame rates was **9.42 FPS on both sides**. Network
+delivery ranged **8.0–10.5 FPS**; Tk image/label configuration was
+**7.9–10.3 FPS**. The mean of the per-window Tk processing medians was
+**6.2 ms** (range **2.6–7.6 ms**).
+
+The network returned **606 fresh replies out of 612 (99.0%)**.
+Reported pull RTT medians averaged **168.8 ms** and the available
+input-ACK medians averaged approximately **263 ms**. The T4 was confirmed
+released. These data indicate Tk image decoding and label updates are
+not substantially limiting throughput at 640×360 and ~9–10 FPS.
+
+Because v12, the controlled v13 credit sweep, and v14 all supported
+the two-credit configuration, the **ordinary experimental Comm
+streamer now defaults to two outstanding frame requests**. This does
+not change the globally default `files` transport, which retains
+single-request polling. Existing users can explicitly select
+`--inflight 1` to retain sequential Comm behavior. The controlled
+benchmark modes and tiny-message probe also retain one-credit
+operation. The remote renderer's existing default 6 FPS and pull
+limit 3 Hz are not raised automatically.
+
+No screen compositor confirmation, GPU-to-display frame timing,
+or input-to-photon latency is claimed. This feature remains
+experimental and does not imply general application virtualization.
 
 ## Architecture boundary
 
