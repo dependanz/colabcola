@@ -421,6 +421,26 @@ requests may produce duplicate/stale frames or worsen input latency;
 speedup is not guaranteed. Validate offline before running, and always
 confirm the journal ends in `released` or retry owned cleanup.
 
+### v12 observed bounded pipeline result
+
+A real managed Tesla T4 completed the `--inflight 3 --fps 12 --poll-hz 12`
+trial successfully. All 68 CI checks passed on Linux, and the local Windows
+checkout passed **67 with one GUI-related skip**. During streaming,
+the local client received **8.4–10.4 unique FPS**, with an approximate
+mean across twelve reporting intervals of **9.38 FPS**. Frame request
+RTT medians were mostly **156–172 ms**, fresh replies totaled **227/231
+(98.3%)**, and input ACK observation was **187–281 ms**. Remote rendering
+continued at **11.8–12.0 FPS**, with ~1 ms render+copy and ~5–12 ms
+compression. The owned T4 explicitly confirmed release.
+
+This measured improvement over the previous ~5.6 FPS single-in-flight
+example is encouraging but **not a controlled one-session comparison**:
+network and Colab conditions varied substantially between earlier trials.
+The pipeline uses the same authenticated kernel WebSocket, never more than
+three frame requests in flight in this test, and displays only new frames.
+The delivered FPS measures unique frames queued for the Tk viewer,
+not input-to-photon latency or guaranteed application display FPS.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
