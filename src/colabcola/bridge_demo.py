@@ -376,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
-    remote.add_argument("--inflight", type=int, default=1,
-                        help="Comm-only experimental number of outstanding frame requests (1..4)")
+    remote.add_argument("--inflight", type=int, default=None,
+                        help="Comm frame credits (default 2 for ordinary Comm streaming; 1 for file polling and benchmarks)")
     remote.add_argument("--viewer-stats", action="store_true",
                         help="report GUI frame configuration FPS and Tk processing time locally")
     remote.add_argument("--benchmark-credits", action="store_true",
@@ -402,6 +402,13 @@ def main(argv: list[str] | None = None) -> int:
                 return cleanup_colab(args)
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
+            # Two credits are live-verified for ordinary Comm streaming,
+            # including local Tk configuration. Preserve single-credit
+            # behavior for file polling, diagnostics and controlled sweeps.
+            if args.inflight is None:
+                args.inflight = (2 if args.transport == "comm" and not (
+                    args.benchmark_sweep or args.benchmark_credits or args.probe_link)
+                    else 1)
             max_poll_hz = 12 if args.transport == "comm" else 6
             if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= max_poll_hz:
                 parser.error(
