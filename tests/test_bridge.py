@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from colabcola.bridge_demo import Scene, handle_connection, main, render_ppm
+from colabcola.bridge_demo import Scene, handle_connection, main, photoimage_from_ppm, render_ppm
 from colabcola.bridge_protocol import (
     BridgeProtocolError, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     encode_message, read_message, send_message,
@@ -54,6 +54,23 @@ def test_scene_updates_from_input_and_cpu_renders():
     assert before.startswith(b"P6\n192 120\n255\n")
     assert len(before) == len(after)
     assert before != after
+
+
+def test_tk_viewer_accepts_raw_ppm_frame():
+    """Catch the image decoding failure that previously crashed on Windows."""
+    import tkinter as tk
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        pytest.skip(f"no graphical display available for Tk: {exc}")
+    try:
+        root.withdraw()
+        frame = render_ppm(Scene(), seconds=0)
+        image = photoimage_from_ppm(root, frame)
+        assert image.width() == 192
+        assert image.height() == 120
+    finally:
+        root.destroy()
 
 
 def test_local_session_streams_frames_and_accepts_input():
