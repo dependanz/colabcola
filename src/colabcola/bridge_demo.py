@@ -235,6 +235,43 @@ def photoimage_from_ppm(master, data: bytes):
     return tk.PhotoImage(master=master, data=data, format="PPM")
 
 
+VIEWER_STATUS_HEIGHT = 28
+
+
+def concise_viewer_status(value: str) -> str:
+    """Keep verbose transport telemetry in stdout; show fixed-length GUI status."""
+    value = str(value)
+    pieces = value.split(" · ")
+    if len(pieces) >= 2 and "kernel Comm " in pieces[1]:
+        fps = pieces[1].replace("kernel Comm ", "")
+        roundtrip = next((p.replace("pull RTT p50 ", "RTT ")
+                          for p in pieces if p.startswith("pull RTT p50 ")), "")
+        return " · ".join(p for p in (pieces[0], fps, roundtrip) if p)
+    if len(pieces) >= 2 and " FPS" in pieces[1]:
+        return " · ".join(pieces[:2])
+    return value[:96] + ("…" if len(value) > 96 else "")
+
+
+def create_viewer_layout(root, width: int, height: int):
+    """Fix the image viewport and footer sizes independently of status text."""
+    import tkinter as tk
+
+    if not 1 <= width <= 1920 or not 1 <= height <= 1080:
+        raise ValueError("invalid interactive viewport dimensions")
+    root.geometry(f"{width}x{height + VIEWER_STATUS_HEIGHT}")
+    root.resizable(False, False)
+    container = tk.Frame(root, width=width, height=height + VIEWER_STATUS_HEIGHT)
+    container.pack()
+    container.pack_propagate(False)
+    label = tk.Label(container, text="Waiting for frames", anchor="center")
+    label.place(x=0, y=0, width=width, height=height)
+    status = tk.StringVar(master=root, value="Connecting...")
+    tk.Label(container, textvariable=status, anchor="w", padx=8).place(
+        x=0, y=height, width=width, height=VIEWER_STATUS_HEIGHT
+    )
+    return label, status
+
+
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
                worker=None) -> None:
@@ -246,10 +283,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     stopped = threading.Event()
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
-    status = tk.StringVar(value="Connecting...")
-    label = tk.Label(root, text="Waiting for frames", width=30, height=8)
-    label.pack()
-    tk.Label(root, textvariable=status).pack()
+    label, status = create_viewer_layout(root, width, height)
     last_motion = [0.0]
 
     def enqueue(event: dict) -> None:
@@ -275,10 +309,10 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
             while True:
                 kind, data = frames.get_nowait()
                 if kind == "status":
-                    status.set(data)
+                    status.set(concise_viewer_status(data))
                 elif kind == "frame":
                     image = photoimage_from_ppm(root, data)
-                    label.configure(image=image, text="", width=width, height=height)
+                    label.configure(image=image, text="")
                     label.image = image
                     if status.get() == "Connecting...":
                         status.set("Connected")
