@@ -691,3 +691,76 @@ def test_cli_requires_explicit_comm_probe_opt_in(monkeypatch):
         with pytest.raises(SystemExit) as error:
             main(base + args)
         assert error.value.code == 2
+
+
+def test_comm_tagged_frame_echo_and_strict_pipeline_decoder():
+    rid = "b" * 32
+    ppm = (b"P6" + bytes((10,)) + b"640 360" + bytes((10,)) +
+           b"255" + bytes((10,)) + bytes((14, 22, 35)) * (640 * 360))
+    binary = struct.pack("!4sIIII", b"CCB1", 18, 0, 640, 360) + zlib.compress(ppm)
+    data = {"v": 1, "kind": "frame", "run_id": rid, "pull_seq": 7,
+            "data": base64.b64encode(binary).decode()}
+    peer = KernelCommBridge(None, None, rid, 12)
+    peer.wire = FakeWire((comm_msg(data),))
+    peer.comm_id = "my-comm"
+    assert peer.poll_pipeline_frame(.1) == (7, 18, 0, ppm, len(binary))
+    peer.request_frame(8)
+    assert peer.wire.shell_channel.sent[-1]["content"]["data"]["pull_seq"] == 8
+
+    bad = KernelCommBridge(None, None, rid, 12)
+    bad.wire = FakeWire((comm_msg({**data, "pull_seq": True}),))
+    bad.comm_id = "my-comm"
+    with pytest.raises(LifecycleError, match="invalid request ID"):
+        bad.poll_pipeline_frame(.1)
+
+
+def test_remote_handler_responds_with_request_ID_without_breaking_legacy(tmp_path, monkeypatch):
+    from types import ModuleType
+    import runpy
+    rid = "e" * 32
+    folder = tmp_path / "kernel"
+    folder.mkdir()
+    (folder / "frame.bin").write_bytes(packed_frame())
+    renderer = tmp_path / "renderer.py"
+    renderer.write_text(
+        "from pathlib import Path\n"
+        "import json\n"
+        "def start(directory, fps, run_id):\n"
+        " Path(directory, 'status.json').write_text(json.dumps("
+        "{'state':'ready','run_id':run_id,'device':'cuda','gpu':'Tesla T4',"
+        "'width':640,'height':360}))\n"
+        "def atomic_bytes(path, body):\n"
+        " Path(path).write_bytes(body)\n"
+    )
+    created = []
+    class FakeComm:
+        def __init__(self, **kwargs):
+            self.sent = []
+            created.append(self)
+        def on_msg(self, callback):
+            self.callback = callback
+        def send(self, message):
+            self.sent.append(message)
+        def close(self):
+            pass
+    kernel = ModuleType("ipykernel")
+    kernelcomm = ModuleType("ipykernel.comm")
+    kernelcomm.Comm = FakeComm
+    kernel.comm = kernelcomm
+    monkeypatch.setitem(sys.modules, "ipykernel", kernel)
+    monkeypatch.setitem(sys.modules, "ipykernel.comm", kernelcomm)
+    path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
+    runpy.run_path(str(path), run_name="__main__", init_globals={
+        "BRIDGE_DIRECTORY": str(folder), "BRIDGE_RUN_ID": rid,
+        "BRIDGE_FPS": 6, "BRIDGE_RENDERER_PATH": str(renderer),
+    })
+    comm = created[0]
+    def deliver(request):
+        comm.callback({"content": {"data": {"v": 1, "run_id": rid, **request}}})
+    deliver({"kind": "pull", "pull_seq": 8})
+    assert comm.sent[-1]["pull_seq"] == 8
+    deliver({"kind": "pull"})
+    assert "pull_seq" not in comm.sent[-1]
+    previous = len(comm.sent)
+    deliver({"kind": "pull", "pull_seq": True})
+    assert len(comm.sent) == previous
