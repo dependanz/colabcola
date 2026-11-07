@@ -1220,6 +1220,107 @@ interface, GUI listener or GPU use. It leaves the existing remote
 Jupyter Comm and released batch runner unchanged. These experiments
 need only the optional local PyAV/NumPy research dependencies.
 
+## v24: feedback-triggered IDR and virtual playout-buffer comparison
+
+This next **local-only research experiment** adds two distinct
+questions to v23: (1) can a receiver's **loss-triggered keyframe
+request** shorten the period of undecodable H.264 frames compared
+with waiting for a periodic IDR, and (2) how much *added playback
+latency* is necessary for a receiver to present decoded frames at
+a regular cadence under modeled jitter/bandwidth fluctuations?
+
+Implementation: `src/colabcola/bridge_video_feedback.py`. It
+reuses the v23 encoded access-unit link and actual PyAV decoder,
+but does **not** alter the working managed-Colab bridge or existing
+real Tk viewer.
+
+### Two H.264 keyframe policies
+
+- **Periodic:** encode real synthetic H.264 with fixed closed GOP and
+  verify valid decoded runs using v23's IDR re-synchronization behavior.
+- **Single feedback IDR:** the first missing frame is detected by the
+  receiver only **when a later access unit arrives** (no oracle
+  knowledge of a missing packet). A modeled one-way control delay
+  (`--feedback-ms`) determines when the encoder learns of the gap.
+  The next frame **strictly after** feedback arrival starts a
+  new real libx264 encoder instance, producing a self-contained
+  IDR with parameter sets. After the restart the GOP counter
+  resets. Actual altered H.264 packet sizes are sent through the
+  simulated link again; the bytes and delivery times of all
+  frames before the decision are required to match the
+  periodic counterpart.
+
+This **single-request counterfactual** is causal for the first
+detected gap because the pre-request source and link prefix
+must match exactly. It is **not** a production keyframe-request
+control loop, RTCP PLI/FIR implementation, or robust recovery
+strategy for repeated erasures. Resetting an encoder is also
+not equivalent to requesting an IDR from an already-running
+encoder: CPU initialization time, rate-control resets and
+encoder control behavior must be measured separately.
+
+### Fixed-deadline virtual playout
+
+Given *actually decoded* frames and virtual link arrivals, each
+source frame `n` has a scheduled presentation slot at
+
+```text
+source_time(n) = n * (1000 / source_fps) milliseconds
+deadline(n) = source_time(n) + playout_buffer_ms
+```
+
+A correctly decoded frame arriving by its deadline is eligible
+to be shown once in the model. An undecodable, missing, or
+late frame cannot appear in its intended slot; the player
+holds its last good frame (or shows an initial blank until the
+first valid frame). Delayed decoded frames are **dropped from
+display**, but *not* from the H.264 decoder's reference chain.
+The virtual output records on-time unique frames, late decoded
+frames, undecodable frames, held/blank slots and longest
+unfresh-frame run for each requested buffer depth. The
+buffer-depth setting is **intentional latency**, not a codec
+cost estimate or a measured real GUI frame time.
+
+Compare the same impairment conditions using increasing
+playout buffers. A larger buffer can improve regularity but
+unavoidably adds to source-to-intended-display latency. It
+cannot reconstruct missing references or repair a damaged
+GOP. This simplified model uses fixed source-time deadlines,
+not an actual playout-clock PLL, decoder scheduling pipeline,
+RTP/UDP stack, FEC or adaptive bitrate algorithm.
+
+### Reproduce locally on Windows (PyAV + NumPy already installed)
+
+```powershell
+git pull --ff-only origin feature/interactive-bridge-prototype
+python -m pytest -q tests/test_bridge_video_feedback.py
+
+# Compare periodic GOP with a simulated receiver request after frame 5 is erased
+python -m colabcola.bridge_video_feedback `
+  --width 320 --height 180 --fps 30 --frames 48 --gop 12 `
+  --delay-ms 40 --jitter-ms 0 --bandwidth-kbps 0 `
+  --max-inflight 12 --max-age-ms 0 --drop-seqs 5 `
+  --feedback-ms 20 --buffers-ms "40,80,120,180"
+
+# Compare fixed playout delays under fluctuating bandwidth, no erasures
+python -m colabcola.bridge_video_feedback `
+  --width 320 --height 180 --fps 30 --frames 48 --gop 12 `
+  --delay-ms 50 --jitter-ms 20 `
+  --bandwidth-steps "0:2500,300:130,850:2000" `
+  --max-inflight 8 --max-age-ms 250 --drop-seqs "" `
+  --buffers-ms "40,80,120,180,250" --seed 7
+```
+
+Both scenarios perform genuine local H.264 encoding/decoding but
+simulate media and feedback delivery with virtual time. **No Colab
+allocation, GPU rendering, real network traffic, public socket or
+external streaming service is involved.** Only two temporary
+encoder/decoder test paths run locally. Model outputs include
+actual reference-chain validity, changed keyframe count and
+admitted wire bytes, so benefits and overhead can be compared.
+Provider policy and licensing review remain prerequisites for
+any future production/cloud streaming implementation.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
