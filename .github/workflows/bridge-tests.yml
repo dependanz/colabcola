@@ -6,6 +6,7 @@ on:
       - 'src/colabcola/bridge_protocol.py'
       - 'src/colabcola/bridge_demo.py'
       - 'src/colabcola/bridge_video_benchmark.py'
+      - 'src/colabcola/bridge_video_stream.py'
       - 'src/colabcola/bridge_viewer_stats.py'
       - 'src/colabcola/bridge_colab.py'
       - 'src/colabcola/bridge_telemetry.py'
@@ -19,6 +20,7 @@ on:
       - 'src/colabcola/cli.py'
       - 'tests/test_bridge.py'
       - 'tests/test_bridge_video_benchmark.py'
+      - 'tests/test_bridge_video_stream.py'
       - 'tests/test_bridge_viewer_stats.py'
       - 'tests/test_bridge_colab.py'
       - 'tests/test_bridge_comm.py'
@@ -55,7 +57,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py
+        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py
+        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py
