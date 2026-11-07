@@ -1386,6 +1386,98 @@ admitted wire bytes, so benefits and overhead can be compared.
 Provider policy and licensing review remain prerequisites for
 any future production/cloud streaming implementation.
 
+## v24 Windows verification and v25 multi-gap feedback research
+
+### Windows v24 result (local, deterministic virtual link)
+
+On Windows, the user ran **11/11 v24 feedback tests** successfully
+and independently reproduced both modeled outcomes:
+
+- For the 36-frame / 30 FPS / GOP-12 stream with access unit 5
+  erased, periodic IDRs decoded **29/36** frames, while a single
+  feedback-triggered IDR at frame 8 decoded **33/36** frames.
+  The longest virtual interval with no fresh frame fell from
+  **233.33 ms to 100.0 ms**. Encoded media bytes increased from
+  12,852 to 13,165. A single missing P-frame caused dependency
+  invalidation until the next verified IDR.
+- With no dropped access units but fluctuating virtual bandwidth,
+  48/48 frames decoded successfully. Virtual fixed-deadline playout
+  presented **8/48** frames on time with a 40 ms buffer,
+  **42/48** with 80 ms, and **48/48** with 120 ms or more.
+  The virtual arrival-time median was 53.28 ms.
+
+These are exact outputs of the local virtual-time model, not measured
+physical network/GUI properties.
+
+### v25: causal multi-request IDR controller (experimental)
+
+The opt-in `src/colabcola/bridge_video_controller.py` advances the
+same bounded link in *source-frame time* and allows the receiver to
+observe **only access units whose virtual arrival has occurred**.
+The producer encodes **real H.264 one frame at a time**. A receiver
+notices a sequence gap when a later packet arrives and sends a virtual
+feedback request; only after its configured one-way delay may the
+sender begin a fresh closed-GOP libx264 encoder at the next frame.
+This can happen **multiple times** when independent losses occur.
+
+The state machine includes a minimum retry interval to avoid
+request storms, a strict upper bound on issued requests, an
+explicit limit on in-flight encoded packets, and the original
+link's bandwidth/jitter/loss/age admission rules. A lost
+feedback-generated IDR can cause the receiver to request another,
+after its retry interval. The first segment *before any applied
+feedback* is required to be byte-for-byte identical to the periodic
+baseline. If there are no controller actions, the entire source
+bitstream and virtual-link trace must match the baseline exactly.
+
+Report fields distinguish **detected gaps**, requests made at the
+receiver, virtual feedback delivery time, source IDR restarts
+actually applied, requests that arrived too late for the bounded
+source, decoder-verified valid frame runs, admitted bytes, and
+fixed-depth virtual playout outcomes. A request can only be made
+after a received frame exposes a loss; a final lost frame with
+no later packet may remain undetected.
+
+The expected first scenario is an actual 60-frame H.264 stream at
+30 FPS with GOP 24 and explicit whole-frame erasures at source IDs
+5 and 27. The model can compare no-controller periodic IDRs
+against up to eight rate-limited receiver feedback requests.
+A second scenario exercises bandwidth changes, age-based drops
+and seeded jitter. The streaming adaptation remains limited to
+**IDR recovery**: the H.264 CRF/bitrate is fixed and the playback
+buffers remain a set of fixed comparisons. A rate controller and
+adaptive buffer clock are separate future experiments; neither
+should be inferred from this implementation.
+
+```powershell
+git pull --ff-only origin feature/interactive-bridge-prototype
+python -m pytest -q tests/test_bridge_video_controller.py
+
+# Two independent losses; the receiver can issue two causal IDR requests
+python -m colabcola.bridge_video_controller `
+  --width 128 --height 72 --fps 30 --frames 60 --gop 24 `
+  --delay-ms 40 --jitter-ms 0 --bandwidth-kbps 0 `
+  --max-age-ms 0 --max-inflight 16 --drop-seqs "5,27" `
+  --feedback-ms 20 --retry-ms 100 --buffers-ms "40,80,120"
+
+# No explicit erasure, but a bandwidth outage and finite queue
+python -m colabcola.bridge_video_controller `
+  --width 128 --height 72 --fps 30 --frames 60 --gop 24 `
+  --delay-ms 50 --jitter-ms 15 `
+  --bandwidth-steps "0:2500,400:130,1100:2200" `
+  --max-inflight 6 --max-age-ms 200 --drop-seqs "" `
+  --retry-ms 150 --buffers-ms "40,80,160,240"
+```
+
+**Scope and provider constraints:** the v25 controller runs entirely
+inside a local test process on virtual time. It uses real PyAV/libx264
+encoding and decoding but no real socket, GPU, Colab API, cloud
+allocation or Tk viewer, and it makes no claims about round-trip
+network performance, encoder-reset wall time, retransmission/FEC,
+loss of IP packet fragments, or gameplay input-to-photon response.
+PyAV/NumPy remain optional development dependencies. The
+existing authenticated Colab bridge and batch runner are unchanged.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
