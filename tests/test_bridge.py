@@ -109,7 +109,8 @@ def test_tk_viewer_fixed_geometry_despite_changing_status_and_image():
             root.update()
             assert (root.winfo_width(), root.winfo_height()) == expected
 
-        ppm = (b"P6\\n640 360\\n255\\n" + bytes((16, 32, 48)) * (width * height))
+        ppm = (b"P6" + bytes((10,)) + b"640 360" + bytes((10,)) + b"255" + bytes((10,))
+               + bytes((16, 32, 48)) * (width * height))
         image = photoimage_from_ppm(root, ppm)
         image_label.configure(image=image, text="")
         image_label.image = image
