@@ -1013,35 +1013,55 @@ local interaction latency: the event can wait for the next
 30 FPS render tick (33.3 ms spacing) and the GUI currently
 processes its bounded frame queue using a 30 ms Tk timer.
 
-### v21 optional Tk polling interval A/B (not yet benchmarked)
+### v21 Tk polling interval A/B (Windows live verified)
 
-The local live-H.264 demo now supports
-`--viewer-poll-ms N` with **N between 5 and 100 milliseconds**.
-The existing Tk default stays **30 ms** for all other viewers,
-including the managed Colab viewer. A smaller interval polls the
-bounded decoded-frame queue more frequently; it might lower
-`decode→Tk` and `input callback→Tk` latency at the cost of
-more frequent GUI wakeups. No improvement is claimed until measured.
+The same local 640×360 scene ran on Windows at **30 FPS** with
+`--viewer-poll-ms 8`. The user’s **14 targeted local tests passed**
+and the **full 30-second session produced and decoded 900/900 frames**
+at **30.01 FPS**. The same test previously ran at the unchanged
+30 ms viewer default (v20) with 900/900 decoded at 30.00 FPS.
+The 8 ms mode remains **opt-in**, scoped to the local H.264 demo.
+The existing managed-Colab viewer stays at 30 ms polling.
 
-Compare **two separate local runs** with the same scene size and
-30 FPS target. Move the mouse comparably throughout both, and
-compare the reported GUI frame rate, decode-to-Tk median and
-input-callback-to-Tk median:
+| Local metric | v20, 30 ms poll | v21, 8 ms poll | Change |
+| --- | ---: | ---: | ---: |
+| Decoded FPS | 30.00 | 30.01 | Stable |
+| Callback → configured Tk image | **40.5 ms** | **29.0 ms** | **−11.5 ms (−28.4%)** |
+| Decoded RGB → configured Tk image | 22.4 ms | 13.8 ms | −8.6 ms (−38.4%) |
+| Scene capture → configured Tk image | 24.4 ms | 16.2 ms | −8.2 ms (−33.6%) |
+| Capture → decoded RGB, whole-session p50 | 2.141 ms | 2.080 ms | Similar |
+| Inputs reflected in decoded frames | 309 | 433 | Different interaction pattern |
+
+The GUI timing figures above are **medians of per-window medians** from
+the terminal logs (not pooled frame-level p50s). There were 13
+baseline and 12 faster-poll windows with usable callback-to-Tk
+readings; some windows contained no eligible newly acknowledged input.
+Two separate runs with different amounts of mouse movement do not
+establish a definitive causal latency effect, but they support that
+faster Tk polling reduces local queue wait without sacrificing the
+30 FPS throughput of the test scene.
+
+This is **not** physical device-input-to-display latency. The timing
+starts when Tk accepts a mouse/keyboard callback and ends when the
+label is configured, before OS compositor/scanout.
+
+#### Next controlled experiment: 60 FPS local application path
+
+At 30 FPS the producer can wait almost a full 33.3 ms frame interval
+before responding to an input callback. To test whether a 60 FPS
+source reduces that contribution, retain the successful 8 ms GUI
+polling interval and increase only the source frame rate:
 
 ```powershell
-python -m pytest -q tests/test_bridge_video_live.py tests/test_bridge_viewer_stats.py
-
-# Existing viewer schedule (30 ms)
-python -m colabcola.bridge_video_live --show --width 640 --height 360 --fps 30 --max-seconds 30 --viewer-poll-ms 30
-
-# Experimental faster polling (8 ms)
-python -m colabcola.bridge_video_live --show --width 640 --height 360 --fps 30 --max-seconds 30 --viewer-poll-ms 8
+python -m colabcola.bridge_video_live `
+  --show --width 640 --height 360 --fps 60 `
+  --max-seconds 30 --viewer-poll-ms 8
 ```
 
-This experiment is **local only**, and no GPU, Colab runtime,
-network listener, provider API, or product dependency is added.
-A reduction in widget-configuration latency is *not* an
-input-to-photon improvement claim.
+Compare decoded/Tk FPS, callback→Tk, capture→decoded RGB, and
+decode→Tk against v21 at 30 FPS. This remains a CPU-only, local
+PyAV/Tk experiment: no Colab allocation, network transport, public
+listener, GPU, or changes to the released batch workflow.
 
 ## Architecture boundary
 
