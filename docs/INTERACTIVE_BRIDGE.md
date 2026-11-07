@@ -870,7 +870,7 @@ These Windows results corroborate Linux's approximately 2–3 ms
 in-process benchmark. They are not measurements of GPU frame capture,
 network transfer, local display configuration, or input-to-photon latency.
 
-### v19 live, input-responsive H.264 local demo (new; experimental)
+### v19 live, input-responsive H.264 local demo (headless CI verified)
 
 `src/colabcola/bridge_video_live.py` introduces a separate,
 bounded **live frame source** rather than replaying precomputed images.
@@ -887,6 +887,24 @@ This last metric starts when the producer processes an input event,
 **not** when the user physically presses a key or when the desktop
 compositor presents the resulting frame. The GUI additionally reports
 local Tk image-configuration FPS when enabled.
+
+Linux headless CI has now exercised a continuously generated
+**640×360 scene at 12 FPS**, producing and decoding **24/24 frames**
+at **12.04 decoded FPS** and a **2.735 ms median local
+capture-to-decoded-RGB age**. This includes fresh CPU scene generation,
+H.264 encoding, bounded local packet transfer and in-process decoding,
+not just playback of precomputed frames. It does not include network or
+display time. The separate tests also inject a mouse event, validate
+that a subsequent decoded frame acknowledges its application,
+and verify RGB output changes with input and animation.
+
+The GUI route is opt-in: it uses the same fixed-size Tk viewer as the
+bridge, measures local widget frame configuration, and receives the
+input-controlled marker and animated stripe. A graphical Tk smoke
+test exercises clean automatic viewer closure when a short session
+finishes. Continuous sessions are intentionally bounded by
+`--max-seconds` (1–180) and can also be interrupted by closing
+the window.
 
 For a no-GPU, no-Colab *headless* smoke check (PyAV/NumPy must be installed):
 
