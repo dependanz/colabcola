@@ -108,3 +108,28 @@ def test_cli_pipeline_requires_comm_and_no_other_benchmarks(monkeypatch):
         with pytest.raises(SystemExit) as error:
             main(base + tail)
         assert error.value.code == 2
+
+
+def test_cli_default_credits_are_transport_and_mode_scoped(monkeypatch):
+    """Two credits are standard only for ordinary Comm, not existing workflows."""
+    from colabcola.cli import main
+    from colabcola import bridge_colab
+
+    calls = []
+    monkeypatch.setattr(bridge_colab, "run_colab", lambda args: calls.append(
+        (args.transport, args.inflight, args.benchmark_sweep,
+         args.benchmark_credits, args.probe_link)) or 0)
+    base = ["--profile", "example", "bridge", "colab", "--preflight-only"]
+    assert main(base) == 0  # Files route remains unchanged.
+    assert main(base + ["--transport", "comm"]) == 0
+    assert main(base + ["--transport", "comm", "--inflight", "1"]) == 0
+    assert main(base + ["--transport", "comm", "--benchmark-sweep",
+                        "--poll-hz", "6"]) == 0
+    assert main(base + ["--transport", "comm", "--probe-link"]) == 0
+    assert main(base + ["--transport", "comm", "--benchmark-credits",
+                        "--fps", "12", "--poll-hz", "12"]) == 0
+
+    assert [item[:2] for item in calls] == [
+        ("files", 1), ("comm", 2), ("comm", 1),
+        ("comm", 1), ("comm", 1), ("comm", 1),
+    ]
