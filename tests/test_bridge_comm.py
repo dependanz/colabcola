@@ -112,7 +112,8 @@ def test_authenticated_comm_open_and_close(monkeypatch):
 
 def test_comm_frames_filter_unrelated_iopub_and_decode():
     run_id = "b" * 32
-    binary = packed_frame()
+    ppm_expected = b"P6" + bytes((10,)) + b"640 360" + bytes((10,)) + b"255" + bytes((10,)) + bytes((16, 32, 48)) * (640 * 360)
+    binary = struct.pack("!4sIIII", b"CCB1", 5, 3, 640, 360) + zlib.compress(ppm_expected)
     good = comm_msg({
         "v": 1, "run_id": run_id, "kind": "frame",
         "data": base64.b64encode(binary).decode("ascii"),
@@ -127,7 +128,7 @@ def test_comm_frames_filter_unrelated_iopub_and_decode():
     peer.comm_id = "my-comm"
     seq, ack, ppm, compressed_size = peer.next_frame(.5)
     assert seq == 5 and ack == 3
-    assert ppm.startswith(b"P6\\n192 120\\n255\\n".replace(b"\\n", b"\n"))
+    assert ppm == ppm_expected
     assert compressed_size == len(binary)
 
 
