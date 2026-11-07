@@ -95,11 +95,14 @@ before the allocation request. Other people's or independently allocated
 runtimes must never be released automatically.
 
 The managed T4 connection completed its first real Windows/Colab test on
-November 6, 2026. At 640×360, the first successful live run observed about
-0.3–0.7 displayed FPS and initial input-acknowledgement estimates around
-1–2 seconds. The T4 released successfully and a separate cleanup check
-confirmed its absence. This validates the authenticated remote interaction
-path, but **not** a low-latency user experience or other compute providers.
+November 6, 2026. At 640×360, the initial successful live run observed about
+0.3–0.7 displayed FPS and input-acknowledgement estimates around 1–2 seconds.
+A subsequent instrumented proof (v3) observed intervals from 0.1–1.7 FPS,
+GET p50 mostly 516–656 ms, PUT p50 mostly 375–625 ms, and negligible local
+decompression. The 0.1 FPS interval coincided with a 7,562 ms GET outlier.
+The T4 was released successfully in both runs, with an independent cleanup
+check after the earlier run. This validates the authenticated remote
+interaction path but **not** a low-latency user experience or other providers.
 
 Subsequent instrumentation reports local GET/PUT/decompression request costs,
 each as a median over the latest reporting interval. The ACK statistic is
