@@ -51,16 +51,18 @@ class ViewerPresentationMeter:
                 or not 0 < timing.captured_ns <= timing.decoded_ns <= now_ns
                 or now_ns - timing.captured_ns > 180 * 1_000_000_000):
             raise ValueError("invalid local frame timing")
+        input_ns = timing.input_callback_ns
+        if input_ns is not None and (
+                type(input_ns) is not int
+                or not 0 < input_ns <= timing.captured_ns
+                or now_ns - input_ns > 180 * 1_000_000_000):
+            raise ValueError("invalid local input callback timestamp")
+        # Validate everything before recording any measurements.
         self._capture_to_gui_ms.append((now_ns - timing.captured_ns) / 1e6)
         self._decoded_to_gui_ms.append((now_ns - timing.decoded_ns) / 1e6)
-        input_ns = timing.input_callback_ns
-        if input_ns is not None:
-            if (type(input_ns) is not int or not 0 < input_ns <= now_ns
-                    or now_ns - input_ns > 180 * 1_000_000_000):
-                raise ValueError("invalid local input callback timestamp")
-            if input_ns > self._last_reported_input_ns:
-                self._input_to_gui_ms.append((now_ns - input_ns) / 1e6)
-                self._last_reported_input_ns = input_ns
+        if input_ns is not None and input_ns > self._last_reported_input_ns:
+            self._input_to_gui_ms.append((now_ns - input_ns) / 1e6)
+            self._last_reported_input_ns = input_ns
 
     def report(self, now: float, *, every_seconds: float = 2.0) -> str | None:
         elapsed = now - self.started_at
