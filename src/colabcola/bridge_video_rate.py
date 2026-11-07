@@ -283,7 +283,8 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
 
 
 def reconstruction_quality(trace: LinkTrace, *, width: int,
-                           height: int, fps: int) -> dict:
+                           height: int, fps: int,
+                           include_internal: bool = False) -> dict:
     """Decode delivered H.264 frames with real PyAV; compute RGB distortion.
 
     On gaps, discard dependent frames until an IDR. PSNR is pooled over
@@ -300,7 +301,7 @@ def reconstruction_quality(trace: LinkTrace, *, width: int,
     total_squared = 0
     total_samples = 0
     valid_frames = 0
-    decoded_seqs = []
+    per_frame_sse: dict[int, int] = {}
     for item in trace.delivered:
         p = item.packet
         if p.seq != expected:
@@ -316,21 +317,25 @@ def reconstruction_quality(trace: LinkTrace, *, width: int,
         actual = output[0].to_ndarray(format="rgb24").astype(np.int16)
         original = _raw_frame(np, texture, p.seq).astype(np.int16)
         error = actual.astype(np.int32) - original.astype(np.int32)
-        total_squared += int(np.sum(error * error, dtype=np.int64))
+        sse = int(np.sum(error * error, dtype=np.int64))
+        total_squared += sse
+        per_frame_sse[p.seq] = sse
         total_samples += actual.size
-        decoded_seqs.append(p.seq)
         valid_frames += 1
     mse = total_squared / total_samples if total_samples else None
     psnr = (10 * math.log10(255 * 255 / mse)
             if mse is not None and mse > 0 else
             (float("inf") if mse == 0 else None))
-    return {
+    result = {
         "quality_decoded_frames": valid_frames,
         "rgb_mse_on_decoded_frames": round(mse, 3) if mse is not None else None,
         "rgb_psnr_on_decoded_frames_db": round(psnr, 3)
             if psnr is not None and math.isfinite(psnr) else None,
         "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
     }
+    if include_internal:
+        result["_sse_by_seq"] = per_frame_sse
+    return result
 
 
 def compare_rate_control(*, width: int = 128, height: int = 72,
@@ -370,8 +375,27 @@ def compare_rate_control(*, width: int = 128, height: int = 72,
     adaptive_decoder = decode_delivered_h264(adaptive_trace, width, height)
     baseline = _summarize_trace(base_trace, baseline_decoder, base_packets, fps, buffers_ms)
     adaptive = _summarize_trace(adaptive_trace, adaptive_decoder, adaptive_packets, fps, buffers_ms)
-    baseline.update(reconstruction_quality(base_trace, width=width, height=height, fps=fps))
-    adaptive.update(reconstruction_quality(adaptive_trace, width=width, height=height, fps=fps))
+    base_quality = reconstruction_quality(
+        base_trace, width=width, height=height, fps=fps, include_internal=True)
+    adaptive_quality = reconstruction_quality(
+        adaptive_trace, width=width, height=height, fps=fps, include_internal=True)
+    base_sse = base_quality.pop("_sse_by_seq")
+    adaptive_sse = adaptive_quality.pop("_sse_by_seq")
+    common = sorted(set(base_sse) & set(adaptive_sse))
+    sample_count = len(common) * width * height * 3
+
+    def matched_psnr(squared):
+        if not sample_count:
+            return None
+        mse = sum(squared[seq] for seq in common) / sample_count
+        return round(10 * math.log10(255 * 255 / mse), 3) if mse > 0 else None
+
+    base_quality["matched_frame_rgb_psnr_db"] = matched_psnr(base_sse)
+    adaptive_quality["matched_frame_rgb_psnr_db"] = matched_psnr(adaptive_sse)
+    base_quality["matched_frame_count"] = len(common)
+    adaptive_quality["matched_frame_count"] = len(common)
+    baseline.update(base_quality)
+    adaptive.update(adaptive_quality)
     return {
         "schema": 1,
         "mode": "causal-h264-rate-adaptation",
