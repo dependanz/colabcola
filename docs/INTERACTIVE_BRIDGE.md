@@ -216,12 +216,44 @@ colabcola --profile pypi-new-account-test bridge colab `
   --max-seconds 180 --confirm-allocation
 ```
 
-This is a **benchmark**, not a promised 12 FPS. The `comm` path remains an
-experimental provider adapter, and the authenticated file-polling transport
-remains available as a proven fallback. Always verify terminal `released`
-state; if uncertain, run `bridge cleanup` using the same profile and
-run directory. No unmodified desktop application or generic local GPU
-virtualization is claimed.
+### v7 results and v8 diagnostic
+
+The live v7 trial at `--fps 12 --poll-hz 12` regressed sharply from v6:
+only **1.9–2.4 unique FPS**, with **406–492 ms** median frame-pull
+round trips and **828–1070 ms** fresh input acknowledgments.
+Every reply was fresh (`fresh 4/4` or `5/5`), so duplicated/stale frames
+were not responsible for the low delivered rate. The request/response RTT
+alone imposes an approximate upper bound near 2.3 FPS at 440 ms.
+The owned Tesla T4 was confirmed **released**.
+
+The cause is *not yet established*. Relative to v6, both the remote
+renderer target and the host pull cap doubled, and resource contention,
+kernel scheduling, transfer overhead, or GPU-to-CPU synchronization could
+be responsible. The new profiling sidecar measures actual **remote renderer
+FPS**, median **CUDA-render-and-copy** time (GPU kernels + synchronization +
+device-to-host transfer), **zlib compression** time, and **frame-file publish**
+time. The renderer and Comm handler pass those values through the same
+authenticated frame stream, without an additional remote HTTP request.
+The client prints them alongside the already measured pull RTT, fresh
+responses, and input ACK observation.
+
+The next optional diagnostic trial changes **only one variable from v6**:
+leave rendering at 6 FPS but increase host pull limit to 12 Hz. Use a
+fresh directory and verify release before proceeding:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v8 `
+  --transport comm --gpu T4 --fps 6 --poll-hz 12 `
+  --max-seconds 180 --confirm-allocation
+```
+
+This is a real Colab GPU allocation that may consume compute units.
+If v8 restores near-6-FPS delivery, high renderer activity rather than the
+host pull cap becomes a stronger hypothesis; it would still require the
+remote timing measurements to distinguish computation from host-kernel
+scheduling or the network. No unmodified desktop application or generic
+local GPU virtualization is claimed.
 
 ## Architecture boundary
 
