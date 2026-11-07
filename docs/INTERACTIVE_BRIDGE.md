@@ -927,6 +927,64 @@ It does not prove remote encoded-video streaming or lost-reference
 recovery. The new live module is a separate optional experiment; no
 provider-side media integration is implied.
 
+### v19 Windows live interactive H.264 verification
+
+The user ran `bridge_video_live --show --width 640 --height 360
+--fps 30 --max-seconds 30` on Windows with PyAV installed.
+All **6 local live-source regression tests passed**. The run was
+closed after **508 frames** (approximately 16.9 seconds of decoded
+frames at 30 FPS), without a crash:
+
+| Local measurement | Result |
+| --- | ---: |
+| Produced and decoded frames | 508 / 508 |
+| Active decoded cadence | **30.01 FPS** |
+| Median source capture to decoded RGB | **2.689 ms** |
+| Median H.264 encoding cost | 2.000 ms |
+| Median H.264 decoding call | 0.191 ms |
+| Input changes reflected in decoded frames | 345 |
+| Median input *application* to decoded RGB | 2.677 ms |
+
+Tk image-label configuration generally tracked 30 FPS.
+The source-input-application metric specifically excludes GUI callback
+queueing and waiting for the next render tick. It is not the
+perceived response time to a physical mouse movement or keystroke.
+
+### v20 local Tk input-callback-to-image-configuration timing
+
+The next opt-in **local-only** instrumentation timestamps an accepted
+mouse or keyboard callback on the Tk main thread, carries that timestamp
+in private local frame metadata alongside the in-process encoded video
+and reconstructed pixels, and records the time at which the matching
+frame is configured onto the Tk image label. The remote input protocol,
+Colab transport, packaged job runner, and viewer's existing PPM path
+are not changed.
+
+The console GUI meter now also reports:
+
+- `capture→Tk p50`: local scene capture through image-label update;
+- `decode→Tk p50`: local decoded RGB readiness through label update,
+  including queueing and Tk processing;
+- `input callback→Tk p50`: accepted Tk mouse/key callback through
+  label update **for the first displayed frame reflecting that input**.
+  Consecutive frames carrying the same acknowledged input are counted
+  only once. Dropped or superseded input changes are not claimed as
+  individually displayed.
+
+A finite-duration Tk demo remains available:
+
+```powershell
+python -m pytest -q tests/test_bridge_video_live.py tests/test_bridge_viewer_stats.py
+python -m colabcola.bridge_video_live --show --width 640 --height 360 --fps 30 --max-seconds 30
+```
+
+This timestamp interval includes event callback-to-producer scheduling,
+wait for the next frame, CPU RGB generation, H.264 encoding/decoding,
+bounded frame queueing and Tk label configuration. It **does not**
+include device-to-Tk OS event dispatch or actual physical display scanout,
+and it is not an input-to-photon measurement. No Colab compute is
+allocated; no public listener or network transport is involved.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
