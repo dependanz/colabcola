@@ -367,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
+    remote.add_argument("--inflight", type=int, default=1,
+                        help="Comm-only experimental number of outstanding frame requests (1..4)")
     remote.add_argument("--probe-link", action="store_true",
                         help="measure tiny Jupyter Comm RTT before rendering; no extra allocation")
     remote.add_argument("--benchmark-sweep", action="store_true",
@@ -393,6 +395,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if not 120 <= args.max_seconds <= 1800:
                 parser.error("colab --max-seconds must be within 120..1800")
+            if not 1 <= args.inflight <= 4:
+                parser.error("--inflight must be in 1..4")
+            if args.inflight > 1 and (args.transport != "comm" or args.benchmark_sweep or args.probe_link):
+                parser.error("--inflight >1 requires --transport comm, without --probe-link or --benchmark-sweep")
             if args.probe_link and (args.transport != "comm" or args.benchmark_sweep):
                 parser.error("--probe-link requires --transport comm without --benchmark-sweep")
             if args.benchmark_sweep:
