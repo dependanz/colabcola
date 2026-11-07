@@ -96,6 +96,23 @@ def test_local_jupyter_comm_open_pull_input_close(tmp_path):
                     return data["data"]
             pytest.fail("local kernel did not send frame over Jupyter Comm")
 
+        # Validate a tiny Comm message on a *real* IPython kernel before
+        # measuring the much larger frame response.
+        send({"kind": "ping", "seq": 1})
+        until = time.monotonic() + 8
+        while time.monotonic() < until:
+            try:
+                ping_reply = client.get_iopub_msg(timeout=.5)
+            except queue.Empty:
+                continue
+            if (ping_reply.get("header", {}).get("msg_type") == "comm_msg"
+                    and ping_reply.get("content", {}).get("comm_id") == comm_id
+                    and ping_reply.get("content", {}).get("data", {}).get("kind") == "pong"):
+                assert ping_reply["content"]["data"]["seq"] == 1
+                break
+        else:
+            pytest.fail("local kernel did not acknowledge tiny Comm ping")
+
         send({"kind": "pull"})
         result = poll_frame()
         assert base64.b64decode(result["data"], validate=True) == binary
