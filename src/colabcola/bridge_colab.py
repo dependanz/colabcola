@@ -20,6 +20,7 @@ import zlib
 from .bridge_demo import run_viewer
 from .lifecycle_io import LifecycleError, atomic
 from .lifecycle_provider import GoogleProvider
+from .lifecycle import run_lock
 
 _FRAME_HEADER = struct.Struct("!4sIIII")
 _MAX_FRAME_BYTES = 2 * 1024 * 1024
@@ -142,6 +143,21 @@ def start_worker(provider: GoogleProvider, session, run_id: str, fps: int) -> tu
     raise LifecycleError("remote GPU worker did not become ready")
 
 
+def offer_update(items: queue.Queue, item: tuple[str, object]) -> None:
+    """Do not block transport if a UI thread is temporarily too slow."""
+    try:
+        items.put_nowait(item)
+    except queue.Full:
+        try:
+            items.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            items.put_nowait(item)
+        except queue.Full:
+            pass
+
+
 def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                   outgoing: queue.Queue, frames: queue.Queue,
                   stopped: threading.Event, deadline: float, poll_hz: int) -> None:
@@ -156,7 +172,7 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
     transferred = 0
     print("[colabcola] Interactive T4 bridge connected; close the viewer to release compute", flush=True)
     try:
-        frames.put(("status", f"Connected · {gpu} · remote rendering"))
+        offer_update(frames, ("status", f"Connected · {gpu} · remote rendering"))
         while not stopped.is_set() and time.monotonic() < deadline:
             tick = time.monotonic()
             event = None
@@ -184,12 +200,7 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                 seen += 1
                 transferred += len(packed)
                 # Only keep the newest frame; never allow a slow window to build latency.
-                while frames.qsize() > 1:
-                    try:
-                        frames.get_nowait()
-                    except queue.Empty:
-                        break
-                frames.put(("frame", ppm))
+                offer_update(frames, ("frame", ppm))
             now = time.monotonic()
             latency = None
             if ack > acked and ack in pending:
@@ -201,7 +212,7 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                 text = f"{gpu} · {seen / elapsed:.1f} FPS · {transferred / elapsed / 1024:.0f} KiB/s"
                 if latency is not None:
                     text += f" · input-to-frame {latency} ms"
-                frames.put(("status", text))
+                offer_update(frames, ("status", text))
                 print("[colabcola] " + text, flush=True)
                 seen = 0
                 transferred = 0
@@ -230,49 +241,51 @@ def run_colab(args) -> int:
             if args.run_dir.exists():
                 raise LifecycleError("bridge run directory already exists; use a new one or bridge cleanup")
             args.run_dir.mkdir(parents=True, exist_ok=False)
-            state = {
-                "schema": 1, "backend": "google-colab", "gpu": "T4",
-                "profile": args.profile or "", "run_id": uuid.uuid4().hex,
-                "allocation_id": str(uuid.uuid4()), "created_at": time.time(),
-            }
-            save(args.run_dir, state, "allocating")
-            deadline = time.monotonic() + args.max_seconds
-            try:
-                print("[colabcola] Allocating managed Tesla T4...", flush=True)
-                endpoint = provider.allocate(state["allocation_id"], "T4")
-                save(args.run_dir, state, "allocated", endpoint=endpoint)
-                print("[colabcola] T4 allocated; starting remote CUDA renderer", flush=True)
-                session = wait_for_session(provider, endpoint, min(deadline, time.monotonic() + 90))
-                remote, details = start_worker(provider, session, state["run_id"], args.fps)
-                save(args.run_dir, state, "running", gpu_name=details["gpu"])
-                print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
-                run_viewer("127.0.0.1", 0, "", width=640, height=360,
-                           title="Colab Cola · Google Colab T4",
-                           worker=lambda outgoing, frames, stopped:
-                               stream_remote(provider, session, remote, state["run_id"],
-                                             details["gpu"], outgoing, frames, stopped,
-                                             deadline, args.poll_hz))
-            finally:
-                print("[colabcola] Releasing only the owned T4 runtime...", flush=True)
-                if not release_owned(provider, args.run_dir, state):
-                    raise LifecycleError("owned T4 release not confirmed; run bridge cleanup")
-            print("[colabcola] T4 release confirmed", flush=True)
-            return 0
+            with run_lock(args.run_dir):
+                state = {
+                    "schema": 1, "backend": "google-colab", "gpu": "T4",
+                    "profile": args.profile or "", "run_id": uuid.uuid4().hex,
+                    "allocation_id": str(uuid.uuid4()), "created_at": time.time(),
+                }
+                save(args.run_dir, state, "allocating")
+                deadline = time.monotonic() + args.max_seconds
+                try:
+                    print("[colabcola] Allocating managed Tesla T4...", flush=True)
+                    endpoint = provider.allocate(state["allocation_id"], "T4")
+                    save(args.run_dir, state, "allocated", endpoint=endpoint)
+                    print("[colabcola] T4 allocated; starting remote CUDA renderer", flush=True)
+                    session = wait_for_session(provider, endpoint, min(deadline, time.monotonic() + 90))
+                    remote, details = start_worker(provider, session, state["run_id"], args.fps)
+                    save(args.run_dir, state, "running", gpu_name=details["gpu"])
+                    print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
+                    run_viewer("127.0.0.1", 0, "", width=640, height=360,
+                               title="Colab Cola · Google Colab T4",
+                               worker=lambda outgoing, frames, stopped:
+                                   stream_remote(provider, session, remote, state["run_id"],
+                                                 details["gpu"], outgoing, frames, stopped,
+                                                 deadline, args.poll_hz))
+                finally:
+                    print("[colabcola] Releasing only the owned T4 runtime...", flush=True)
+                    if not release_owned(provider, args.run_dir, state):
+                        raise LifecycleError("owned T4 release not confirmed; run bridge cleanup")
+                print("[colabcola] T4 release confirmed", flush=True)
+                return 0
         finally:
             provider.close()
 
 
 def cleanup_colab(args) -> int:
     from .profiles import selected
-    state = read_journal(args.run_dir)
-    if state.get("profile", "") != (args.profile or ""):
-        raise LifecycleError("cleanup profile differs from journal; pass the same --profile")
-    with selected(args.profile):
-        provider = GoogleProvider()
-        try:
-            if not release_owned(provider, args.run_dir, state):
-                raise LifecycleError("owned runtime release unconfirmed")
-            print("[colabcola] Owned runtime confirmed absent", flush=True)
-            return 0
-        finally:
-            provider.close()
+    with run_lock(args.run_dir):
+        state = read_journal(args.run_dir)
+        if state.get("profile", "") != (args.profile or ""):
+            raise LifecycleError("cleanup profile differs from journal; pass the same --profile")
+        with selected(args.profile):
+            provider = GoogleProvider()
+            try:
+                if not release_owned(provider, args.run_dir, state):
+                    raise LifecycleError("owned runtime release unconfirmed")
+                print("[colabcola] Owned runtime confirmed absent", flush=True)
+                return 0
+            finally:
+                provider.close()
