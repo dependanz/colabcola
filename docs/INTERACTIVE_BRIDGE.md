@@ -373,6 +373,54 @@ colabcola --profile pypi-new-account-test bridge colab `
 Choose a fresh run directory, and confirm `phase: released` afterward.
 The Python job runner and checkpoint recovery are unchanged.
 
+### v11 observed results and opt-in bounded frame pipelining
+
+The real v11 trial (`--fps 12 --poll-hz 12 --probe-link`) reported a
+**281 ms median tiny-message Comm RTT** across eight requests without frame
+payloads. The subsequent compressed-frame pull RTT was usually **421–469
+ms**, with **2.0–2.4 unique FPS**, fresh frames on each reply, and
+**~813–1093 ms** input acknowledgments. Remote CUDA rendering continued
+at **11.9–12.0 FPS**, with render+device-to-host copy ~1 ms and
+compression ~6–10 ms. The T4 was explicitly confirmed released.
+
+This reproduces v7's low-throughput behavior, whereas the single-runtime
+v10 sweep achieved ~5.6 FPS in the same 12/12 configuration. The
+inter-session performance difference appears associated with Jupyter
+proxy/network/kernel messaging conditions; we cannot yet identify
+whether it is a transient provider limitation, bandwidth, runtime
+scheduling, or another factor. The tiny-message and full-frame probes
+were sequential rather than simultaneous, so subtracting the median
+values is **not** a reliable estimate of payload serialization cost.
+
+The existing one-request-at-a-time implementation is constrained by
+`throughput <= 1 / RTT`. To investigate whether overlapping round trips
+could improve throughput, `--inflight N` (N=2..4) is now available as
+an **opt-in development experiment only** on `--transport comm`.
+It keeps a maximum of N outstanding frame requests, sends them at
+the configured `--poll-hz` without catch-up bursts, tags each request
+and reply with an ID, and displays only strictly increasing renderer
+frame sequence numbers. It fails on unsolicited/duplicate request
+IDs, late responses, or stale frames and then performs ordinary owned
+runtime release. Standard `--inflight 1` behavior is unchanged.
+This experiment cannot be combined with `--probe-link` or
+`--benchmark-sweep`; it does not allocate additional kernels or T4s.
+
+Optional example using a **new** run directory:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v12 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --inflight 3 --max-seconds 180 --confirm-allocation
+```
+
+This allocation can consume Colab compute units. Output includes
+received FPS, frame-pull RTT, fresh replies, and outstanding credit count.
+**No v12 performance result has been measured**. More outstanding
+requests may produce duplicate/stale frames or worsen input latency;
+speedup is not guaranteed. Validate offline before running, and always
+confirm the journal ends in `released` or retry owned cleanup.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
