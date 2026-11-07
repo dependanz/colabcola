@@ -53,6 +53,8 @@ def start(directory: str, fps: int, run_id: str):
             y = torch.linspace(0, 1, HEIGHT, device="cuda").view(HEIGHT, 1).expand(HEIGHT, WIDTH)
             cx, cy, phase = 0.5, 0.5, 0.0
             seq, applied_seq = 0, 0
+            current_fps = fps
+            applied_rate_seq = 0
             started = time.monotonic()
             metrics_since = started
             render_samples = []
@@ -63,6 +65,21 @@ def start(directory: str, fps: int, run_id: str):
                            memory_bytes=memory, run_id=run_id, width=WIDTH, height=HEIGHT)
             while not (directory / "stop").exists():
                 tick = time.monotonic()
+                # An authenticated Comm handler writes this local control file.
+                # Validate identity and monotonically increasing control sequence.
+                rate_file = directory / "rate-control.json"
+                if rate_file.is_file():
+                    try:
+                        rate = json.loads(rate_file.read_text(encoding="utf-8"))
+                        requested_seq, requested_fps = rate.get("seq"), rate.get("fps")
+                        if (rate.get("run_id") == run_id
+                                and type(requested_seq) is int
+                                and applied_rate_seq < requested_seq < 10000
+                                and type(requested_fps) is int and 1 <= requested_fps <= 12):
+                            current_fps = requested_fps
+                            applied_rate_seq = requested_seq
+                    except (OSError, UnicodeError, ValueError, AttributeError):
+                        pass
                 path = directory / "input.json"
                 if path.is_file():
                     try:
@@ -117,6 +134,7 @@ def start(directory: str, fps: int, run_id: str):
                     elapsed = now - metrics_since
                     metrics = {
                         "schema": 1, "run_id": run_id, "seq": seq,
+                        "target_fps": current_fps, "rate_seq": applied_rate_seq,
                         "renderer_fps": round(publish_count / elapsed, 2),
                         "render_copy_ms": round(median(render_samples), 2),
                         "compress_ms": round(median(compress_samples), 2),
@@ -130,7 +148,7 @@ def start(directory: str, fps: int, run_id: str):
                     publish_samples.clear()
                     publish_count = 0
                 seq += 1
-                time.sleep(max(0, 1 / fps - (time.monotonic() - tick)))
+                time.sleep(max(0, 1 / current_fps - (time.monotonic() - tick)))
             publish_status(directory, state="stopped", device="cuda", gpu=name, run_id=run_id)
         except Exception as exc:
             # Keep diagnostics bounded; never publish secrets or raw stack traces.
