@@ -223,6 +223,7 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
     except Exception as exc:
         print("[colabcola] Interactive bridge stopped: " + type(exc).__name__ + ": " + str(exc)[:180],
               flush=True)
+        raise LifecycleError("remote interactive transport stopped: " + type(exc).__name__) from None
     finally:
         stopped.set()
 
