@@ -367,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
+    remote.add_argument("--probe-link", action="store_true",
+                        help="measure tiny Jupyter Comm RTT before rendering; no extra allocation")
     remote.add_argument("--benchmark-sweep", action="store_true",
                         help="compare 6/6, 12/6, 6/12, 12/12, and repeated 6/6 in one Comm session")
     remote.add_argument("--benchmark-phase-seconds", type=int, default=12)
@@ -391,6 +393,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if not 120 <= args.max_seconds <= 1800:
                 parser.error("colab --max-seconds must be within 120..1800")
+            if args.probe_link and (args.transport != "comm" or args.benchmark_sweep):
+                parser.error("--probe-link requires --transport comm without --benchmark-sweep")
             if args.benchmark_sweep:
                 from .bridge_sweep import MAX_PHASE_SECONDS, MIN_PHASE_SECONDS
                 if args.transport != "comm" or (args.fps, args.poll_hz) != (6, 6):
