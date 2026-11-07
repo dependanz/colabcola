@@ -369,6 +369,9 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--poll-hz", type=int, default=3)
     remote.add_argument("--inflight", type=int, default=1,
                         help="Comm-only experimental number of outstanding frame requests (1..4)")
+    remote.add_argument("--benchmark-credits", action="store_true",
+                        help="single T4 sweep of 1, 2, 3, 4, then 1 frame credits at 12 FPS")
+    remote.add_argument("--credit-phase-seconds", type=int, default=12)
     remote.add_argument("--probe-link", action="store_true",
                         help="measure tiny Jupyter Comm RTT before rendering; no extra allocation")
     remote.add_argument("--benchmark-sweep", action="store_true",
@@ -397,7 +400,18 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("colab --max-seconds must be within 120..1800")
             if not 1 <= args.inflight <= 4:
                 parser.error("--inflight must be in 1..4")
-            if args.inflight > 1 and (args.transport != "comm" or args.benchmark_sweep or args.probe_link):
+            if args.benchmark_credits:
+                from .bridge_credit_sweep import MIN_PHASE_SECONDS, MAX_PHASE_SECONDS
+                if (args.transport != "comm" or (args.fps, args.poll_hz) != (12, 12)
+                        or args.inflight != 1 or args.benchmark_sweep or args.probe_link):
+                    parser.error("credit sweep requires --transport comm --fps 12 --poll-hz 12"
+                                 " and no other experimental transport mode")
+                if not MIN_PHASE_SECONDS <= args.credit_phase_seconds <= MAX_PHASE_SECONDS:
+                    parser.error("credit sweep phase duration must be 10..40 seconds")
+                if args.max_seconds < args.credit_phase_seconds * 5 + 80:
+                    parser.error("credit sweep time budget must cover all phases and startup")
+            if args.inflight > 1 and (args.transport != "comm" or args.benchmark_sweep
+                                       or args.benchmark_credits or args.probe_link):
                 parser.error("--inflight >1 requires --transport comm, without --probe-link or --benchmark-sweep")
             if args.probe_link and (args.transport != "comm" or args.benchmark_sweep):
                 parser.error("--probe-link requires --transport comm without --benchmark-sweep")
