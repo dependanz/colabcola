@@ -1510,6 +1510,107 @@ loss of IP packet fragments, or gameplay input-to-photon response.
 PyAV/NumPy remain optional development dependencies. The
 existing authenticated Colab bridge and batch runner are unchanged.
 
+## v25 Windows confirmation and v26 causal adaptive H.264 rate experiment
+
+### Windows v25 reproduction (virtual media/feedback)
+
+The user ran `tests/test_bridge_video_controller.py` on Windows:
+**8/8 tests passed**. A locally encoded 60-frame H.264 stream at
+30 FPS, GOP 24, with explicit access-unit erasures at frames 5
+and 27 reproduced two feedback requests, applied at IDRs **8 and
+30**. **54/60 frames** reconstructed under multi-feedback,
+compared with **20/60** for periodic GOPs alone; longest
+stale-frame run fell from **700 ms to 100 ms** in the virtual
+fixed-deadline playout model.
+
+The no-erasure bandwidth-outage experiment decoded **60/60**
+frames under the fixed-rate source. A 40 ms virtual buffer
+was on time for **8/60**, an 80 ms buffer **57/60**, and
+160/240 ms buffers **60/60**. No actual network latency or
+screen-presentation timing was measured.
+
+### v26: receiver-feedback high/low H.264 bitrate adaptation
+
+The separate research module `src/colabcola/bridge_video_rate.py`
+extends the incremental v25 link with a **causal two-rate
+encoder controller**:
+
+- The source creates a deterministic **textured, moving RGB
+  scene**, rather than the earlier highly compressible glow
+  pattern. It encodes each frame with an actual in-process
+  libx264 **target bitrate** and a matching VBV limit.
+- A receiver observes **only delivered access units** and
+  their simulated source-to-arrival ages and sequence gaps.
+  If a packet is old enough or a sequence gap is observed,
+  it requests a reduced bitrate. Several low-delay
+  observations can trigger a recovery to the higher rate.
+- The control message is delivered only after a bounded
+  simulated feedback delay. A **future** source frame
+  switches encoder rate by restarting a closed-GOP encoder,
+  which also creates a new verified IDR. The first bytes
+  before the applied rate change must exactly match the
+  no-adaptation baseline.
+- The policy uses hysteresis thresholds, a required number
+  of good samples, minimum switch interval, a finite maximum
+  number of switches, and bounded virtual queue admission
+  and frame-age constraints. It does **not** peek at future
+  bandwidth steps.
+- In addition to reconstructed frame counts, dropped
+  units, byte totals and fixed playout deadlines, actual
+  decoded RGB frames are compared with the known original
+  textured images, producing pooled **MSE and PSNR on valid
+  decoded frames**. A good PSNR cannot compensate for
+  missing frames, so both quality and continuity must
+  be evaluated.
+
+This is deliberately simpler than WebRTC's real congestion
+control: just two configured rates, not a production bitrate
+estimator, frame-rate selector, keyframe request signaling,
+retransmission/FEC, or adaptive playout clock. A bitrate
+target is **not a guaranteed exact output bit rate**;
+measure actual media bytes and per-frame sizes. Encoder
+restart time and packet-delivery timings are not measured
+in real time.
+
+The first comparison is a deterministic local media link at
+30 FPS with a capacity drop from **1,200 kbps** to **90 kbps**
+at virtual 600 ms and a recovery to 1,200 kbps at 1,750 ms.
+The nominal H.264 encoder targets are **650 kbps**
+(high) and **95 kbps** (low). The receiver has no access
+to this schedule; it can act only on packet arrivals.
+
+```powershell
+git pull --ff-only origin feature/interactive-bridge-prototype
+python -m pytest -q tests/test_bridge_video_rate.py
+
+python -m colabcola.bridge_video_rate `
+  --width 128 --height 72 --fps 30 --frames 90 --gop 24 `
+  --delay-ms 40 --jitter-ms 8 `
+  --bandwidth-steps "0:1200,600:90,1750:1200" `
+  --max-inflight 10 --max-age-ms 350 `
+  --high-kbps 650 --low-kbps 95 `
+  --congested-age-ms 110 --recovered-age-ms 65 `
+  --control-delay-ms 35 --min-switch-ms 150 `
+  --buffers-ms "80,160,240,350" --seed 7
+```
+
+Inspect `controller.requests` and `controller.applied`
+separately: a delayed request may never take effect before
+the end of the source trace. Compare `fixed_high_rate`
+against `adaptive_rate` for actual wire bytes,
+`decoded_runs`, playout deadline compliance,
+and PSNR on successfully reconstructed frames.
+Do **not** assume adaptive rate is better under every
+network scenario or that a higher bitrate means higher
+quality after packet loss.
+
+**Scope:** this is a seeded virtual-time complete-access-unit
+link and two in-process PyAV codecs; no Colab resource,
+GPU, real transport, GUI, physical display measurement,
+or released batch-runner change. PyAV/NumPy remain optional
+development-only dependencies and production use requires
+separate provider-policy and binary licensing review.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
