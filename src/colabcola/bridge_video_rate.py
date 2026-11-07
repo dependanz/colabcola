@@ -33,9 +33,10 @@ class RateConfig:
     low_kbps: int = 95
     congested_age_ms: float = 110.0
     recovered_age_ms: float = 65.0
-    recovery_samples: int = 4
+    recovery_samples: int = 8
+    congestion_samples: int = 3
     control_delay_ms: float = 35.0
-    min_switch_ms: float = 150.0
+    min_switch_ms: float = 350.0
     max_switches: int = 8
 
     def __post_init__(self) -> None:
@@ -43,6 +44,7 @@ class RateConfig:
             ("high_kbps", self.high_kbps, 50, 20_000),
             ("low_kbps", self.low_kbps, 20, 20_000),
             ("recovery_samples", self.recovery_samples, 1, 30),
+            ("congestion_samples", self.congestion_samples, 1, 30),
             ("max_switches", self.max_switches, 0, 20),
         ):
             if type(value) is not int or not lo <= value <= hi:
@@ -78,6 +80,7 @@ class RateReceiver:
         self.desired_kbps = settings.high_kbps
         self.last_request_ms = -math.inf
         self.low_age_streak = 0
+        self.high_age_streak = 0
         self.pending: deque[dict] = deque()
         self.requests: list[dict] = []
         self.applied: list[dict] = []
@@ -105,13 +108,15 @@ class RateReceiver:
         self.observations += 1
         age = item.arrival_ms - item.source_ms
         congested = gap or age >= self.settings.congested_age_ms
+        self.high_age_streak = self.high_age_streak + 1 if congested else 0
         if age <= self.settings.recovered_age_ms and not gap:
             self.low_age_streak += 1
         else:
             self.low_age_streak = 0
 
         target = None
-        if self.desired_kbps == self.settings.high_kbps and congested:
+        if (self.desired_kbps == self.settings.high_kbps
+                and (gap or self.high_age_streak >= self.settings.congestion_samples)):
             target = self.settings.low_kbps
         elif (self.desired_kbps == self.settings.low_kbps
               and self.low_age_streak >= self.settings.recovery_samples):
@@ -132,6 +137,7 @@ class RateReceiver:
         self.pending.append(request)
         self.desired_kbps = target
         self.low_age_streak = 0
+        self.high_age_streak = 0
         self.last_request_ms = item.arrival_ms
 
     def apply_due(self, source_seq: int, source_ms: float,
@@ -385,6 +391,7 @@ def compare_rate_control(*, width: int = 128, height: int = 72,
             "congested_age_ms": rates.congested_age_ms,
             "recovered_age_ms": rates.recovered_age_ms,
             "recovery_samples": rates.recovery_samples,
+            "congestion_samples": rates.congestion_samples,
             "control_delay_ms": rates.control_delay_ms,
             "min_switch_ms": rates.min_switch_ms,
             "max_switches": rates.max_switches,
@@ -420,9 +427,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--low-kbps", type=int, default=95)
     parser.add_argument("--congested-age-ms", type=float, default=110)
     parser.add_argument("--recovered-age-ms", type=float, default=65)
-    parser.add_argument("--recovery-samples", type=int, default=4)
+    parser.add_argument("--recovery-samples", type=int, default=8)
+    parser.add_argument("--congestion-samples", type=int, default=3)
     parser.add_argument("--control-delay-ms", type=float, default=35)
-    parser.add_argument("--min-switch-ms", type=float, default=150)
+    parser.add_argument("--min-switch-ms", type=float, default=350)
     parser.add_argument("--max-switches", type=int, default=8)
     parser.add_argument("--buffers-ms", default="80,160,240,350")
     args = parser.parse_args(argv)
@@ -442,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
             congested_age_ms=args.congested_age_ms,
             recovered_age_ms=args.recovered_age_ms,
             recovery_samples=args.recovery_samples,
+            congestion_samples=args.congestion_samples,
             control_delay_ms=args.control_delay_ms,
             min_switch_ms=args.min_switch_ms,
             max_switches=args.max_switches,
