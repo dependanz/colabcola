@@ -37,8 +37,15 @@ def validated_renderer_metrics(raw: object, run_id: str) -> dict | None:
             return None
     if raw["renderer_fps"] > 120:
         return None
-    return {k: raw[k] for k in (
+    result = {k: raw[k] for k in (
         "seq", "renderer_fps", "render_copy_ms", "compress_ms", "publish_ms")}
+    if "target_fps" in raw or "rate_seq" in raw:
+        target, rate_seq = raw.get("target_fps"), raw.get("rate_seq")
+        if (type(target) is not int or not 1 <= target <= 12
+                or type(rate_seq) is not int or not 0 <= rate_seq < 10000):
+            return None
+        result.update(target_fps=target, rate_seq=rate_seq)
+    return result
 
 
 _SAFE_BOOTSTRAP_STAGES = frozenset({
@@ -90,6 +97,7 @@ class KernelCommBridge:
         self.comm_id = None
         self._closed = False
         self.latest_renderer_metrics = None
+        self.latest_rate_ack = 0
 
     def _send(self, kind: str, **fields: object) -> None:
         if self._closed or not self.comm_id or self.wire is None:
@@ -238,6 +246,10 @@ class KernelCommBridge:
             if payload.get("kind") != "frame":
                 if payload.get("kind") == "error":
                     raise LifecycleError("remote kernel bridge reported an error")
+                if payload.get("kind") == "rate_ack":
+                    rate_seq = payload.get("seq")
+                    if type(rate_seq) is int and self.latest_rate_ack < rate_seq < 10000:
+                        self.latest_rate_ack = rate_seq
                 continue
             encoded = payload.get("data")
             if not isinstance(encoded, str) or len(encoded) > MAX_ENCODED_FRAME:
@@ -259,6 +271,12 @@ class KernelCommBridge:
 
     def send_input(self, seq: int, event: dict) -> None:
         self._send("input", seq=seq, **event)
+
+    def set_render_fps(self, seq: int, fps: int) -> None:
+        if (type(seq) is not int or not 0 < seq < 10000
+                or type(fps) is not int or not 1 <= fps <= 12):
+            raise ValueError("invalid renderer rate request")
+        self._send("rate", seq=seq, fps=fps)
 
     def close(self):
         if self._closed:
