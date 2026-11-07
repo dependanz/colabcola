@@ -274,7 +274,7 @@ def create_viewer_layout(root, width: int, height: int):
 
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
-               worker=None) -> None:
+               worker=None, viewer_stats: bool = False) -> None:
     # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
@@ -284,6 +284,8 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
     label, status = create_viewer_layout(root, width, height)
+    from .bridge_viewer_stats import ViewerPresentationMeter
+    gui_meter = ViewerPresentationMeter(started_at=time.monotonic()) if viewer_stats else None
     last_motion = [0.0]
 
     def enqueue(event: dict) -> None:
@@ -311,13 +313,20 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                 if kind == "status":
                     status.set(concise_viewer_status(data))
                 elif kind == "frame":
+                    image_started = time.perf_counter()
                     image = photoimage_from_ppm(root, data)
                     label.configure(image=image, text="")
                     label.image = image
+                    if gui_meter is not None:
+                        gui_meter.presented((time.perf_counter() - image_started) * 1000)
                     if status.get() == "Connecting...":
                         status.set("Connected")
         except queue.Empty:
             pass
+        if gui_meter is not None:
+            summary = gui_meter.report(time.monotonic())
+            if summary is not None:
+                print("[colabcola] " + summary, flush=True)
         root.after(30, poll)
 
     label.bind("<Motion>", mouse)
@@ -369,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--poll-hz", type=int, default=3)
     remote.add_argument("--inflight", type=int, default=1,
                         help="Comm-only experimental number of outstanding frame requests (1..4)")
+    remote.add_argument("--viewer-stats", action="store_true",
+                        help="report GUI frame configuration FPS and Tk processing time locally")
     remote.add_argument("--benchmark-credits", action="store_true",
                         help="single T4 sweep of 1, 2, 3, 4, then 1 frame credits at 12 FPS")
     remote.add_argument("--credit-phase-seconds", type=int, default=12)
