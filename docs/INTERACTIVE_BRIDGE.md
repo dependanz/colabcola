@@ -754,6 +754,59 @@ the current bounded packet format and testability. No change to the
 Colab allocator, installed FFmpeg dependencies, production batch runner,
 or live authenticated Comm path has been made here.
 
+### v17 measured stage contributions and decoder flag A/B
+
+Linux CI confirms that the apparent three-frame H.264 latency originates
+primarily in **access-unit packetization (~1 frame interval)** and the
+**FFmpeg CLI decoder input/output pipeline (~2 frame intervals)**.
+For the same local 640×360 synthetic scenes:
+
+| Stage (median, Linux) | 12 FPS glow scene | 60 FPS square |
+| --- | ---: | ---: |
+| Capture → complete encoded packet | ~85.6 ms | ~18.7 ms |
+| Complete packet → local socket receipt | ~0.1 ms | ~0.1 ms |
+| Socket receipt → decoded RGB output | ~168.0 ms | ~34.5 ms |
+| Total | ~253.7 ms | ~53.2 ms |
+
+An opt-in `--decoder-low-delay` switch applies FFmpeg's
+`-flags +low_delay` before opening the H.264 decoder. The Linux A/B
+at 12 FPS returned **253.7 ms baseline vs 253.5 ms low-delay**;
+the 60 FPS square returned **53.2 ms baseline vs 52.7 ms low-delay**.
+It decoded all frames, but **did not materially reduce** latency.
+The default remains unchanged; the flag is purely diagnostic.
+
+### v18 optional in-process codec comparison (development)
+
+The next offline experiment uses PyAV's in-process FFmpeg codec API to
+receive complete H.264 encoder packets directly, without scanning an
+FFmpeg subprocess's Annex B byte stream or passing decoded pixels
+through FFmpeg CLI pipes. It sends the packet through the same bounded
+local socket format used in the existing loopback proof, then decodes
+the packet directly. This isolates the **subprocess/packetizer
+pipeline** from codec-internal lookahead and processing cost.
+
+It is opt-in and has separate local-only dependencies; no PyAV/NumPy
+dependency is added to the released `colabcola` installation.
+To try the experiment in a *separate experimental environment*:
+
+```powershell
+python -m pip install av numpy
+python -m pytest -q tests/test_bridge_video_inprocess.py
+
+python -m colabcola.bridge_video_inprocess `
+  --width 640 --height 360 --frames 24 --fps 12 --pattern scene
+
+python -m colabcola.bridge_video_inprocess `
+  --width 640 --height 360 --frames 48 --fps 60 --pattern square
+```
+
+**Important:** PyAV binaries can embed x264/FFmpeg libraries under
+GPL-related licensing obligations. A future production integration
+requires a separate distribution and licensing review. This comparison
+does not introduce a public port, managed Colab connection, real GPU
+capture, remote media-serving service, or an end-to-end game stream.
+Performance is not guaranteed until run and measured.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
