@@ -173,17 +173,27 @@ colabcola --profile pypi-new-account-test bridge colab `
   --max-seconds 300 --confirm-allocation
 ```
 
-The first real Comm-mode trial (v4) reached a T4 allocation but failed its
-Python bootstrap before displaying frames. The original output did not
-identify the exception; it also did not display an explicit release
-confirmation, so the v4 journal should be checked. Colab's documented
-`ipykernel.comm.Comm` interface is now preferred, with a `comm.create_comm`
-fallback. The remote worker writes a small failure report containing only
-the bootstrap stage and Python exception **type**, and the host includes
-that sanitized information when the bootstrap fails. The new Comm path
-still requires live verification; no throughput or latency improvements are
-claimed yet. Local real-kernel integration tests verify Jupyter Comm
-messaging, but Google's proxy behavior may differ. The runtime is still journal-owned and must be
+Two live Comm-mode trials have not yet reached graphical streaming.
+The v4 experiment reached the remote Python bootstrap but reported an
+unspecified execution error; its journal later confirmed `released`.
+The v5 experiment allocated its owned T4 but the kernel WebSocket readiness
+flag was unset after attachment; **the CLI confirmed release**. Its output
+did not prove whether the WebSocket was rejected, closed, or timed out.
+Colab's documented `ipykernel.comm.Comm` is preferred for the remote
+Comm handler, with `comm.create_comm` as a fallback.
+
+The new WebSocket attachment probe reports only whether the connection
+opened, is currently connected, subsequently closed, whether its thread
+remains alive, an optional numeric close code, and an allowlisted exception
+type. It never exposes endpoints, credentials, exception strings, or content.
+The client may retry one *connection* before submitting any code, but never
+replays an uncertain kernel execution. Both attempts are bounded and
+release the connection they opened if unsuccessful. A separate remote
+bootstrap failure diagnostic records only a stage and Python exception type.
+
+The `comm` transport remains experimental; no live Comm-mode FPS or latency
+improvement is claimed. The authenticated file-polling transport remains the
+proven fallback. The runtime is still journal-owned and must be
 confirmed released after a trial; if uncertain, run `bridge cleanup` using
 the matching profile and run directory. The existing `files` option remains
 the proven fallback and is the default.
