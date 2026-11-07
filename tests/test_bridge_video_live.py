@@ -93,3 +93,25 @@ def test_live_scene_headless_60_fps_decodes_without_gpu():
     )
     assert result["decoded_frames"] == 24
     assert 35 <= result["live_decoded_fps"] <= 100
+
+
+def test_live_h264_tk_viewer_opens_and_exits_cleanly():
+    """Exercise the actual GUI consumer under Xvfb or a Windows desktop."""
+    _codec_available()
+    import tkinter as tk
+    try:
+        probe = tk.Tk()
+        probe.withdraw()
+        probe.destroy()
+    except tk.TclError as exc:
+        pytest.skip(f"no Tk graphical display available: {exc}")
+    from colabcola.bridge_demo import run_viewer
+    run_viewer(
+        "127.0.0.1", 0, "", width=96, height=64,
+        title="Colab Cola · Live H.264 Tk smoke",
+        worker=lambda outgoing, frames, stopped: run_live_stream(
+            outgoing, frames, stopped, width=96, height=64,
+            fps=12, max_frames=8,
+        ),
+        viewer_stats=True,
+    )
