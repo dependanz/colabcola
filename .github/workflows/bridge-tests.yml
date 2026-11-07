@@ -5,8 +5,11 @@ on:
     paths:
       - 'src/colabcola/bridge_protocol.py'
       - 'src/colabcola/bridge_demo.py'
+      - 'src/colabcola/bridge_colab.py'
+      - 'src/colabcola/bridge_colab_runtime.py'
       - 'src/colabcola/cli.py'
       - 'tests/test_bridge.py'
+      - 'tests/test_bridge_colab.py'
       - '.github/workflows/bridge-tests.yml'
   push:
     branches:
@@ -33,7 +36,7 @@ jobs:
           python -m pip install pytest
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest -q tests/test_bridge.py
+        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q tests/test_bridge.py
+        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py
