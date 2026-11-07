@@ -142,6 +142,10 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
                 comm.send({"v": 1, "kind": "pong", "run_id": run_id,
                            "seq": ping_seq})
         elif kind == "pull":
+            pull_seq = event.get("pull_seq")
+            if (pull_seq is not None and
+                    (type(pull_seq) is not int or not 1 <= pull_seq <= 100000000)):
+                return
             try:
                 body = (root / "frame.bin").read_bytes()
                 if not 20 < len(body) <= MAX_FRAME_BYTES:
@@ -157,9 +161,12 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
                         metrics = candidate
                 except (FileNotFoundError, OSError, UnicodeError, ValueError):
                     pass
-                comm.send({"v": 1, "kind": "frame", "run_id": run_id,
-                           "data": base64.b64encode(body).decode("ascii"),
-                           "metrics": metrics})
+                reply = {"v": 1, "kind": "frame", "run_id": run_id,
+                         "data": base64.b64encode(body).decode("ascii"),
+                         "metrics": metrics}
+                if pull_seq is not None:
+                    reply["pull_seq"] = pull_seq
+                comm.send(reply)
             except (OSError, ValueError):
                 return
         elif kind == "close":
