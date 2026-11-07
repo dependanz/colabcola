@@ -157,6 +157,10 @@ def simulate_link(packets: list[VideoAccessUnit], fps: int,
         if len(pending_arrivals) >= config.max_inflight:
             dropped.append((seq, "queue_full"))
             continue
+        # Guard aggregate admitted encoded bytes before appending another
+        # virtual in-flight unit, not only after scheduling the full trace.
+        if wire_sent + wire_size > MAX_WIRE_BYTES:
+            raise ValueError("total admitted video wire bytes exceeded offline limit")
         start = max(source_time, link_free_at)
         finish = _serialize_ms(start, wire_size * 8, config)
         link_free_at = finish
@@ -177,8 +181,6 @@ def simulate_link(packets: list[VideoAccessUnit], fps: int,
             dropped.append((seq, "stale"))
         else:
             delivered.append(ScheduledUnit(packet, source_time, arrival, wire_size))
-    if wire_sent > MAX_WIRE_BYTES:
-        raise ValueError("total admitted video wire bytes exceeded offline limit")
     if len(delivered) + len(dropped) != len(packets):
         raise RuntimeError("impairment frame accounting mismatch")
     return LinkTrace(len(packets), tuple(delivered), tuple(dropped),
