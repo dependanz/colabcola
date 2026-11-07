@@ -209,6 +209,18 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
     assert len(channel.replies) == 1
     assert base64.b64decode(channel.replies[0]["data"], validate=True) == rendered
     assert channel.replies[0]["metrics"] == renderer_metrics
+    channel.callback({"content": {"data": {"v": 1, "kind": "rate", "run_id": run_id,
+                                           "seq": 1, "fps": 12}}})
+    assert json.loads((root / "rate-control.json").read_text()) == {
+        "run_id": run_id, "seq": 1, "fps": 12,
+    }
+    assert channel.replies[-1]["kind"] == "rate_ack"
+    assert channel.replies[-1]["seq"] == 1
+    channel.callback({"content": {"data": {"v": 1, "kind": "rate", "run_id": run_id,
+                                           "seq": 2, "fps": 999}}})
+    channel.callback({"content": {"data": {"v": 1, "kind": "rate", "run_id": "wrong",
+                                           "seq": 3, "fps": 6}}})
+    assert json.loads((root / "rate-control.json").read_text())["fps"] == 12
     channel.callback({"content": {"data": {"v": 1, "kind": "close", "run_id": run_id}}})
     assert channel.closed
     assert (root / "stop").is_file()
@@ -572,3 +584,31 @@ def test_comm_frame_uses_sanitized_remote_renderer_telemetry():
     peer.comm_id = "my-comm"
     assert peer.next_frame(.5)[0] == 9
     assert peer.latest_renderer_metrics == validated_renderer_metrics(metrics, rid)
+
+
+def test_kernel_comm_frame_reader_handles_rate_ack_and_rate_metrics():
+    from colabcola.bridge_comm import validated_renderer_metrics
+    rid = "b" * 32
+    ppm = (b"P6" + bytes((10,)) + b"640 360" + bytes((10,)) +
+           b"255" + bytes((10,)) + bytes((20, 30, 40)) * (640 * 360))
+    binary = struct.pack("!4sIIII", b"CCB1", 4, 0, 640, 360) + zlib.compress(ppm)
+    metrics = {"schema": 1, "run_id": rid, "seq": 4,
+               "renderer_fps": 11.9, "render_copy_ms": 1.0,
+               "compress_ms": 7.0, "publish_ms": 0.2,
+               "target_fps": 12, "rate_seq": 1}
+    rate_ack = comm_msg({"v": 1, "kind": "rate_ack", "run_id": rid,
+                         "seq": 1, "fps": 12})
+    frame = comm_msg({"v": 1, "kind": "frame", "run_id": rid,
+                      "data": base64.b64encode(binary).decode(), "metrics": metrics})
+    peer = KernelCommBridge(None, None, rid, 6)
+    peer.wire = FakeWire((rate_ack, frame))
+    peer.comm_id = "my-comm"
+    assert peer.next_frame(.5)[0] == 4
+    assert peer.latest_rate_ack == 1
+    assert peer.latest_renderer_metrics == validated_renderer_metrics(metrics, rid)
+    peer.set_render_fps(2, 6)
+    assert peer.wire.shell_channel.sent[-1]["content"]["data"] == {
+        "v": 1, "kind": "rate", "run_id": rid, "seq": 2, "fps": 6
+    }
+    with pytest.raises(ValueError):
+        peer.set_render_fps(3, 100)
