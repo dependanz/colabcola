@@ -8,7 +8,9 @@ import struct
 
 import pytest
 
-from colabcola.bridge_demo import Scene, handle_connection, main, photoimage_from_ppm, render_ppm
+from colabcola.bridge_demo import (Scene, handle_connection, main, photoimage_from_ppm,
+                                 render_ppm, create_viewer_layout, concise_viewer_status,
+                                 VIEWER_STATUS_HEIGHT)
 from colabcola.bridge_protocol import (
     BridgeProtocolError, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     encode_message, read_message, send_message,
@@ -69,6 +71,50 @@ def test_tk_viewer_accepts_raw_ppm_frame():
         image = photoimage_from_ppm(root, frame)
         assert image.width() == 192
         assert image.height() == 120
+    finally:
+        root.destroy()
+
+
+def test_gui_status_formatter_drops_long_transport_telemetry():
+    verbose = ("Tesla T4 · kernel Comm 5.5 FPS · 850 KiB/s · "
+               "pull RTT p50 175 ms · fresh 12/12 · remote render 6.0 FPS · "
+               "render+copy 1 ms · compress 6 ms · publish 0 ms · "
+               "input ACK observed p50 350 ms")
+    status = concise_viewer_status(verbose)
+    assert status == "Tesla T4 · 5.5 FPS · RTT 175 ms"
+    assert len(status) < 50
+    assert concise_viewer_status("Connected · Tesla T4") == "Connected · Tesla T4"
+    assert concise_viewer_status("Disconnected: connection closed") == "Disconnected: connection closed"
+
+
+def test_tk_viewer_fixed_geometry_despite_changing_status_and_image():
+    """Regression for window expanding when long telemetry appeared/disappeared."""
+    import tkinter as tk
+
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        pytest.skip(f"no graphical display available for Tk: {exc}")
+    try:
+        width, height = 640, 360
+        image_label, status = create_viewer_layout(root, width, height)
+        root.update()
+        expected = (root.winfo_width(), root.winfo_height())
+        assert expected == (width, height + VIEWER_STATUS_HEIGHT)
+
+        # Full telemetry is deliberately excluded from window sizing.
+        for value in ("Connecting...", "Tesla T4 · kernel Comm 6 FPS · " + "long " * 180,
+                      "Tesla T4 · kernel Comm 5 FPS"):
+            status.set(concise_viewer_status(value))
+            root.update()
+            assert (root.winfo_width(), root.winfo_height()) == expected
+
+        ppm = (b"P6\\n640 360\\n255\\n" + bytes((16, 32, 48)) * (width * height))
+        image = photoimage_from_ppm(root, ppm)
+        image_label.configure(image=image, text="")
+        image_label.image = image
+        root.update()
+        assert (root.winfo_width(), root.winfo_height()) == expected
     finally:
         root.destroy()
 
