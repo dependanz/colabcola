@@ -381,3 +381,69 @@ def test_comm_bridge_failed_websocket_never_submits_and_cleans_both(monkeypatch)
     assert all(not client._manager.client.commands for client in clients)
     assert "VERY_SENSITIVE_TOKEN" not in str(error.value)
     assert "opened=0" in str(error.value)
+
+
+def test_websocket_probe_records_only_error_class():
+    from colabcola.bridge_ws_probe import KernelWebSocketProbe
+    wire = FakeWire()
+    probe = KernelWebSocketProbe()
+    probe.install(wire)
+    socket = SimpleNamespace(on_error=None)
+    wire.kernel_socket = socket
+    wire._run_websocket()
+    assert callable(socket.on_error)
+    socket.on_error(None, TimeoutError("sensitive-message-never-echoed"))
+    summary = probe.summary(wire)
+    assert "error_type=TimeoutError" in summary
+    assert "sensitive-message" not in summary
+
+
+def test_comm_bridge_retries_attachment_but_executes_once(monkeypatch):
+    from colabcola import bridge_comm
+    rid = "9" * 32
+    details = {"v": 1, "kind": "ready", "run_id": rid,
+               "gpu": "Tesla T4", "device": "cuda", "width": 640, "height": 360}
+    opened = {"header": {"msg_type": "comm_open"},
+              "parent_header": {"msg_id": "request-1"},
+              "content": {"comm_id": "ok-comm", "target_name": TARGET, "data": details}}
+    first = FakeWire()
+    first.connection_ready.clear()
+    second = FakeWire((opened,))
+
+    class NotReady:
+        def is_set(self):
+            return False
+        def wait(self, timeout=None):
+            return False
+
+    first.connection_ready = NotReady()
+    wires = [first, second]
+    created = []
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self._manager = SimpleNamespace(client=wires[len(created)])
+            self.stopped = False
+            created.append(self)
+        def start(self):
+            pass
+        def stop(self):
+            self.stopped = True
+    monkeypatch.setattr(bridge_comm, "safe_client_class", lambda _: FakeClient)
+    monkeypatch.setattr(bridge_comm.time, "sleep", lambda duration: None)
+
+    class Provider:
+        def _execute(self, session, code):
+            pass
+        def _upload(self, session, path, content):
+            pass
+        def _kernel(self, session):
+            return {"id": "owned"}
+    peer = bridge_comm.KernelCommBridge(
+        Provider(), SimpleNamespace(url="https://example.invalid", token="hidden"), rid, 6
+    )
+    assert peer.open() == details
+    assert len(created) == 2 and created[0].stopped and not created[1].stopped
+    assert first.commands == []
+    assert len(second.commands) == 1
+    peer.close()
+    assert created[1].stopped
