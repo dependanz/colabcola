@@ -22,6 +22,25 @@ from .bridge_ws_probe import KernelWebSocketProbe, safe_error_type
 
 TARGET = "colabcola.bridge.v1"
 MAX_ENCODED_FRAME = 3 * 1024 * 1024
+
+
+def validated_renderer_metrics(raw: object, run_id: str) -> dict | None:
+    """Only accept bounded numeric timings tied to this owned remote session."""
+    if not isinstance(raw, dict) or raw.get("schema") != 1 or raw.get("run_id") != run_id:
+        return None
+    seq = raw.get("seq")
+    if type(seq) is not int or not 0 <= seq < 100000000:
+        return None
+    for key in ("renderer_fps", "render_copy_ms", "compress_ms", "publish_ms"):
+        v = raw.get(key)
+        if type(v) not in (int, float) or not 0 <= v <= 10000:
+            return None
+    if raw["renderer_fps"] > 120:
+        return None
+    return {k: raw[k] for k in (
+        "seq", "renderer_fps", "render_copy_ms", "compress_ms", "publish_ms")}
+
+
 _SAFE_BOOTSTRAP_STAGES = frozenset({
     "imports", "loading_renderer", "starting_renderer", "waiting_cuda",
     "creating_comm", "registering_handler", "ready",
@@ -70,6 +89,7 @@ class KernelCommBridge:
         self.wire = None
         self.comm_id = None
         self._closed = False
+        self.latest_renderer_metrics = None
 
     def _send(self, kind: str, **fields: object) -> None:
         if self._closed or not self.comm_id or self.wire is None:
@@ -227,6 +247,8 @@ class KernelCommBridge:
             except (ValueError, TypeError):
                 raise LifecycleError("kernel frame Base64 invalid") from None
             sequence, ack, width, height, ppm = unpack_frame(binary)
+            self.latest_renderer_metrics = validated_renderer_metrics(
+                payload.get("metrics"), self.run_id)
             if width != 640 or height != 360:
                 raise LifecycleError("kernel frame dimensions invalid")
             return sequence, ack, ppm, len(binary)
@@ -266,6 +288,8 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
     transferred = 0
     pulls = 0
     pull_rtts_ms: list[float] = []
+    recent_remote_metrics = None
+    last_remote_metrics_seq = -1
     last_report = time.monotonic()
     last_fresh_frame = last_report
     interval = 1 / poll_hz
@@ -299,6 +323,11 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
             elif now - last_fresh_frame >= 30:
                 raise LifecycleError("kernel renderer published no fresh frame for 30 seconds")
             meter.received_ack(ack, now)
+            remote_metrics = getattr(peer, "latest_renderer_metrics", None)
+            if (isinstance(remote_metrics, dict)
+                    and remote_metrics["seq"] > last_remote_metrics_seq):
+                last_remote_metrics_seq = remote_metrics["seq"]
+                recent_remote_metrics = remote_metrics
             if now-last_report >= 2:
                 elapsed = max(now-last_report, .001)
                 stats = meter.flush()
@@ -307,6 +336,13 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
                 if pull_rtts_ms:
                     result += f" · pull RTT p50 {median(pull_rtts_ms):.0f} ms"
                     result += f" · fresh {seen}/{pulls}"
+                if recent_remote_metrics is not None:
+                    result += (
+                        f" · remote render {recent_remote_metrics['renderer_fps']:.1f} FPS"
+                        f" · render+copy {recent_remote_metrics['render_copy_ms']:.0f} ms"
+                        f" · compress {recent_remote_metrics['compress_ms']:.0f} ms"
+                        f" · publish {recent_remote_metrics['publish_ms']:.0f} ms"
+                    )
                 if stats["ack"] is not None:
                     result += f" · input ACK observed p50 {stats['ack']} ms"
                 print("[colabcola] "+result, flush=True)
@@ -315,6 +351,7 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
                 transferred = 0
                 pulls = 0
                 pull_rtts_ms.clear()
+                recent_remote_metrics = None
                 last_report = now
             sleep_for = max(0, interval-(time.monotonic()-start))
             if sleep_for:
