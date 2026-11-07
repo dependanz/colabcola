@@ -9,6 +9,7 @@ import pytest
 from colabcola.bridge_video_stream import (
     AccessUnitParser, MAGIC, VERSION, MAX_PACKET, PACKET_HEADER,
     VideoAccessUnit, compare_stream, packet_bytes, receive_packet,
+    frame_stage_times_ms,
 )
 
 
@@ -65,6 +66,17 @@ def test_receiver_rejects_oversized_frame_header_before_payload_allocation():
         receiver.close()
 
 
+def test_frame_latency_stage_durations_sum_to_total_age():
+    # 50ms before access unit, .4ms for local socket, 30ms for decoder.
+    stages = frame_stage_times_ms(1_000_000_000, 1_050_000_000,
+                                  1_050_400_000, 1_080_400_000)
+    assert stages == pytest.approx((50, .4, 30))
+    assert sum(stages) == pytest.approx(80.4)
+    for times in ((4, 3, 5, 6), (-1, 3, 5, 6), (1, 2, 4, 3)):
+        with pytest.raises(ValueError):
+            frame_stage_times_ms(*times)
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="optional FFmpeg unavailable")
 def test_persistent_encoder_and_decoder_recover_frames_before_source_finishes():
     report = compare_stream(width=96, height=64, frames=24, fps=12, pattern="square")
@@ -74,6 +86,10 @@ def test_persistent_encoder_and_decoder_recover_frames_before_source_finishes():
     assert report["decoded_before_source_finished"] >= 3
     assert 4 <= report["live_decode_fps"] <= 30
     assert report["capture_to_decoded_p50_ms"] > 0
+    for stage in ("capture_to_packet_p50_ms", "packet_to_socket_p50_ms",
+                  "socket_to_decoded_p50_ms"):
+        assert report[stage] >= 0
+    assert report["capture_to_decoded_frame_periods"] > 0
     assert report["keyframes"] >= 1
     assert report["h264_bytes"] > 0
     assert report["scope"].startswith("paced offline local")
