@@ -10,6 +10,7 @@ on:
       - 'src/colabcola/bridge_colab_runtime.py'
       - 'src/colabcola/bridge_colab_comm_runtime.py'
       - 'src/colabcola/bridge_comm.py'
+      - 'src/colabcola/bridge_ws_probe.py'
       - 'src/colabcola/cli.py'
       - 'tests/test_bridge.py'
       - 'tests/test_bridge_colab.py'
