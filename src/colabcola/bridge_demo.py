@@ -367,6 +367,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
+    remote.add_argument("--benchmark-sweep", action="store_true",
+                        help="compare 6/6, 12/6, 6/12, 12/12, and repeated 6/6 in one Comm session")
+    remote.add_argument("--benchmark-phase-seconds", type=int, default=12)
     remote.add_argument("--max-seconds", type=int, default=600)
     remote.add_argument("--confirm-allocation", action="store_true")
     remote.add_argument("--preflight-only", action="store_true")
@@ -388,6 +391,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if not 120 <= args.max_seconds <= 1800:
                 parser.error("colab --max-seconds must be within 120..1800")
+            if args.benchmark_sweep:
+                from .bridge_sweep import MAX_PHASE_SECONDS, MIN_PHASE_SECONDS
+                if args.transport != "comm" or (args.fps, args.poll_hz) != (6, 6):
+                    parser.error("benchmark sweep requires --transport comm --fps 6 --poll-hz 6")
+                if not MIN_PHASE_SECONDS <= args.benchmark_phase_seconds <= MAX_PHASE_SECONDS:
+                    parser.error("benchmark phase duration must be between 10 and 40 seconds")
+                if args.max_seconds < args.benchmark_phase_seconds * 5 + 80:
+                    parser.error("benchmark max-seconds must cover all five phases plus startup")
             return run_colab(args)
         except LifecycleError as exc:
             print("[colabcola] " + str(exc))
