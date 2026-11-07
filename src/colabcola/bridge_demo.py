@@ -275,7 +275,13 @@ def create_viewer_layout(root, width: int, height: int):
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
                worker=None, viewer_stats: bool = False,
-               timestamp_local_input: bool = False) -> None:
+               timestamp_local_input: bool = False,
+               poll_interval_ms: int = 30) -> None:
+    # Preserve the 30ms viewer default for existing transports; allow only
+    # explicit local experiments to request a shorter bounded Tk poll.
+    if (type(poll_interval_ms) is not int
+            or not 5 <= poll_interval_ms <= 100):
+        raise ValueError("Tk poll interval must be an integer between 5 and 100 ms")
     # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
@@ -342,7 +348,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
             summary = gui_meter.report(time.monotonic())
             if summary is not None:
                 print("[colabcola] " + summary, flush=True)
-        root.after(30, poll)
+        root.after(poll_interval_ms, poll)
 
     label.bind("<Motion>", mouse)
     root.bind("<KeyPress>", lambda e: enqueue({"event": "key", "key": e.keysym[:32]}))
@@ -361,7 +367,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
 
     thread = threading.Thread(target=dispatch, daemon=True)
     thread.start()
-    root.after(30, poll)
+    root.after(poll_interval_ms, poll)
     root.mainloop()
     stopped.set()
     thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
