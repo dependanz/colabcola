@@ -72,7 +72,7 @@ Python workload + inputs
 
 Colab Cola is being developed as a **connection between local applications and remote compute**. Its Python job runner, verified artifact transport, and automatic checkpoint recovery remain core capabilities. Future interactive sessions would also carry input events, rendered frames, and other application I/O across that connection, with provider-independent transports.
 
-An experimental **loopback-only** graphics/input bridge is under development; it does not yet connect to managed Colab runtimes. See [Interactive bridge](docs/INTERACTIVE_BRIDGE.md) for a runnable local demonstration, tests, and the remaining integration work.
+The experimental bridge now includes a local graphics/input demo and an opt-in, **not-yet-live-validated** managed T4 renderer using Colab's authenticated Jupyter file transport. This is not general application virtualization. See [Interactive bridge](docs/INTERACTIVE_BRIDGE.md) for commands, safety limits, tests, and remaining work.
 
 ## Platform support
 
