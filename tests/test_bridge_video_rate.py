@@ -29,14 +29,15 @@ def test_rate_policy_bounds_and_hysteresis():
         {"recovered_age_ms": 150}, {"congested_age_ms": -1},
         {"control_delay_ms": math.nan}, {"control_delay_ms": -1},
         {"min_switch_ms": float("inf")}, {"max_switches": 21},
-        {"recovery_samples": 0}, {"max_switches": True},
+        {"recovery_samples": 0}, {"congestion_samples": 0},
+        {"max_switches": True},
     )
     for options in invalid:
         with pytest.raises(ValueError):
             RateConfig(**options)
 
     cfg = RateConfig(congested_age_ms=100, recovered_age_ms=50,
-                     recovery_samples=2, control_delay_ms=20,
+                     recovery_samples=2, congestion_samples=1, control_delay_ms=20,
                      min_switch_ms=60)
     policy = RateReceiver(cfg)
     policy.observe(_arrival(0, 110))
@@ -58,6 +59,25 @@ def test_rate_policy_bounds_and_hysteresis():
     assert policy.requests[1]["target_kbps"] == cfg.high_kbps
     assert policy.apply_due(9, 285, cfg.low_kbps) == cfg.low_kbps
     assert policy.apply_due(10, 305, cfg.low_kbps) == cfg.high_kbps
+
+
+def test_transient_age_spikes_require_consecutive_congestion_samples():
+    settings = RateConfig(
+        congested_age_ms=100, recovered_age_ms=50,
+        congestion_samples=3, recovery_samples=4,
+        min_switch_ms=150,
+    )
+    controller = RateReceiver(settings)
+    controller.observe(_arrival(0, 110))  # high delay
+    controller.observe(_arrival(1, 142))  # high delay
+    controller.observe(_arrival(2, 155))  # age 88, resets
+    assert controller.requests == []
+    controller.observe(_arrival(3, 210))  # age 110
+    controller.observe(_arrival(4, 245))  # age 112
+    assert controller.requests == []
+    controller.observe(_arrival(5, 280))  # age 113; third consecutive
+    assert len(controller.requests) == 1
+    assert controller.requests[0]["target_kbps"] == settings.low_kbps
 
 
 def test_rate_receiver_only_sees_arrived_packets_and_gap_triggers():
@@ -131,7 +151,7 @@ def test_delayed_feedback_generates_actual_idr_at_future_frame():
     cfg = RateConfig(
         high_kbps=650, low_kbps=95,
         congested_age_ms=45, recovered_age_ms=0,
-        recovery_samples=30, control_delay_ms=35,
+        recovery_samples=30, congestion_samples=1, control_delay_ms=35,
         min_switch_ms=100, max_switches=2,
     )
     link = LinkConfig(delay_ms=65, jitter_ms=0,
