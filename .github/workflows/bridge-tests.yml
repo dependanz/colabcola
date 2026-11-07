@@ -31,5 +31,9 @@ jobs:
         run: |
           python -m pip install -e .
           python -m pip install pytest
-      - name: Run bridge protocol tests
+      - name: Run bridge protocol and Tk tests (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q tests/test_bridge.py
+      - name: Run bridge protocol and Tk tests (Windows)
+        if: runner.os == 'Windows'
         run: python -m pytest -q tests/test_bridge.py
