@@ -116,6 +116,10 @@ def test_local_jupyter_comm_open_pull_input_close(tmp_path):
         send({"kind": "pull"})
         result = poll_frame()
         assert base64.b64decode(result["data"], validate=True) == binary
+        send({"kind": "pull", "pull_seq": 42})
+        tagged = poll_frame()
+        assert tagged["pull_seq"] == 42
+        assert base64.b64decode(tagged["data"], validate=True) == binary
         send({"kind": "input", "seq": 1, "event": "mouse", "x": .8, "y": .4})
         send({"kind": "pull"})
         assert poll_frame()["kind"] == "frame"
