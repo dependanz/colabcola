@@ -26,8 +26,7 @@ from .bridge_colab import offer_update
 from .bridge_video_stream import VideoAccessUnit, packet_bytes, receive_packet
 
 MAX_LIVE_SECONDS = 180
-MAX_LIVE_FRAMES = 240
-MAX_LIVE_BYTES = 640 * 360 * 3
+MAX_LIVE_FRAMES = 60 * MAX_LIVE_SECONDS
 
 
 @dataclass
@@ -69,7 +68,8 @@ def validate_live(width: int, height: int, fps: int, max_frames: int) -> None:
             or width % 2 or height % 2
             or not 64 <= width <= 640 or not 48 <= height <= 360
             or type(fps) is not int or not 1 <= fps <= 60
-            or type(max_frames) is not int or not 4 <= max_frames <= MAX_LIVE_FRAMES):
+            or type(max_frames) is not int or not 4 <= max_frames <= MAX_LIVE_FRAMES
+            or max_frames > fps * MAX_LIVE_SECONDS):
         raise ValueError("live video dimensions, FPS, or frame limit outside bounds")
 
 
@@ -145,10 +145,8 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
     input_acks_ms = []
     delivered = 0
     input_changes = 0
-    source_done = threading.Event()
     first_decode = None
     last_decode = None
-    last_input_seq = 0
     last_input_latency_seq = 0
 
     def produce():
@@ -200,7 +198,6 @@ def run_live_stream(outgoing: queue.Queue, frames: queue.Queue, stopped,
         except BaseException as exc:
             failures.put(type(exc).__name__)
         finally:
-            source_done.set()
             try:
                 writer.shutdown(socket.SHUT_WR)
             except OSError:
@@ -315,24 +312,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--frames", type=int, default=120)
+    parser.add_argument("--max-seconds", type=int, default=30,
+                        help="bounded local demo duration, between 1 and 180 seconds")
+    parser.add_argument("--frames", type=int, default=None,
+                        help="optional exact frame budget, capped by --max-seconds")
     parser.add_argument("--show", action="store_true",
                         help="display the live source in the local Tk viewer")
     args = parser.parse_args(argv)
-    validate_live(args.width, args.height, args.fps, args.frames)
+    if not 1 <= args.max_seconds <= MAX_LIVE_SECONDS:
+        parser.error("--max-seconds must be 1..180")
+    frame_budget = args.frames if args.frames is not None else args.fps * args.max_seconds
+    if frame_budget > args.fps * args.max_seconds:
+        parser.error("--frames cannot exceed the explicit time budget")
+    validate_live(args.width, args.height, args.fps, frame_budget)
     if args.show:
         from .bridge_demo import run_viewer
         run_viewer("127.0.0.1", 0, "", width=args.width, height=args.height,
                    title="Colab Cola · Live H.264 local proof",
                    worker=lambda outgoing, frames, stopped: run_live_stream(
                        outgoing, frames, stopped, width=args.width,
-                       height=args.height, fps=args.fps, max_frames=args.frames),
+                       height=args.height, fps=args.fps, max_frames=frame_budget),
                    viewer_stats=True)
     else:
         stopped = threading.Event()
         run_live_stream(queue.Queue(maxsize=64), queue.Queue(maxsize=2),
                         stopped, width=args.width, height=args.height,
-                        fps=args.fps, max_frames=args.frames)
+                        fps=args.fps, max_frames=frame_budget)
     return 0
 
 
