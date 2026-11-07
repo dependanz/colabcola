@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from colabcola.bridge_viewer_stats import ViewerPresentationMeter
+from colabcola.bridge_viewer_stats import LocalFrameTiming, ViewerPresentationMeter
 
 
 def test_gui_meter_counts_configured_images_independently_of_network_fps():
@@ -41,3 +41,55 @@ def test_viewer_meter_is_opt_in_and_does_not_allocate_during_preflight(monkeypat
     assert main(base + ["--transport", "comm", "--viewer-stats"]) == 0
     assert main(base) == 0
     assert selected == [True, False]
+
+
+def test_local_input_callback_to_tk_configuration_is_measured_once():
+    meter = ViewerPresentationMeter(started_at=10.0)
+    sample = LocalFrameTiming(
+        captured_ns=1_040_000_000,
+        decoded_ns=1_043_000_000,
+        input_callback_ns=1_020_000_000,
+    )
+    meter.presented(6.0)
+    meter.configured_timed_frame(sample, 1_050_000_000)
+    # The same applied input persists in later video frames, but must
+    # not be double-counted as another input acknowledgment.
+    meter.presented(5.0)
+    meter.configured_timed_frame(
+        LocalFrameTiming(1_070_000_000, 1_073_000_000, 1_020_000_000),
+        1_080_000_000,
+    )
+    report = meter.report(12.0)
+    assert "GUI configured 1.0 FPS" in report
+    assert "capture→Tk p50 10.0 ms" in report
+    assert "decode→Tk p50 7.0 ms" in report
+    assert "input callback→Tk p50 30.0 ms (1 changed frames)" in report
+
+    # Per-window frame timings reset, but the last acknowledged input
+    # identity persists across reporting windows.
+    meter.presented(5.0)
+    meter.configured_timed_frame(
+        LocalFrameTiming(1_090_000_000, 1_094_000_000, 1_020_000_000),
+        1_100_000_000,
+    )
+    report = meter.report(14.1)
+    assert "input callback→Tk" not in report
+
+
+def test_viewer_timing_rejects_invalid_or_future_input_before_counting():
+    meter = ViewerPresentationMeter(started_at=0)
+    with pytest.raises(ValueError):
+        meter.configured_timed_frame(
+            LocalFrameTiming(100, 150, 110), 200,
+        )  # Input cannot be applied after this frame's capture.
+    with pytest.raises(ValueError):
+        meter.configured_timed_frame(
+            LocalFrameTiming(150, 100, None), 200,
+        )
+    with pytest.raises(ValueError):
+        meter.configured_timed_frame(
+            LocalFrameTiming(100, 150, True), 200,
+        )
+    assert meter.report(2.0) == (
+        "GUI configured 0.0 FPS · Tk image+label p50 n/a ms"
+    )
