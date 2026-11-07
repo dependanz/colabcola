@@ -168,12 +168,12 @@ For an explicitly authorized trial on a paid/eligible Colab account, use a
 
 ```powershell
 colabcola --profile pypi-new-account-test bridge colab `
-  --run-dir I:\colabcola-bridge-t4-proof-v5 `
-  --transport comm --gpu T4 --fps 6 --poll-hz 6 `
-  --max-seconds 300 --confirm-allocation
+  --run-dir I:\colabcola-bridge-t4-proof-v7 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --max-seconds 180 --confirm-allocation
 ```
 
-Two live Comm-mode trials have not yet reached graphical streaming.
+Earlier Comm-mode trials (v4 and v5) failed before streaming.
 The v4 experiment reached the remote Python bootstrap but reported an
 unspecified execution error; its journal later confirmed `released`.
 The v5 experiment allocated its owned T4 but the kernel WebSocket readiness
@@ -182,24 +182,46 @@ did not prove whether the WebSocket was rejected, closed, or timed out.
 Colab's documented `ipykernel.comm.Comm` is preferred for the remote
 Comm handler, with `comm.create_comm` as a fallback.
 
-The new WebSocket attachment probe reports only whether the connection
-opened, is currently connected, subsequently closed, whether its thread
-remains alive, an optional numeric close code, and an allowlisted exception
-type. It never exposes endpoints, credentials, exception strings, or content.
+The v6 real T4 trial **successfully established persistent Jupyter Comm**
+with streamed CUDA-rendered frames and bidirectional input. At a configured
+6 FPS render/pull target, observed delivered frame rates were about **5.2–5.9
+FPS**, with **552–832 KiB/s** of compressed-frame throughput and fresh
+input-to-ACK observation medians around **321–383 ms**. The runtime was
+explicitly confirmed released. Compared with the v3 polling experiment, this
+was a substantial improvement, but it is **not** a measurement of peak
+streaming capacity or input-to-photon latency.
+
+The WebSocket attachment probe reports only whether the connection opened,
+is currently connected, subsequently closed, whether its thread remains
+alive, an optional numeric close code, and an allowlisted exception type.
+It never exposes endpoints, credentials, exception strings, or content.
 The client may retry one *connection* before submitting any code, but never
-replays an uncertain kernel execution. Both attempts are bounded and
-release the connection they opened if unsuccessful. A separate remote
-bootstrap failure diagnostic records only a stage and Python exception type.
+replays an uncertain kernel execution. Both attempts are bounded and release
+the connection they opened if unsuccessful.
 
-The `comm` transport remains experimental; no live Comm-mode FPS or latency
-improvement is claimed. The authenticated file-polling transport remains the
-proven fallback. The runtime is still journal-owned and must be
-confirmed released after a trial; if uncertain, run `bridge cleanup` using
-the matching profile and run directory. The existing `files` option remains
-the proven fallback and is the default.
+### Optional v7 throughput characterization
 
-The expected advantage is fewer per-frame HTTP round trips, not guaranteed
-60 FPS, network quality, or support for unmodified graphical applications.
+The Comm transport can now run with up to **12 FPS rendering** and **12 Hz frame
+pulls**, while the files transport retains its 6 Hz polling cap. Defaults are
+unchanged. The client additionally reports median frame-pull request/response
+time (`pull RTT p50`) and the fraction of received frames that are fresh
+(`fresh A/B`); it fails if the worker sends no new frame for 30 seconds.
+
+Use a new run directory for each explicit allocation:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v7 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --max-seconds 180 --confirm-allocation
+```
+
+This is a **benchmark**, not a promised 12 FPS. The `comm` path remains an
+experimental provider adapter, and the authenticated file-polling transport
+remains available as a proven fallback. Always verify terminal `released`
+state; if uncertain, run `bridge cleanup` using the same profile and
+run directory. No unmodified desktop application or generic local GPU
+virtualization is claimed.
 
 ## Architecture boundary
 
