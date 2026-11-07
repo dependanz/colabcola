@@ -248,12 +248,47 @@ colabcola --profile pypi-new-account-test bridge colab `
   --max-seconds 180 --confirm-allocation
 ```
 
-This is a real Colab GPU allocation that may consume compute units.
-If v8 restores near-6-FPS delivery, high renderer activity rather than the
-host pull cap becomes a stronger hypothesis; it would still require the
-remote timing measurements to distinguish computation from host-kernel
-scheduling or the network. No unmodified desktop application or generic
-local GPU virtualization is claimed.
+### v8 observed results
+
+The real v8 trial (`--fps 6 --poll-hz 12`) recovered to roughly **5.0–6.2
+unique FPS** after startup. The remote renderer itself reported **5.9–6.0
+FPS**; frame-pull RTT medians were mostly **156–203 ms**, input ACK
+observation medians **313–429 ms**, and the T4 released successfully.
+Remote **CUDA render-and-copy** median was around **1 ms**, **zlib compression**
+around **5–10 ms**, and atomic publication around **0–1 ms**.
+
+This result isolates the changed variable more cleanly: raising the host
+pull cap from 6 to 12 Hz, while retaining 6 FPS rendering, did **not**
+reproduce v7's ~2.3 FPS slowdown. The extra pull capacity is generally
+unused because only one request is in flight and its RTT is longer than
+the ideal 83 ms 12 Hz period. The remaining candidate cause is linked to
+the higher 12 FPS remote-rendering setting (or between-run differences),
+not proven GPU throughput saturation.
+
+The local Tk viewer is now fixed at **frame width × (frame height + 28 px)**.
+The status footer uses concise telemetry, independent of the long, varying
+performance strings in the terminal, so its text should not repeatedly
+resize the graphical window.
+
+### Optional isolated v9 experiment
+
+To compare with v6 while changing only the remote renderer frequency,
+run a separate, explicitly authorized 12 FPS renderer / 6 Hz pull trial:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v9 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 6 `
+  --max-seconds 180 --confirm-allocation
+```
+
+This can consume compute units. The remote timing instrumentation should
+distinguish whether a higher renderer target actually increases frame
+production and whether it inflates the render-copy or compression cost.
+Also compare frame-pull RTT and ACKs, and confirm terminal `phase: released`.
+The existing Python job runner and checkpoint recovery are unaffected.
+No unmodified desktop application or generic local GPU virtualization is
+claimed.
 
 ## Architecture boundary
 
