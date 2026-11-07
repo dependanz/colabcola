@@ -131,7 +131,7 @@ async def handle_connection(
             inputs.cancel()
             try:
                 await inputs
-            except (asyncio.CancelledError, asyncio.IncompleteReadError, ConnectionError):
+            except (asyncio.CancelledError, asyncio.IncompleteReadError, ConnectionError, BridgeProtocolError):
                 pass
         writer.close()
         try:
@@ -236,7 +236,7 @@ def run_viewer(host: str, port: int, token: str) -> None:
     root = tk.Tk()
     root.title("Colab Cola · Interactive Bridge Prototype")
     status = tk.StringVar(value="Connecting...")
-    label = tk.Label(root, text="Waiting for frames", width=WIDTH, height=1)
+    label = tk.Label(root, text="Waiting for frames", width=30, height=8)
     label.pack()
     tk.Label(root, textvariable=status).pack()
     last_motion = [0.0]
