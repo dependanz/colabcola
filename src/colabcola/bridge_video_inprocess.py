@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 from fractions import Fraction
 import json
-import math
 import socket
 import time
 import zlib
