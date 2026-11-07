@@ -96,6 +96,16 @@ def test_persistent_encoder_and_decoder_recover_frames_before_source_finishes():
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="optional FFmpeg unavailable")
+def test_low_delay_decoder_mode_is_explicit_and_decodes_all_frames():
+    report = compare_stream(width=96, height=64, frames=24, fps=12,
+                            pattern="square", decoder_low_delay=True)
+    assert report["decoder_low_delay"] is True
+    assert report["decoded_frames"] == 24
+    assert report["decoded_before_source_finished"] > 0
+    assert report["capture_to_decoded_p50_ms"] > 0
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="optional FFmpeg unavailable")
 def test_stream_scene_pattern_roundtrip_small():
     report = compare_stream(width=64, height=48, frames=8, fps=12, pattern="scene")
     assert report["decoded_frames"] == 8
