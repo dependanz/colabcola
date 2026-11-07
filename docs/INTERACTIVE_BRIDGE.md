@@ -1234,6 +1234,71 @@ reuses the v23 encoded access-unit link and actual PyAV decoder,
 but does **not** alter the working managed-Colab bridge or existing
 real Tk viewer.
 
+### Verified v24 CI comparison (local virtual link only)
+
+Actual H.264 encoding/decoding and the scheduling model passed
+**132 tests on Ubuntu** and **126 on Windows, with six unrelated
+external-FFmpeg-dependent tests skipped**. The optional PyAV-based
+feedback and playout tests exercised genuine encoded packets on
+both operating systems. All runs are offline and require no
+managed Colab allocation.
+
+#### Lost predicted frame and single feedback IDR
+
+For the **128×72**, **30 FPS**, **36-frame** stream, periodic
+GOP=12 and explicit erasure at source index 5, the Linux CI
+reports:
+
+| Virtual result | Periodic IDR | Single feedback IDR |
+| --- | ---: | ---: |
+| Missing frame detected | frame 5 at 240 ms | same |
+| Feedback arrives at sender | n/a | 260 ms |
+| Next usable IDR | frame 12 | **frame 8** |
+| Actually decoded frames | **29/36** | **33/36** |
+| Valid runs | 0–4, 12–35 | 0–4, 8–35 |
+| Delivered media wire bytes | 12,852 | 13,165 |
+| Actual encoded IDRs | 3 | 4 |
+| 40 ms virtual playout buffer: timely frames | 29 | **33** |
+
+The receiver did not learn about missing frame 5 until
+a later access unit arrived at 240 ms. One modeled
+20 ms feedback trip reaches the sender at virtual 260 ms,
+and the **first source frame strictly after that** is 8
+(266.7 ms). A real encoder reset at frame 8 produces
+a verified, self-contained IDR; subsequent frames decode
+normally. This recovers **four extra frames** with
+approximately **2.4% more admitted media bytes** in
+this small, fixed source test. There is no feedback packet
+bandwidth accounting, CPU encoder-reset timing or repeated
+loss handling. The improvement is neither guaranteed under
+other network conditions nor proof of a live feedback protocol.
+
+#### Fluctuating link and playout latency
+
+For the no-loss **128×72**, **30 FPS**, **48-frame** stream
+under 50 ms base delay, ±20 ms jitter and piecewise
+2,500 → 130 → 2,000 kbps, actual H.264 decoding
+succeeded for 48/48 frames. The simplified virtual
+fixed-deadline presentation model produced:
+
+| Intentionally added playout delay | Timely frames | Late decoded frames |
+| --- | ---: | ---: |
+| 40 ms | **8/48** | 40 |
+| 80 ms | **42/48** | 6 |
+| 120 ms | **48/48** | 0 |
+| 180 ms | 48/48 | 0 |
+| 250 ms | 48/48 | 0 |
+
+A fixed 120 ms delay hides the modeled jitter for these
+frames, at the expense of adding 120 ms to the source-to-
+scheduled-display age. A shorter 40 ms buffer keeps a
+fresher target deadline but drops most frames from
+their intended presentation slots. Neither approach
+can reconstruct a missing H.264 reference frame.
+This simplified model does not simulate a true OS
+display pipeline, receiver clock recovery or
+interactive input response.
+
 ### Two H.264 keyframe policies
 
 - **Periodic:** encode real synthetic H.264 with fixed closed GOP and
