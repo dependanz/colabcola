@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from dataclasses import dataclass
+from fractions import Fraction
 import json
 import math
 
@@ -85,6 +86,13 @@ class RateReceiver:
 
     def observe(self, item: ScheduledUnit) -> None:
         if (not isinstance(item, ScheduledUnit)
+                or not isinstance(item.packet, VideoAccessUnit)
+                or type(item.arrival_ms) not in (int, float)
+                or type(item.source_ms) not in (int, float)
+                or not math.isfinite(item.arrival_ms)
+                or not math.isfinite(item.source_ms)
+                or item.source_ms < 0
+                or item.arrival_ms < item.source_ms
                 or item.arrival_ms < self.last_arrival_ms
                 or item.packet.seq < self.expected_seq):
             raise ValueError("noncausal encoded-frame observation")
@@ -164,8 +172,8 @@ def _encoder(av, width: int, height: int, fps: int, gop: int, kbps: int):
     e.width = width
     e.height = height
     e.pix_fmt = "yuv420p"
-    e.time_base = __import__("fractions").Fraction(1, fps)
-    e.framerate = __import__("fractions").Fraction(fps, 1)
+    e.time_base = Fraction(1, fps)
+    e.framerate = Fraction(fps, 1)
     e.thread_count = 1
     e.bit_rate = kbps * 1000
     e.options = {
