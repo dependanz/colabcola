@@ -132,6 +132,52 @@ authenticated Colab kernel and file APIs for a research visualization. Users
 remain responsible for the current Google Colab terms and their plan's
 compute-unit balance. It does not bypass usage limits.
 
+## Persistent Jupyter Comm transport (development preview)
+
+The first T4 proof confirmed the Jupyter Contents polling bottleneck: typical
+frame GET requests took roughly 500–650 ms and input PUT requests roughly
+380–625 ms; local decompression was generally under 10 ms. A single GET also
+stalled for 7.56 seconds. Request-by-request file transfer is fundamentally
+unsuited to low-latency graphics.
+
+The experimental `--transport comm` option connects to the **existing owned
+Colab kernel** using its authenticated Jupyter WebSocket rather than reading
+a file over HTTP for every frame and writing a file over HTTP for every input.
+
+The same remote CUDA renderer still computes and publishes frames inside the
+runtime. A small kernel Comm handler sends the latest compressed frame through
+IOPub when the local viewer grants one frame credit, and receives normalized
+keyboard/mouse messages on the shell channel. No unauthenticated TCP listener,
+remote desktop service, or tunnel is created. A single frame credit bounds
+in-flight video data, and the host discards redundant frames.
+
+To prepare locally without using a T4:
+
+```powershell
+python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py
+colabcola --profile pypi-new-account-test bridge colab --transport comm --preflight-only
+```
+
+For an explicitly authorized trial on a paid/eligible Colab account, use a
+**new run directory**:
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v4 `
+  --transport comm --gpu T4 --fps 6 --poll-hz 6 `
+  --max-seconds 300 --confirm-allocation
+```
+
+This is **not yet live-verified on Colab**. Local real-kernel integration
+tests verify the Jupyter Comm messaging machinery, but Google may relay
+WebSockets differently. The runtime is still journal-owned and must be
+confirmed released after a trial; if uncertain, run `bridge cleanup` using
+the matching profile and run directory. The existing `files` option remains
+the proven fallback and is the default.
+
+The expected advantage is fewer per-frame HTTP round trips, not guaranteed
+60 FPS, network quality, or support for unmodified graphical applications.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
