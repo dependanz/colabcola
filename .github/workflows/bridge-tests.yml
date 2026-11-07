@@ -10,12 +10,14 @@ on:
       - 'src/colabcola/bridge_colab_runtime.py'
       - 'src/colabcola/bridge_colab_comm_runtime.py'
       - 'src/colabcola/bridge_comm.py'
+      - 'src/colabcola/bridge_pipeline.py'
       - 'src/colabcola/bridge_sweep.py'
       - 'src/colabcola/bridge_ws_probe.py'
       - 'src/colabcola/cli.py'
       - 'tests/test_bridge.py'
       - 'tests/test_bridge_colab.py'
       - 'tests/test_bridge_comm.py'
+      - 'tests/test_bridge_pipeline.py'
       - 'tests/test_bridge_sweep.py'
       - 'tests/test_bridge_comm_local_kernel.py'
       - '.github/workflows/bridge-tests.yml'
@@ -44,7 +46,7 @@ jobs:
           python -m pip install pytest ipykernel
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py
+        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py
+        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py
