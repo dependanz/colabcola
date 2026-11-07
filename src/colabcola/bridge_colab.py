@@ -316,11 +316,20 @@ def run_colab(args) -> int:
                             save(args.run_dir, state, "running", gpu_name=details["gpu"],
                                  transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
+                            if getattr(args, "benchmark_sweep", False):
+                                from .bridge_sweep import run_rate_sweep
+                                def work(outgoing, frames, stopped):
+                                    run_rate_sweep(
+                                        peer, details["gpu"], outgoing, frames, stopped,
+                                        deadline, args.benchmark_phase_seconds)
+                            else:
+                                def work(outgoing, frames, stopped):
+                                    stream_comm(
+                                        peer, details["gpu"], outgoing, frames,
+                                        stopped, deadline, args.poll_hz)
                             run_viewer("127.0.0.1", 0, "", width=640, height=360,
                                        title="Colab Cola · T4 (kernel Comm)",
-                                       worker=lambda outgoing, frames, stopped:
-                                           stream_comm(peer, details["gpu"], outgoing, frames,
-                                                       stopped, deadline, args.poll_hz))
+                                       worker=work)
                         finally:
                             peer.close()
                     else:
