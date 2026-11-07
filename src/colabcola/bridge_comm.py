@@ -36,8 +36,10 @@ def bootstrap_error_summary(provider, session, remote: str, run_id: str,
                             reply: object) -> str:
     """Return only vetted error classes and pipeline stages; never error values."""
     name = ""
-    if isinstance(reply, dict) and reply.get("ename") in _SAFE_ERROR_TYPES:
-        name = reply["ename"]
+    if isinstance(reply, dict):
+        reply_type = reply.get("ename")
+        if isinstance(reply_type, str) and reply_type in _SAFE_ERROR_TYPES:
+            name = reply_type
     try:
         diagnostic = provider._json_file(
             session, remote + "/bridge-bootstrap-diagnostic.json")
@@ -47,10 +49,10 @@ def bootstrap_error_summary(provider, session, remote: str, run_id: str,
             and diagnostic.get("run_id") == run_id
             and diagnostic.get("state") == "failed"):
         stage = diagnostic.get("stage")
-        if stage not in _SAFE_BOOTSTRAP_STAGES:
+        if not isinstance(stage, str) or stage not in _SAFE_BOOTSTRAP_STAGES:
             stage = "unknown"
         error_type = diagnostic.get("error_type")
-        if error_type not in _SAFE_ERROR_TYPES:
+        if not isinstance(error_type, str) or error_type not in _SAFE_ERROR_TYPES:
             error_type = name or "RemoteException"
         return f"stage={stage}, error_type={error_type}"
     return "error_type=" + (name or "RemoteException")
