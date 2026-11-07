@@ -1,9 +1,11 @@
-"""v26: causal adaptive H.264 encoding-rate experiment on a virtual link.
+"""v26/v27: causal adaptive H.264 encoding-rate experiments on a virtual link.
 
 Each frame is encoded by real libx264. The sender changes the encoder's
 target bitrate only AFTER receiving a delayed report derived from media
 packets actually observed by the receiver. Any rate switch starts a new
 closed-GOP IDR segment (intentionally modeled as an encoder restart).
+An opt-in receiver silence timer can also request the low rate without a
+new arrival. It knows only elapsed receiver time, never future link state.
 
 The link clock, feedback path, queue limits, jitter and losses are VIRTUAL.
 There is no real socket, GPU, Colab runtime, production media protocol,
@@ -38,6 +40,7 @@ class RateConfig:
     control_delay_ms: float = 35.0
     min_switch_ms: float = 350.0
     max_switches: int = 8
+    silence_timeout_ms: float = 0.0  # disabled preserves the v26 policy
 
     def __post_init__(self) -> None:
         for name, value, lo, hi in (
@@ -56,6 +59,7 @@ class RateConfig:
             ("recovered_age_ms", self.recovered_age_ms, 0, 2000),
             ("control_delay_ms", self.control_delay_ms, 0, 1000),
             ("min_switch_ms", self.min_switch_ms, 0, 5000),
+            ("silence_timeout_ms", self.silence_timeout_ms, 0, 5000),
         ):
             if type(value) not in (int, float) or not math.isfinite(value) or not lo <= value <= hi:
                 raise ValueError(f"invalid {name}")
@@ -66,9 +70,10 @@ class RateConfig:
 class RateReceiver:
     """Receiver-side hysteretic high/low rate requests from observed arrivals.
 
-    Each observation sees only a delivered unit's age and sequence gap.
-    Requests are delayed before reaching the encoder. Pending commands
-    are coalesced; no knowledge of future link rate is used.
+    Observations see only delivered units. The optional silence timer is
+    armed by the first arrival, and advances independently of later media
+    arrivals. Requests use an ideal fixed-delay reverse path; forward
+    media silence is not evidence of reverse-path congestion.
     """
 
     def __init__(self, settings: RateConfig):
@@ -86,6 +91,81 @@ class RateReceiver:
         self.applied: list[dict] = []
         self.observations = 0
         self.gaps = 0
+        self.clock_ms = 0.0
+        self.silence_expired = False
+        self.silence_events: list[dict] = []
+        self.watchdog_stopped = False
+
+    def _request(self, target: int, at_ms: float, *, trigger: str,
+                 seq: int, age_ms: float | None = None,
+                 gap: bool = False, silence_ms: float | None = None) -> None:
+        if (len(self.requests) >= self.settings.max_switches
+                or at_ms < self.last_request_ms + self.settings.min_switch_ms):
+            return
+        request = {
+            "request_id": len(self.requests),
+            "trigger": trigger,
+            "observed_seq": seq,
+            "observed_age_ms": round(age_ms, 3) if age_ms is not None else None,
+            "gap_detected": gap,
+            "generated_at_ms": round(at_ms, 3),
+            "reaches_source_ms": at_ms + self.settings.control_delay_ms,
+            "target_kbps": target,
+        }
+        if silence_ms is not None:
+            request["silence_ms"] = round(silence_ms, 3)
+            request["last_arrival_ms"] = round(self.last_arrival_ms, 3)
+        self.requests.append(request)
+        self.pending.append(request)
+        self.desired_kbps = target
+        self.low_age_streak = 0
+        self.high_age_streak = 0
+        self.last_request_ms = at_ms
+
+    def _advance(self, now_ms: float, *, include_deadline: bool) -> None:
+        if (type(now_ms) not in (int, float) or not math.isfinite(now_ms)
+                or now_ms < self.clock_ms):
+            raise ValueError("receiver time must be finite and monotonic")
+
+        def due(deadline: float) -> bool:
+            return deadline <= now_ms if include_deadline else deadline < now_ms
+
+        timeout = self.settings.silence_timeout_ms
+        if timeout and self.last_arrival_ms >= 0 and not self.watchdog_stopped:
+            deadline = self.last_arrival_ms + timeout
+            if not self.silence_expired and due(deadline):
+                self.silence_expired = True
+                # Samples separated by a media blackout do not demonstrate
+                # continuous recovery, even if the source is already LOW.
+                self.low_age_streak = 0
+                self.high_age_streak = 0
+                self.silence_events.append({
+                    "observed_seq": self.expected_seq - 1,
+                    "last_arrival_ms": round(self.last_arrival_ms, 3),
+                    "timeout_at_ms": round(deadline, 3),
+                })
+            eligible = max(deadline, self.last_request_ms + self.settings.min_switch_ms)
+            if (self.silence_expired and due(eligible)
+                    and self.desired_kbps == self.settings.high_kbps):
+                self._request(
+                    self.settings.low_kbps, eligible, trigger="receiver_silence",
+                    seq=self.expected_seq - 1,
+                    silence_ms=eligible - self.last_arrival_ms,
+                )
+        self.clock_ms = now_ms
+
+    def advance(self, now_ms: float) -> None:
+        """Process timers through now, including a deadline exactly at now.
+
+        Call observe for all arrivals through now first. observe itself
+        processes timers strictly before its arrival, so a packet arriving
+        exactly at the timeout wins that tie and resets the watchdog.
+        """
+        self._advance(now_ms, include_deadline=True)
+
+    def stop_watchdog(self) -> None:
+        """End timer observation with the source; tail arrivals still drain."""
+        self.watchdog_stopped = True
 
     def observe(self, item: ScheduledUnit) -> None:
         if (not isinstance(item, ScheduledUnit)
@@ -97,14 +177,17 @@ class RateReceiver:
                 or item.source_ms < 0
                 or item.arrival_ms < item.source_ms
                 or item.arrival_ms < self.last_arrival_ms
+                or item.arrival_ms < self.clock_ms
                 or item.packet.seq < self.expected_seq):
             raise ValueError("noncausal encoded-frame observation")
+        self._advance(item.arrival_ms, include_deadline=False)
         seq = item.packet.seq
         gap = seq > self.expected_seq
         if gap:
             self.gaps += 1
         self.expected_seq = seq + 1
         self.last_arrival_ms = item.arrival_ms
+        self.silence_expired = False
         self.observations += 1
         age = item.arrival_ms - item.source_ms
         congested = gap or age >= self.settings.congested_age_ms
@@ -121,24 +204,13 @@ class RateReceiver:
         elif (self.desired_kbps == self.settings.low_kbps
               and self.low_age_streak >= self.settings.recovery_samples):
             target = self.settings.high_kbps
-        if (target is None or len(self.requests) >= self.settings.max_switches
-                or item.arrival_ms - self.last_request_ms < self.settings.min_switch_ms):
-            return
-        request = {
-            "request_id": len(self.requests),
-            "observed_seq": seq,
-            "observed_age_ms": round(age, 3),
-            "gap_detected": gap,
-            "generated_at_ms": round(item.arrival_ms, 3),
-            "reaches_source_ms": item.arrival_ms + self.settings.control_delay_ms,
-            "target_kbps": target,
-        }
-        self.requests.append(request)
-        self.pending.append(request)
-        self.desired_kbps = target
-        self.low_age_streak = 0
-        self.high_age_streak = 0
-        self.last_request_ms = item.arrival_ms
+        if target is not None:
+            self._request(
+                target, item.arrival_ms,
+                trigger=("sequence_gap" if gap else "packet_age"
+                         if target == self.settings.low_kbps else "recovery"),
+                seq=seq, age_ms=age, gap=gap,
+            )
 
     def apply_due(self, source_seq: int, source_ms: float,
                   current_kbps: int) -> int:
@@ -155,6 +227,7 @@ class RateReceiver:
         if target != current_kbps:
             self.applied.append({
                 "source_seq": source_seq,
+                "source_ms": round(source_ms, 3),
                 "previous_kbps": current_kbps,
                 "target_kbps": target,
                 "request_ids_coalesced": [r["request_id"] for r in due],
@@ -170,6 +243,8 @@ class RateReceiver:
             "switches_applied": len(self.applied),
             "applied": self.applied,
             "unapplied_commands": len(self.pending),
+            "silence_timeout_ms": self.settings.silence_timeout_ms,
+            "silence_timeouts": self.silence_events,
         }
 
 
@@ -213,18 +288,26 @@ def _raw_frame(np, texture, seq: int):
 
 def stream_with_rate_control(*, width: int, height: int, fps: int,
                              frames: int, gop: int, link: LinkConfig,
-                             rates: RateConfig, adapt: bool) -> tuple[
+                             rates: RateConfig, adapt: bool,
+                             restart_seqs: tuple[int, ...] = ()) -> tuple[
                                  list[VideoAccessUnit], LinkTrace, dict]:
     """Encode in source order, drain only already arrived packets, adapt rate.
 
     The baseline and adaptive streams start with EXACTLY the same encoder
-    configuration. The only rate-switch trigger is delayed receiver feedback.
+    configuration. Rate switches require delayed receiver feedback.
+    restart_seqs is a fixed-high, offline ablation schedule only; it cannot
+    be combined with live feedback and is not a deployable controller.
     """
     _validate_video(width, height, fps, frames, gop)
     if not isinstance(link, LinkConfig) or not isinstance(rates, RateConfig):
         raise ValueError("invalid simulator configuration")
     if type(adapt) is not bool:
         raise ValueError("adapt must be a boolean")
+    if (type(restart_seqs) is not tuple or len(restart_seqs) > 20
+            or any(type(seq) is not int or not 1 <= seq < frames for seq in restart_seqs)
+            or tuple(sorted(set(restart_seqs))) != restart_seqs
+            or (adapt and restart_seqs)):
+        raise ValueError("restart_seqs must be sorted unique fixed-high source indices")
     try:
         import av
         import numpy as np
@@ -244,10 +327,11 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
         if adapt:
             for item in arrived:
                 receiver.observe(item)
+            receiver.advance(now)
             target = receiver.apply_due(seq, now, kbps)
         else:
             target = kbps
-        if target != kbps:
+        if target != kbps or seq in restart_seqs:
             if e.encode(None):
                 raise RuntimeError("unexpected H.264 buffer during rate switch")
             e = _encoder(av, width, height, fps, gop, target)
@@ -269,12 +353,13 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
             capture_ns=round(seq * 1_000_000_000 / fps), data=data,
             keyframe=bool(unit.is_keyframe and is_keyframe(data)),
         )
-        if target != rates.high_kbps and seq == origin_seq and not packet.keyframe:
-            raise RuntimeError("rate change failed to create an IDR")
+        if seq == origin_seq and not packet.keyframe:
+            raise RuntimeError("encoder segment failed to begin with an IDR")
         packets.append(packet)
         media.send(packet, fps=fps)
     if e.encode(None):
         raise RuntimeError("unexpected H.264 packets at source end")
+    receiver.stop_watchdog()
     for item in media.arrive_by(math.inf):
         if adapt:
             receiver.observe(item)
@@ -419,13 +504,14 @@ def compare_rate_control(*, width: int = 128, height: int = 72,
             "control_delay_ms": rates.control_delay_ms,
             "min_switch_ms": rates.min_switch_ms,
             "max_switches": rates.max_switches,
+            "silence_timeout_ms": rates.silence_timeout_ms,
         },
         "controller": controller,
         "fixed_high_rate": baseline,
         "adaptive_rate": adaptive,
         "scope": (
             "real H264 bitrate-constrained encoding and decoding on moving texture; "
-            "causal feedback from virtual received packet age/gaps only; "
+            "causal feedback from received packet age/gaps and optional receiver silence; "
             "no real network, Colab/GPU, GUI, physical presentation or bitrate guarantee"
         ),
     }
@@ -456,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--control-delay-ms", type=float, default=35)
     parser.add_argument("--min-switch-ms", type=float, default=350)
     parser.add_argument("--max-switches", type=int, default=8)
+    parser.add_argument("--silence-timeout-ms", type=float, default=0,
+                        help="receiver silence timeout; 0 preserves the v26 policy")
     parser.add_argument("--buffers-ms", default="80,160,240,350")
     args = parser.parse_args(argv)
     try:
@@ -478,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
             control_delay_ms=args.control_delay_ms,
             min_switch_ms=args.min_switch_ms,
             max_switches=args.max_switches,
+            silence_timeout_ms=args.silence_timeout_ms,
         )
         report = compare_rate_control(
             width=args.width, height=args.height, fps=args.fps,

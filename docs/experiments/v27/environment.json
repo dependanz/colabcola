@@ -1,0 +1,67 @@
+{
+  "base_commit": "16a5956497884e5ed4c371ee0501daeb349fbdb1",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "commands": {
+    "historical.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_watchdog",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_watchdog",
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ]
+  },
+  "source_sha256": {
+    "src/colabcola/bridge_video_rate.py": "04e3bcb008fb108f0941e326d85ce2491456062d1004ea907ac77b75d566b7cb",
+    "src/colabcola/bridge_video_watchdog.py": "73e9b4763cf7001438f0a90b654da5de133361b7aba65aa0244954c35918e557"
+  },
+  "note": "Real local H.264 codec; all media, control and playout timing is virtual. Numerical evidence is not a performance guarantee across codec versions."
+}

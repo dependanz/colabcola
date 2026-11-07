@@ -1545,7 +1545,8 @@ whose virtual bandwidth changed from 1,200 to 90 and back to
 | Link-delivered units | 54 / 90 | 54 / 90 |
 | Actual decoded frames | **36 / 90** | **46 / 90** |
 | Link-dropped units | 36 | 36 |
-| 40 ms fixed playout: timely frames | 29 | **32** |
+| 40 ms fixed playout: timely frames | 0 | **6** |
+| 80 ms fixed playout: timely frames | 29 | **32** |
 | 160 ms fixed playout: timely frames | 36 | **46** |
 | Pooled RGB PSNR over each policy's decoded frames | 12.969 dB | 12.477 dB |
 | RGB PSNR on exactly the same **36** decoded frame IDs | 12.969 dB | **12.585 dB** |
@@ -1562,12 +1563,12 @@ the adaptive version is always better.
 A first, more reactive two-level controller switched
 **eight** times on this trace, exhausting its switch budget
 and recovering 48/90 frames; it also met only 22 deadlines
-at the 40 ms buffer. Adding three consecutive high-delay
+at the 80 ms buffer. Adding three consecutive high-delay
 observations before downshift, eight low-delay observations
 before upshift, and a 350 ms minimum between requests
 produced the four-switch result above. The more stable
 policy traded two total reconstructed frames for better
-40 ms on-time delivery (32 versus 22 in these independent
+80 ms on-time delivery (32 versus 22 in these independent
 controller runs).
 
 **Important causal limitation:** the adapted sender switched
@@ -1575,9 +1576,11 @@ at source frames **7, 18, 62 and 75**. The modeled bandwidth
 outage ran between virtual 600 and 1,750 ms, but the
 critical second downshift did not occur until frame 62
 (about 2,067 ms), *after* the outage ended. Under
-congestion, feedback packets containing the evidence
-can be delayed or starved by the very bottleneck they
-must detect. This controller makes real causal decisions,
+congestion, the forward media packets supplying the receiver's
+evidence can be delayed or filtered out as stale. No new arrival
+means no new rate decision. The reverse control path itself is
+ideal and has a fixed delay; this experiment does not model
+reverse-feedback congestion. This controller makes real causal decisions,
 but its observed improvements should not be confused
 with prompt adaptation to the outage. Its early
 low-rate segment and IDR resets also affect the outcome.
@@ -1654,7 +1657,7 @@ python -m colabcola.bridge_video_rate `
   --max-inflight 10 --max-age-ms 350 `
   --high-kbps 650 --low-kbps 95 `
   --congested-age-ms 110 --recovered-age-ms 65 `
-  --control-delay-ms 35 --min-switch-ms 150 `
+  --control-delay-ms 35 --min-switch-ms 350 `
   --buffers-ms "80,160,240,350" --seed 7
 ```
 
@@ -1674,6 +1677,141 @@ GPU, real transport, GUI, physical display measurement,
 or released batch-runner change. PyAV/NumPy remain optional
 development-only dependencies and production use requires
 separate provider-policy and binary licensing review.
+
+## v27: receiver-silence feedback and restart attribution
+
+The optional `bridge_video_watchdog.py` experiment addresses the
+v26 observation gap: a receiver can now request the low encoder
+target when no usable media packet has arrived for a configured
+interval. Its timer does not inspect the link's bandwidth profile,
+drop decisions, queue contents, or future arrivals. A request still
+waits for the fixed reverse-path delay and can only change a future
+source frame. The original `bridge_video_rate` command leaves this
+timer **disabled by default** (`--silence-timeout-ms 0`).
+
+The four-arm comparison measures:
+
+1. Fixed high target, with the normal periodic GOP.
+2. v26 feedback driven only by arriving packets.
+3. The same feedback with a receiver silence timeout.
+4. Fixed high target, with exactly the timeout run's encoder restart
+   indices and verified IDR schedule. This is an **offline ablation**
+   conditioned on another run, not an independently causal controller.
+
+The source pixels, link parameters and seed are shared. The simulator
+draws random jitter/loss per admitted unit, so different admissions
+can assign draws to different source frames. A second zero-jitter,
+zero-random-loss run removes that source of ambiguity. All reported
+matched PSNR values use the same frame IDs decoded by **all four**
+arms; the JSON records that intersection explicitly.
+
+### Result: earlier action does not yet improve video continuity
+
+These retained local measurements use PyAV 19.0.2, real libx264
+encoding/decoding, 128x72 source images, 90 frames at 30 FPS, GOP 24,
+650/95 kbps targets, 350 ms request dwell, and a 150 ms receiver
+silence timeout. The virtual capacity changes from 1,200 to 90 kbps
+at 600 ms and returns to 1,200 kbps at 1,750 ms.
+
+With the historical 40 ms base delay and +/-8 ms jitter, the
+outage-related rate reduction moves from source frame **62
+(2,066.667 ms)** to frame **28 (933.333 ms)**. The receiver's last
+usable pre-outage arrival is at 616.490 ms; the silence timer
+expires at 766.490 ms, but the request dwell holds it until
+889.425 ms. Its 35 ms reverse delay makes the request available at
+924.425 ms, strictly before source frame 28.
+
+| Historical virtual-link result | Fixed high | Arrival feedback | Silence feedback | Fixed high, matched restarts |
+| --- | ---: | ---: | ---: | ---: |
+| Admitted media wire bytes | 211,788 | 193,760 | 181,834 | 257,541 |
+| Actually decoded frames | 36/90 | 46/90 | 39/90 | 39/90 |
+| On time with 40 ms buffer | 0 | 6 | 4 | 0 |
+| On time with 80 ms buffer | 29 | 32 | 26 | 20 |
+| On time with 160 ms buffer | 36 | 46 | 39 | 39 |
+| Encoded IDRs | 4 | 6 | 6 | 6 |
+| RGB PSNR on the same 36 frames | 12.969 dB | 12.585 dB | 12.698 dB | 13.025 dB |
+
+The watchdog sends fewer bytes but reconstructs **seven fewer frames
+than arrival-only feedback**. The timer run reconstructs frames
+0-17 and 69-89; arrival-only feedback reconstructs 0-17 and 62-89.
+Earlier downshifting resets the GOP while the link is still impaired;
+it does not guarantee that a usable IDR reaches the decoder. The
+`idr_delivery` evidence shows the watchdog's IDRs at frames 28 and 52
+both rejected at queue admission. Its next usable IDR is frame 69;
+arrival-only feedback instead generates a usable IDR at frame 62.
+The current rate policy has no independent IDR retry while it remains LOW.
+
+The zero-jitter comparison makes the attribution limitation clearer:
+
+| Zero-jitter result | Fixed high | Arrival feedback | Silence feedback | Fixed high, matched restarts |
+| --- | ---: | ---: | ---: | ---: |
+| Admitted media wire bytes | 211,788 | 221,881 | 208,025 | 258,052 |
+| Actually decoded frames | 36/90 | 46/90 | 39/90 | 39/90 |
+| On time with 80 ms buffer | 29 | 34 | 27 | 27 |
+| RGB PSNR on the same 36 frames | 12.969 dB | 12.983 dB | 13.021 dB | 13.021 dB |
+
+Here the watchdog lowers the rate at frame **25 (833.333 ms)**,
+while arrival-only feedback still waits until frame 62. Yet the
+watchdog and matched-restart high-rate stream have identical decoded
+runs, 80 ms deadline counts and matched PSNR. The rate change saves
+50,027 admitted bytes relative to that restart control, but provides
+**no observed continuity improvement in this scenario**. The 95 kbps
+low target also exceeds the 90 kbps bottleneck before framing overhead;
+it is not a sustainable-rate estimate. These results do not establish
+that a silence timeout improves perceived quality.
+
+**Decision:** keep the timer opt-in and retain v26 as the comparison.
+The next distinct improvement should separate decoder recovery from
+rate selection: request/retry an IDR after lost references even if
+the source is already LOW, then compare against the same restart
+control. A future capacity estimator must also account for actual
+encoded bytes and framing overhead.
+
+### Reproduce and inspect the evidence
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+
+python -m pytest -q tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py
+
+# Same impairment profile as v26, with all four comparison arms.
+python -m colabcola.bridge_video_watchdog `
+  --silence-timeout-ms 150 --buffers-ms "40,80,160,240,350"
+
+# Remove random jitter to clarify the restart-versus-rate comparison.
+python -m colabcola.bridge_video_watchdog `
+  --jitter-ms 0 --silence-timeout-ms 150 `
+  --buffers-ms "40,80,160,240,350"
+```
+
+Inspect `controllers.silence_feedback.requests` for
+`trigger: "receiver_silence"`, `controllers.*.applied` for actual
+source changes, and `restart_control` for the ablation schedule.
+The source bytes and already scheduled arrivals must remain identical
+until the two feedback policies first take different actions.
+
+Full measured outputs and codec versions are retained in
+[`experiments/v27/historical.json`](experiments/v27/historical.json),
+[`experiments/v27/zero-jitter.json`](experiments/v27/zero-jitter.json), and
+[`experiments/v27/environment.json`](experiments/v27/environment.json).
+All initial and restarted encoder segments now verify their first
+packet is an IDR, including low-to-high rate changes.
+
+The timer arms only after the first usable packet; total startup
+loss remains undetected. Silence clears the good-sample recovery
+streak, including when already LOW. Packet arrivals win exact ties
+with timer deadlines. Timers stop after the final source frame;
+tail arrivals still drain, and late commands cannot change past frames.
+Reverse feedback remains ideal, reliable and fixed-delay, with no
+reverse bandwidth or feedback-byte model. These are local deterministic
+experiments, not real-network or physical input-to-photon measurements.
+
+**Correction to the earlier v26 write-up:** the 29/32 on-time frame
+counts belong to an **80 ms** buffer, not 40 ms. Re-running the original
+v26 code confirms 0/6 at 40 ms. The table above and v26 table have been
+corrected; the full v26 reproduction command now uses the documented
+350 ms dwell rather than the earlier 150 ms example.
 
 ## Architecture boundary
 
