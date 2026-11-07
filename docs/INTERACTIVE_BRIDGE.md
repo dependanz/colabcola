@@ -711,6 +711,49 @@ game streaming. Before substituting video into the managed T4 bridge,
 improve the packetization/decoder delay, maintain bounded recovery
 semantics and verify the design against Colab's authorized usage rules.
 
+### v17 local latency decomposition (offline, no provider allocation)
+
+The Windows v16 tests confirm that the persistent H.264 loopback path
+decoded **24/24** glow-scene frames at **12.03 active FPS** with a median
+capture-to-decode age of **250.0 ms**. The 640×360, 60 FPS moving-square
+test decoded **48/48** frames at **61.17 active FPS**, median age **47.0 ms**
+and maximum age **63.0 ms**. The respective medians correspond to
+approximately **3.0 and 2.82 frame periods**. Both tests decoded all
+frames, with 20/24 and 44/48 produced before the sources finished.
+
+This frame-period similarity suggests a small **frame-count pipeline
+lag**, rather than a fixed 250 ms network latency. It does not prove
+which stage is responsible: the existing x264 Annex B access-unit parser
+waits for the *next* AUD, and the FFmpeg decoder may buffer frames.
+
+New optional instrumentation breaks the local age of each frame into:
+
+- `capture_to_packet_p50_ms`: original RGB capture through encoder
+  output and access-unit parser readiness (including lookahead);
+- `packet_to_socket_p50_ms`: packet enqueue through complete local
+  socket receipt (including scheduling);
+- `socket_to_decoded_p50_ms`: packet receipt through reconstructed RGB
+  output (including decoder buffering);
+- `capture_to_decoded_frame_periods`: full median age expressed in
+  target-frame periods.
+
+These values use a single process-local monotonic clock. Individual
+per-frame stages sum exactly to total frame age, but **medians of
+separate distributions need not sum to the total median**.
+They do not measure a real network, remote CUDA, or screen presentation.
+
+To compare the two conditions without purchasing compute:
+
+```powershell
+python -m colabcola.bridge_video_stream --width 640 --height 360 --frames 24 --fps 12 --pattern scene
+python -m colabcola.bridge_video_stream --width 640 --height 360 --frames 48 --fps 60 --pattern square
+```
+
+The next change should target whichever stage dominates, while keeping
+the current bounded packet format and testability. No change to the
+Colab allocator, installed FFmpeg dependencies, production batch runner,
+or live authenticated Comm path has been made here.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
