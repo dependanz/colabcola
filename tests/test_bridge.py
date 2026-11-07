@@ -51,7 +51,7 @@ def test_scene_updates_from_input_and_cpu_renders():
     after = render_ppm(scene, 0)
     assert (scene.x, scene.y) == (0.9, 0.1)
     assert scene.phase > 0
-    assert before.startswith(b"P6\\n192 120\\n255\\n")
+    assert before.startswith(b"P6\n192 120\n255\n")
     assert len(before) == len(after)
     assert before != after
 
@@ -70,7 +70,7 @@ def test_local_session_streams_frames_and_accepts_input():
             assert ready["type"] == "ready" and ready["device"] == "cpu"
             first = await asyncio.wait_for(read_message(reader), 3)
             assert first["type"] == "frame" and first["seq"] == 0
-            assert base64.b64decode(first["data"], validate=True).startswith(b"P6\\n")
+            assert base64.b64decode(first["data"], validate=True).startswith(b"P6\n")
             await send_message(writer, message("input", event="mouse", x=1.0, y=0.0))
             await send_message(writer, message("input", event="key", key="Right"))
             second = await asyncio.wait_for(read_message(reader), 3)
