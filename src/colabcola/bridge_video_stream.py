@@ -168,9 +168,13 @@ def _encoder(ffmpeg: str, width: int, height: int, fps: int):
     ])
 
 
-def _decoder(ffmpeg: str):
+def _decoder(ffmpeg: str, *, low_delay: bool = False):
+    decoder_flags = ["-flags", "+low_delay"] if low_delay else []
     return _launch(ffmpeg, [
         "-f", "h264", "-probesize", "32", "-analyzeduration", "0",
+        # This is an explicit A/B experiment rather than a new default:
+        # some H.264 streams and decoder versions may handle this differently.
+        *decoder_flags,
         # Without this, software decoder frame-threading adds several
         # frames of latency on the same test input.
         "-threads", "1", "-i", "pipe:0", "-an",
@@ -181,7 +185,7 @@ def _decoder(ffmpeg: str):
 
 def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
                    fps: int = 12, pattern: str = "square",
-                   ffmpeg: str = "ffmpeg") -> dict:
+                   ffmpeg: str = "ffmpeg", decoder_low_delay: bool = False) -> dict:
     """Measure live decode progress and capture-to-decode age on loopback.
 
     A synthetic frame sequence is precomputed, then written to a persistent
@@ -192,7 +196,9 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
     cannot be used as remote one-way latency measurements.
     """
     _validate_dimensions(width, height, frames)
-    if type(fps) is not int or not 1 <= fps <= 60 or pattern not in ("square", "scene"):
+    if (type(fps) is not int or not 1 <= fps <= 60
+            or pattern not in ("square", "scene")
+            or type(decoder_low_delay) is not bool):
         raise ValueError("invalid paced video benchmark arguments")
     originals = (synthetic_rgb_frames(width, height, frames)
                  if pattern == "square"
@@ -200,7 +206,7 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
     zlib_bytes = sum(len(zlib.compress(rgb, 1)) for rgb in originals)
     encoder = _encoder(ffmpeg, width, height, fps)
     try:
-        decoder = _decoder(ffmpeg)
+        decoder = _decoder(ffmpeg, low_delay=decoder_low_delay)
     except Exception:
         encoder.terminate()
         encoder.wait(timeout=5)
@@ -339,6 +345,7 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
         encoded_bytes = sum(len(packet.data) for packet in sent_packets)
         return {
             "schema": 1, "mode": "persistent-h264-loopback",
+            "decoder_low_delay": decoder_low_delay,
             "width": width, "height": height, "frames": frames,
             "target_fps": fps, "decoded_frames": len(decoded_results),
             "decoded_before_source_finished": len(during),
@@ -378,10 +385,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fps", type=int, default=12)
     parser.add_argument("--pattern", choices=("square", "scene"), default="square")
     parser.add_argument("--ffmpeg", default="ffmpeg")
+    parser.add_argument("--decoder-low-delay", action="store_true",
+                        help="experimental FFmpeg decoder low-delay flag; A/B against default")
     args = parser.parse_args(argv)
     print(json.dumps(compare_stream(
         width=args.width, height=args.height, frames=args.frames,
         fps=args.fps, pattern=args.pattern, ffmpeg=args.ffmpeg,
+        decoder_low_delay=args.decoder_low_delay,
     ), indent=2))
     return 0
 
