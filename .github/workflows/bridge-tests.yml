@@ -60,7 +60,9 @@ jobs:
         run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py
       - name: Demonstrate paced local H.264 video stream (Linux)
         if: runner.os == 'Linux'
-        run: python -m colabcola.bridge_video_stream --width 640 --height 360 --fps 12 --frames 24 --pattern scene
+        run: |
+          python -m colabcola.bridge_video_stream --width 640 --height 360 --fps 12 --frames 24 --pattern scene
+          python -m colabcola.bridge_video_stream --width 640 --height 360 --fps 60 --frames 48 --pattern square
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
         run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py
