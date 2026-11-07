@@ -87,7 +87,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
         "gpu": details["gpu"], "device": "cuda", "width": details["width"],
         "height": details["height"],
     })
-    state = {"latest_input": 0, "last_frame": -1, "closed": False}
+    state = {"latest_input": 0, "latest_rate": 0, "last_frame": -1, "closed": False}
 
     def on_message(message):
         event = message.get("content", {}).get("data", {})
@@ -118,6 +118,22 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
                 root / "input.json", (json.dumps(payload, separators=(",", ":")) + "\n").encode()
             )
             state["latest_input"] = sequence
+        elif kind == "rate":
+            request_seq, requested_fps = event.get("seq"), event.get("fps")
+            if (type(request_seq) is not int
+                    or not state["latest_rate"] < request_seq < 10000
+                    or type(requested_fps) is not int or not 1 <= requested_fps <= 12):
+                return
+            renderer["atomic_bytes"](
+                root / "rate-control.json",
+                (json.dumps({"run_id": run_id, "seq": request_seq,
+                             "fps": requested_fps}, separators=(",", ":")) + "\n").encode()
+            )
+            state["latest_rate"] = request_seq
+            # ACK means command accepted and durably written, not yet applied.
+            # The renderer's rate_seq metric confirms later application.
+            comm.send({"v": 1, "kind": "rate_ack", "run_id": run_id,
+                       "seq": request_seq, "fps": requested_fps})
         elif kind == "pull":
             try:
                 body = (root / "frame.bin").read_bytes()
