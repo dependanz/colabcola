@@ -13,7 +13,9 @@ graphics/input demonstration and an opt-in **managed Colab T4** renderer over
 the authenticated Jupyter Contents API. The T4 path can allocate compute
 only with explicit confirmation. Neither path changes the existing batch
 runner, checkpoint-recovery behavior, nor opens a public listening port.
-The managed T4 implementation is not yet live-validated.
+The Jupyter Contents polling bridge was verified against a real T4. The
+persistent Jupyter Comm path remains experimental and has not yet established
+a successful live Colab connection.
 
 ## Try it on Windows (two PowerShell terminals)
 
@@ -48,7 +50,7 @@ For a shared local secret, set the same `COLABCOLA_BRIDGE_TOKEN` environment
 variable in both terminals before connecting. An absent variable means an
 empty secret, appropriate only for this loopback-only demo.
 
-## Managed Colab T4 proof (new, not yet live-validated)
+## Managed Colab T4 proof (file-polling path verified)
 
 This proof uses the same authorized Colab provider as the Python job runner.
 A standalone PyTorch scene computes **on the remote Tesla T4**; the viewer
@@ -166,14 +168,22 @@ For an explicitly authorized trial on a paid/eligible Colab account, use a
 
 ```powershell
 colabcola --profile pypi-new-account-test bridge colab `
-  --run-dir I:\colabcola-bridge-t4-proof-v4 `
+  --run-dir I:\colabcola-bridge-t4-proof-v5 `
   --transport comm --gpu T4 --fps 6 --poll-hz 6 `
   --max-seconds 300 --confirm-allocation
 ```
 
-This is **not yet live-verified on Colab**. Local real-kernel integration
-tests verify the Jupyter Comm messaging machinery, but Google may relay
-WebSockets differently. The runtime is still journal-owned and must be
+The first real Comm-mode trial (v4) reached a T4 allocation but failed its
+Python bootstrap before displaying frames. The original output did not
+identify the exception; it also did not display an explicit release
+confirmation, so the v4 journal should be checked. Colab's documented
+`ipykernel.comm.Comm` interface is now preferred, with a `comm.create_comm`
+fallback. The remote worker writes a small failure report containing only
+the bootstrap stage and Python exception **type**, and the host includes
+that sanitized information when the bootstrap fails. The new Comm path
+still requires live verification; no throughput or latency improvements are
+claimed yet. Local real-kernel integration tests verify Jupyter Comm
+messaging, but Google's proxy behavior may differ. The runtime is still journal-owned and must be
 confirmed released after a trial; if uncertain, run `bridge cleanup` using
 the matching profile and run directory. The existing `files` option remains
 the proven fallback and is the default.
@@ -219,7 +229,7 @@ checkpoint rather than preserving its exact on-screen state.
 ## Verification
 
 ```bash
-python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py
+python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py
 ```
 
 The offline tests cover bounded protocol framing, actual loopback
