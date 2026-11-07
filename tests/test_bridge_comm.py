@@ -178,6 +178,12 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
     package = ModuleType("comm")
     package.create_comm = lambda **kw: FakeComm(**kw)
     monkeypatch.setitem(sys.modules, "comm", package)
+    kernel = ModuleType("ipykernel")
+    legacy = ModuleType("ipykernel.comm")
+    legacy.Comm = lambda **kw: FakeComm(**kw)
+    kernel.comm = legacy
+    monkeypatch.setitem(sys.modules, "ipykernel", kernel)
+    monkeypatch.setitem(sys.modules, "ipykernel.comm", legacy)
     path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
     env = runpy.run_path(str(path), run_name="test_comm")
     run_id = "d" * 32
@@ -203,3 +209,58 @@ def test_cli_comm_transport_is_opt_in(monkeypatch):
     assert main(["--profile", "example", "bridge", "colab",
                  "--preflight-only", "--transport", "comm"]) == 0
     assert called == ["comm"]
+
+
+def test_bootstrap_error_summary_reports_only_vetted_stages():
+    from colabcola.bridge_comm import bootstrap_error_summary
+    class FakeProvider:
+        def _json_file(self, session, path):
+            assert path.endswith("bridge-bootstrap-diagnostic.json")
+            return {
+                "schema": 1, "run_id": "f" * 32, "state": "failed",
+                "stage": "creating_comm", "error_type": "ModuleNotFoundError",
+            }
+
+    assert bootstrap_error_summary(
+        FakeProvider(), object(), "content/colabcola-bridge/test", "f" * 32,
+        {"ename": "ImportError", "evalue": "DO_NOT_ECHO_REMOTE_SECRETS"}
+    ) == "stage=creating_comm, error_type=ModuleNotFoundError"
+
+
+def test_bootstrap_error_summary_rejects_untrusted_diagnostics():
+    from colabcola.bridge_comm import bootstrap_error_summary
+
+    class FakeProvider:
+        def _json_file(self, session, path):
+            return {"schema": 1, "run_id": "WRONG_ID", "state": "failed",
+                    "stage": ["leak"], "error_type": ["leak"]}
+
+    result = bootstrap_error_summary(
+        FakeProvider(), object(), "content/colabcola-bridge/test", "a" * 32,
+        {"ename": "ValueError", "evalue": "SECRET_VALUE"})
+    assert result == "error_type=ValueError"
+    assert "SECRET_VALUE" not in result
+
+
+def test_remote_comm_bootstrap_failure_writes_sanitized_report(tmp_path):
+    root = tmp_path / "owned"
+    root.mkdir()
+    renderer = tmp_path / "failed_renderer.py"
+    renderer.write_text(
+        "from pathlib import Path\\n"
+        "import json\\n"
+        "def start(directory, fps, run_id):\\n"
+        " Path(directory, 'status.json').write_text(json.dumps("
+        "{'state':'failed','run_id':run_id}))\\n",
+        encoding="utf-8",
+    )
+    path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
+    with pytest.raises(RuntimeError, match="initialization failed"):
+        runpy.run_path(str(path), run_name="__main__", init_globals={
+            "BRIDGE_DIRECTORY": str(root), "BRIDGE_RUN_ID": "c" * 32,
+            "BRIDGE_FPS": 6, "BRIDGE_RENDERER_PATH": str(renderer),
+        })
+    report = json.loads((root / "bridge-bootstrap-diagnostic.json").read_text())
+    assert report == {"schema": 1, "run_id": "c" * 32,
+                      "state": "failed", "stage": "waiting_cuda",
+                      "error_type": "RuntimeError"}
