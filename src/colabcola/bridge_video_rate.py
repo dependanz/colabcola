@@ -1,4 +1,4 @@
-"""v26/v27: causal adaptive H.264 encoding-rate experiments on a virtual link.
+"""v26-v28: causal H.264 rate and recovery experiments on a virtual link.
 
 Each frame is encoded by real libx264. The sender changes the encoder's
 target bitrate only AFTER receiving a delayed report derived from media
@@ -20,7 +20,9 @@ from fractions import Fraction
 import json
 import math
 
-from .bridge_video_controller import VirtualAccessUnitLink
+from .bridge_video_controller import (
+    ControllerConfig, MultiGapFeedbackController, VirtualAccessUnitLink,
+)
 from .bridge_video_feedback import _parse_buffer_list, _summarize_trace, _validate_video
 from .bridge_video_impairment import (
     LinkConfig, LinkTrace, ScheduledUnit, _make_decoder, decode_delivered_h264,
@@ -289,7 +291,8 @@ def _raw_frame(np, texture, seq: int):
 def stream_with_rate_control(*, width: int, height: int, fps: int,
                              frames: int, gop: int, link: LinkConfig,
                              rates: RateConfig, adapt: bool,
-                             restart_seqs: tuple[int, ...] = ()) -> tuple[
+                             restart_seqs: tuple[int, ...] = (),
+                             recovery: ControllerConfig | None = None) -> tuple[
                                  list[VideoAccessUnit], LinkTrace, dict]:
     """Encode in source order, drain only already arrived packets, adapt rate.
 
@@ -297,16 +300,24 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     configuration. Rate switches require delayed receiver feedback.
     restart_seqs is a fixed-high, offline ablation schedule only; it cannot
     be combined with live feedback and is not a deployable controller.
+    Optional v28 recovery runs independently of rate selection. Its delayed
+    IDR requests can restart the current rate, including LOW. A due rate
+    change and any due IDR requests share one encoder restart.
     """
     _validate_video(width, height, fps, frames, gop)
     if not isinstance(link, LinkConfig) or not isinstance(rates, RateConfig):
         raise ValueError("invalid simulator configuration")
     if type(adapt) is not bool:
         raise ValueError("adapt must be a boolean")
+    if recovery is not None and not isinstance(recovery, ControllerConfig):
+        raise ValueError("invalid recovery configuration")
+    if (recovery is not None
+            and recovery.max_requests + (rates.max_switches if adapt else 0) > 20):
+        raise ValueError("combined rate and recovery request budgets must not exceed 20")
     if (type(restart_seqs) is not tuple or len(restart_seqs) > 20
             or any(type(seq) is not int or not 1 <= seq < frames for seq in restart_seqs)
             or tuple(sorted(set(restart_seqs))) != restart_seqs
-            or (adapt and restart_seqs)):
+            or ((adapt or recovery is not None) and restart_seqs)):
         raise ValueError("restart_seqs must be sorted unique fixed-high source indices")
     try:
         import av
@@ -317,6 +328,8 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     source = _texture(np, width, height)
     media = VirtualAccessUnitLink(link)
     receiver = RateReceiver(rates)
+    decoder_recovery = MultiGapFeedbackController(recovery) if recovery is not None else None
+    restarts: list[dict] = []
     kbps = rates.high_kbps
     e = _encoder(av, width, height, fps, gop, kbps)
     origin_seq = 0
@@ -324,19 +337,34 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     for seq in range(frames):
         now = seq * 1000.0 / fps
         arrived = media.arrive_by(now)
-        if adapt:
-            for item in arrived:
+        for item in arrived:
+            if adapt:
                 receiver.observe(item)
+            if decoder_recovery is not None:
+                decoder_recovery.receive(item.packet, item.arrival_ms)
+        if adapt:
             receiver.advance(now)
             target = receiver.apply_due(seq, now, kbps)
         else:
             target = kbps
-        if target != kbps or seq in restart_seqs:
+        due_recovery = (decoder_recovery.requests_due_before(now)
+                        if decoder_recovery is not None else [])
+        if target != kbps or due_recovery or seq in restart_seqs:
+            restarts.append({
+                "source_seq": seq,
+                "source_ms": round(now, 3),
+                "previous_kbps": kbps,
+                "target_kbps": target,
+                "rate_change": target != kbps,
+                "recovery_request_ids": [r["request_id"] for r in due_recovery],
+            })
             if e.encode(None):
                 raise RuntimeError("unexpected H.264 buffer during rate switch")
             e = _encoder(av, width, height, fps, gop, target)
             origin_seq = seq
             kbps = target
+            if decoder_recovery is not None:
+                decoder_recovery.record_applied(due_recovery, seq)
 
         raw = _raw_frame(np, source, seq)
         video = av.VideoFrame.from_ndarray(raw, format="rgb24")
@@ -363,8 +391,14 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     for item in media.arrive_by(math.inf):
         if adapt:
             receiver.observe(item)
+        if decoder_recovery is not None:
+            decoder_recovery.receive(item.packet, item.arrival_ms)
     trace = media.snapshot(frames)
-    return packets, trace, receiver.report()
+    report = receiver.report()
+    if decoder_recovery is not None:
+        report["recovery"] = decoder_recovery.report()
+        report["encoder_restarts"] = restarts
+    return packets, trace, report
 
 
 def reconstruction_quality(trace: LinkTrace, *, width: int,

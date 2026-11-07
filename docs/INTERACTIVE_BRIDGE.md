@@ -1739,7 +1739,7 @@ it does not guarantee that a usable IDR reaches the decoder. The
 `idr_delivery` evidence shows the watchdog's IDRs at frames 28 and 52
 both rejected at queue admission. Its next usable IDR is frame 69;
 arrival-only feedback instead generates a usable IDR at frame 62.
-The current rate policy has no independent IDR retry while it remains LOW.
+The v27 rate policy has no independent IDR retry while it remains LOW.
 
 The zero-jitter comparison makes the attribution limitation clearer:
 
@@ -1812,6 +1812,175 @@ counts belong to an **80 ms** buffer, not 40 ms. Re-running the original
 v26 code confirms 0/6 at 40 ms. The table above and v26 table have been
 corrected; the full v26 reproduction command now uses the documented
 350 ms dwell rather than the earlier 150 ms example.
+
+### Windows v27 confirmation
+
+The user-provided Windows transcript at branch head `1744332` records
+**20 passing rate/watchdog tests in 3.07 seconds**. Both complete experiment
+JSON reports match the retained historical and zero-jitter reports field
+for field, including controller events, IDR delivery, bytes, decoded frames,
+playout and quality. The comparison receipt and input hash are retained in
+[`experiments/v27/windows-confirmation.json`](experiments/v27/windows-confirmation.json).
+This records the user's Windows execution, not an additional agent-run
+Windows session.
+
+## v28: independent IDR recovery while the encoder remains LOW
+
+`bridge_video_recovery.py` combines the v27 rate policy with the v25
+multi-gap recovery controller. They observe the same already-arrived
+access units and send their own delayed feedback. Rate selection can
+remain LOW while a recovery request restarts the encoder at that same
+target. If a rate change and recovery requests become due before the
+same source frame, they produce **one encoder restart and one IDR**.
+
+This closes the specific v27 failure: reducing the rate does not help a
+decoder whose reference chain is still broken after the downshift IDR
+is lost. Recovery retries are driven by arriving predicted units while
+the receiver remains unsynchronized. They are bounded and rate-limited;
+the controller does not consult future losses, bandwidth steps or the
+link queue, and does not generate speculative retries during complete
+media silence. Feedback must arrive strictly before the source frame
+it changes. Requests arriving after the source ends cannot apply.
+
+The comparison has four arms: fixed high rate with periodic IDRs,
+v27 watchdog only, watchdog with independent recovery, and fixed high
+rate with **all** the combined controller's restart indices. The last
+arm remains an offline ablation, not a deployable policy. Every encoder
+segment's first output is checked for an actual H.264 IDR. Source bytes
+and scheduled arrivals must match until the controllers first take
+different effective encoder actions. With recovery omitted, the v27
+API and both retained v27 reports are unchanged.
+
+### Bandwidth collapse: recovery without an additional rate change
+
+These measurements keep the v27 source, link and rate settings. The new
+recovery path has a 35 ms reverse delay, a 150 ms minimum request interval,
+and a maximum of eight requests. The rate controller also has an eight
+request budget; configured rate and recovery budgets may total at most
+20 so the full restart schedule fits the bounded offline comparison.
+
+| Historical +/-8 ms jitter | Fixed high | v27 watchdog | v28 recovery | Fixed high, matched restarts |
+| --- | ---: | ---: | ---: | ---: |
+| Admitted media wire bytes | 211,788 | 181,834 | 177,421 | 277,840 |
+| Actually decoded frames | 36/90 | 39/90 | 46/90 | 46/90 |
+| On time with 40 ms buffer | 0 | 4 | 7 | 0 |
+| On time with 80 ms buffer | 29 | 26 | 33 | 16 |
+| On time with 160 ms buffer | 36 | 39 | 46 | 46 |
+| Encoded IDRs | 4 | 6 | 7 | 7 |
+| RGB PSNR on the same 36 frames | 12.969 dB | 12.698 dB | 12.663 dB | 13.027 dB |
+
+The policies first differ at **source frame 62**. At receiver time
+2,002.268 ms, arriving unit 50 reveals the gap beginning at frame 18.
+The recovery request reaches the sender at 2,037.268 ms and generates
+IDR 62 at 2,066.667 ms, with the target unchanged at **95 -> 95 kbps**.
+That IDR arrives at 2,152.893 ms. Decoding can resume seven source
+frames earlier than v27's frame 69 recovery. This yields seven more
+decoded frames and seven more frames meeting the 80 ms deadline.
+The added restart also changes subsequent GOP and rate-switch timing;
+the observed 4,413-byte saving is specific to this content and schedule.
+
+| Zero jitter | Fixed high | v27 watchdog | v28 recovery | Fixed high, matched restarts |
+| --- | ---: | ---: | ---: | ---: |
+| Admitted media wire bytes | 211,788 | 208,025 | 206,653 | 280,049 |
+| Actually decoded frames | 36/90 | 39/90 | 47/90 | 47/90 |
+| On time with 80 ms buffer | 29 | 27 | 34 | 12 |
+| On time with 160 ms buffer | 36 | 39 | 47 | 27 |
+| On time with 240 ms buffer | 36 | 39 | 47 | 43 |
+| RGB PSNR on the same 36 frames | 12.969 dB | 13.021 dB | 13.024 dB | 13.024 dB |
+
+Without jitter the independent recovery IDR is frame **61**, again
+at the unchanged low target. It adds eight decoded frames and seven
+on-time frames at 80 ms relative to v27. The matched-restart high-rate
+arm reconstructs the same number of frames, but only 12 meet the
+80 ms deadline versus 34 with rate adaptation. This comparison
+separates decoding recovery from arrival timeliness, conditional on
+the same restart schedule. It does not establish a general optimal
+rate policy. Both quality comparisons use only the same 36 frame IDs
+decoded by all four arms; they exclude lost frames and are not a
+perceived-quality score for the whole playback.
+
+### Erase the first recovery IDR and recover again
+
+A separate 60-frame test uses an unlimited-bandwidth link, 40 ms
+delay, no jitter, explicit drops at **5, 8 and 27**, and 20 ms rate
+and recovery feedback. Its recovery retry interval is 80 ms. The
+silence timer and rate-request dwell are disabled, and the good-age
+threshold is zero so the source stays LOW after its first downshift.
+
+| Explicit-loss result | Rate policy only | Rate plus independent recovery |
+| --- | ---: | ---: |
+| Admitted media wire bytes | 67,876 | 80,012 |
+| Actually decoded frames | 33/60 | 51/60 |
+| On time with 80 ms buffer | 33 | 51 |
+| Rate changes | 1 | 1 |
+| Independent recovery requests applied | 0 | 3 |
+
+The first gap produces a rate change and recovery request at frame
+**8**. They share a single encoder restart, and the link erases that
+IDR. An arriving predicted unit exposes the continued reference gap,
+so a second request generates **IDR 11 at the same 95 kbps target**.
+The later loss produces **IDR 30**, also without a rate change. These
+three requests cause three total restarts, not four. Real decoding
+recovers frames 0-4, 11-26 and 30-59. Here recovery costs **12,136
+additional admitted bytes** for 18 more decoded frames: requesting
+IDRs does not generally save bandwidth.
+
+### Reproduce v28 on Windows
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+
+python -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py
+
+python -m colabcola.bridge_video_recovery --buffers-ms "40,80,160,240,350"
+
+python -m colabcola.bridge_video_recovery `
+  --jitter-ms 0 --buffers-ms "40,80,160,240,350"
+
+# Erase the first recovery IDR, then create a second independent loss.
+python -m colabcola.bridge_video_recovery `
+  --width 128 --height 72 --fps 30 --frames 60 --gop 24 `
+  --delay-ms 40 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
+  --max-age-ms 0 --max-inflight 16 --drop-seqs "5,8,27" `
+  --control-delay-ms 20 --recovery-feedback-ms 20 --recovery-retry-ms 80 `
+  --recovered-age-ms 0 --min-switch-ms 0 --silence-timeout-ms 0 `
+  --buffers-ms "40,80,160"
+```
+
+Inspect `controllers.watchdog_with_recovery.recovery` for observations,
+requests and applied IDRs. `encoder_restarts` beside it records the old
+and new targets, whether the rate changed, and which recovery requests
+shared each restart. Each arm's `idr_delivery` records arrival times
+or loss reasons. The full reports, exact commands, codec versions and
+source hashes are retained in
+[`experiments/v28/historical.json`](experiments/v28/historical.json),
+[`experiments/v28/zero-jitter.json`](experiments/v28/zero-jitter.json),
+[`experiments/v28/lost-idr.json`](experiments/v28/lost-idr.json), and
+[`experiments/v28/environment.json`](experiments/v28/environment.json).
+Linux CI runs all three commands; both platforms run the recovery tests.
+
+Local validation passed **40 controller/rate/watchdog/recovery tests**,
+including 12 new recovery cases. They cover real decoding after a lost
+recovery IDR, LOW-to-LOW retries, a single encoder construction for
+coincident commands, exact feedback-time ties, source-end boundaries,
+request caps, disabled recovery, complete silence, and matched restart
+and quality-frame accounting. Both full retained v27 JSON reports also
+remain unchanged.
+
+**Limits and next step:** recovery uses the existing conservative
+sequence-gap/reference-chain model, with real H.264 decoding of the
+resulting usable segments. It does not parse arbitrary codecs' reference
+dependencies. The reverse paths remain ideal, reliable and fixed-delay;
+in-flight requests are not cancelled after a later IDR arrives, and
+control traffic has no byte or bandwidth model. A shared seed does not
+guarantee the same jitter draws per source frame after admissions differ;
+the zero-jitter run removes that ambiguity. The 95 kbps low target still
+exceeds the 90 kbps bottleneck before framing overhead. The next rate
+control experiment should use observed delivery and actual encoded wire
+load to choose a sustainable target, while keeping this recovery path
+independent. All timing here is virtual, with local real codecs; this
+adds no production transport or Colab allocation.
 
 ## Architecture boundary
 

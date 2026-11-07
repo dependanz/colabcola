@@ -24,6 +24,47 @@ from .bridge_video_rate import (
 )
 
 
+def _summarize_rate_streams(streams: dict, *, width: int, height: int,
+                            fps: int, buffers_ms: tuple[int, ...]) -> tuple[dict, list[int]]:
+    """Decode each arm and compare RGB error on one common frame set."""
+    idrs = lambda packets: [p.seq for p in packets if p.keyframe]
+    summaries = {}
+    distortions = {}
+    for name, (packets, trace, _) in streams.items():
+        decoded = decode_delivered_h264(trace, width, height)
+        summary = _summarize_trace(trace, decoded, packets, fps, buffers_ms)
+        quality = reconstruction_quality(
+            trace, width=width, height=height, fps=fps, include_internal=True)
+        distortions[name] = quality.pop("_sse_by_seq")
+        if quality["quality_decoded_frames"] != summary["actually_decoded_frames"]:
+            raise RuntimeError("quality and continuity decoders disagree")
+        summary.update(quality)
+        payload_bytes = sum(len(p.data) for p in packets)
+        arrivals = {item.packet.seq: item.arrival_ms for item in trace.delivered}
+        drops = dict(trace.dropped)
+        summary.update({
+            "encoded_idr_seqs": idrs(packets),
+            "idr_delivery": [{
+                "source_seq": seq,
+                "arrival_ms": round(arrivals[seq], 3) if seq in arrivals else None,
+                "drop_reason": drops.get(seq),
+            } for seq in idrs(packets)],
+            "encoded_payload_bytes": payload_bytes,
+            "encoded_source_kbps": round(payload_bytes * 8 * fps / (len(packets) * 1000), 3),
+        })
+        summaries[name] = summary
+
+    common = sorted(set.intersection(*(set(sse) for sse in distortions.values())))
+    for name, summary in summaries.items():
+        mse = (sum(distortions[name][seq] for seq in common)
+               / (len(common) * width * height * 3)) if common else None
+        summary["matched_frame_count"] = len(common)
+        summary["matched_frame_rgb_psnr_db"] = (
+            round(10 * math.log10(255 * 255 / mse), 3) if mse is not None and mse > 0 else None)
+
+    return summaries, common
+
+
 def compare_rate_watchdog(*, width: int = 128, height: int = 72,
                           fps: int = 30, frames: int = 90, gop: int = 24,
                           link: LinkConfig | None = None,
@@ -96,39 +137,8 @@ def compare_rate_watchdog(*, width: int = 128, height: int = 72,
     if idrs(replay_packets) != idrs(watchdog_packets):
         raise RuntimeError("offline restart control did not match all adaptive IDRs")
 
-    summaries = {}
-    distortions = {}
-    for name, (packets, trace, _) in streams.items():
-        decoded = decode_delivered_h264(trace, width, height)
-        summary = _summarize_trace(trace, decoded, packets, fps, buffers_ms)
-        quality = reconstruction_quality(
-            trace, width=width, height=height, fps=fps, include_internal=True)
-        distortions[name] = quality.pop("_sse_by_seq")
-        if quality["quality_decoded_frames"] != summary["actually_decoded_frames"]:
-            raise RuntimeError("quality and continuity decoders disagree")
-        summary.update(quality)
-        payload_bytes = sum(len(p.data) for p in packets)
-        arrivals = {item.packet.seq: item.arrival_ms for item in trace.delivered}
-        drops = dict(trace.dropped)
-        summary.update({
-            "encoded_idr_seqs": idrs(packets),
-            "idr_delivery": [{
-                "source_seq": seq,
-                "arrival_ms": round(arrivals[seq], 3) if seq in arrivals else None,
-                "drop_reason": drops.get(seq),
-            } for seq in idrs(packets)],
-            "encoded_payload_bytes": payload_bytes,
-            "encoded_source_kbps": round(payload_bytes * 8 * fps / (frames * 1000), 3),
-        })
-        summaries[name] = summary
-
-    common = sorted(set.intersection(*(set(sse) for sse in distortions.values())))
-    for name, summary in summaries.items():
-        mse = (sum(distortions[name][seq] for seq in common)
-               / (len(common) * width * height * 3)) if common else None
-        summary["matched_frame_count"] = len(common)
-        summary["matched_frame_rgb_psnr_db"] = (
-            round(10 * math.log10(255 * 255 / mse), 3) if mse is not None and mse > 0 else None)
+    summaries, common = _summarize_rate_streams(
+        streams, width=width, height=height, fps=fps, buffers_ms=buffers_ms)
 
     return {
         "schema": 1,

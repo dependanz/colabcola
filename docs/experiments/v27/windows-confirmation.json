@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "kind": "user-provided-windows-v27-reproduction",
+  "source_filename": "Pasted text(20261107-232745).txt",
+  "source_sha256": "88f1b239e78aa4db61dd2621d149d05450c101befdd13799888f1c5e0f053cc7",
+  "observed_branch": "feature/interactive-bridge-prototype",
+  "observed_head": "1744332",
+  "tests": {
+    "files": [
+      "tests/test_bridge_video_rate.py",
+      "tests/test_bridge_video_watchdog.py"
+    ],
+    "passed": 20,
+    "elapsed_seconds": 3.07
+  },
+  "comparisons": [
+    {
+      "retained_report": "docs/experiments/v27/historical.json",
+      "retained_file_sha256": "8b3dc6171f628b3bc85a3170814ebf8b512ba427d1d426a4b5c22914500cafe6",
+      "all_json_fields_equal": true
+    },
+    {
+      "retained_report": "docs/experiments/v27/zero-jitter.json",
+      "retained_file_sha256": "ea5e1e6919761ac3c7c31ca450b3d7877b7cac176c8d2107c410d697646dce40",
+      "all_json_fields_equal": true
+    }
+  ],
+  "scope": "Observed in the user-provided Windows terminal transcript; the agent compared its parsed JSON with retained reports, not a new agent execution on Windows."
+}
