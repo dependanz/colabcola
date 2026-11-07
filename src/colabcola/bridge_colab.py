@@ -337,7 +337,8 @@ def run_colab(args) -> int:
                                         in_flight=getattr(args, "inflight", 1))
                             run_viewer("127.0.0.1", 0, "", width=640, height=360,
                                        title="Colab Cola · T4 (kernel Comm)",
-                                       worker=work)
+                                       worker=work,
+                                       viewer_stats=getattr(args, "viewer_stats", False))
                         finally:
                             peer.close()
                     else:
@@ -350,7 +351,8 @@ def run_colab(args) -> int:
                                    worker=lambda outgoing, frames, stopped:
                                        stream_remote(provider, session, remote, state["run_id"],
                                                      details["gpu"], outgoing, frames, stopped,
-                                                     deadline, args.poll_hz))
+                                                     deadline, args.poll_hz),
+                                   viewer_stats=getattr(args, "viewer_stats", False))
                 finally:
                     print("[colabcola] Releasing only the owned T4 runtime...", flush=True)
                     if not release_owned(provider, args.run_dir, state):
