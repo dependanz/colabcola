@@ -274,7 +274,8 @@ def create_viewer_layout(root, width: int, height: int):
 
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
-               worker=None, viewer_stats: bool = False) -> None:
+               worker=None, viewer_stats: bool = False,
+               timestamp_local_input: bool = False) -> None:
     # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
@@ -284,11 +285,15 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
     label, status = create_viewer_layout(root, width, height)
-    from .bridge_viewer_stats import ViewerPresentationMeter
+    from .bridge_viewer_stats import LocalFrameTiming, ViewerPresentationMeter
     gui_meter = ViewerPresentationMeter(started_at=time.monotonic()) if viewer_stats else None
     last_motion = [0.0]
 
     def enqueue(event: dict) -> None:
+        if timestamp_local_input:
+            # Only opt-in local experiments use this private metadata.
+            # Do not alter the provider-facing input event protocol.
+            event = {**event, "_ui_callback_ns": time.perf_counter_ns()}
         try:
             outgoing.put_nowait(event)
         except queue.Full:
@@ -312,13 +317,23 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                 kind, data = frames.get_nowait()
                 if kind == "status":
                     status.set(concise_viewer_status(data))
-                elif kind == "frame":
+                elif kind in ("frame", "frame-timed"):
+                    timing = None
+                    if kind == "frame-timed":
+                        if not isinstance(data, tuple) or len(data) != 2:
+                            raise ValueError("malformed local timed frame")
+                        data, timing = data
+                        if not isinstance(timing, LocalFrameTiming):
+                            raise ValueError("invalid local frame metadata")
                     image_started = time.perf_counter()
                     image = photoimage_from_ppm(root, data)
                     label.configure(image=image, text="")
                     label.image = image
+                    configured_ns = time.perf_counter_ns()
                     if gui_meter is not None:
                         gui_meter.presented((time.perf_counter() - image_started) * 1000)
+                        if timing is not None:
+                            gui_meter.configured_timed_frame(timing, configured_ns)
                     if status.get() == "Connecting...":
                         status.set("Connected")
         except queue.Empty:
