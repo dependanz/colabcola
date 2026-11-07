@@ -775,19 +775,46 @@ the 60 FPS square returned **53.2 ms baseline vs 52.7 ms low-delay**.
 It decoded all frames, but **did not materially reduce** latency.
 The default remains unchanged; the flag is purely diagnostic.
 
-### v18 optional in-process codec comparison (development)
+### v18 in-process H.264 codec comparison (Linux CI verified, local only)
 
-The next offline experiment uses PyAV's in-process FFmpeg codec API to
-receive complete H.264 encoder packets directly, without scanning an
-FFmpeg subprocess's Annex B byte stream or passing decoded pixels
-through FFmpeg CLI pipes. It sends the packet through the same bounded
-local socket format used in the existing loopback proof, then decodes
-the packet directly. This isolates the **subprocess/packetizer
-pipeline** from codec-internal lookahead and processing cost.
+Using PyAV's direct FFmpeg CodecContext API, the v18 experiment emits
+**complete encoded access units directly from libx264**, wraps them in
+the same bounded local frame packet format as the v16 socketpair test,
+and feeds them directly into an in-process H.264 decoder. The original
+v16 experiment instead uses two persistent FFmpeg subprocesses and
+needs the *next Annex B access-unit delimiter* to complete each encoded
+frame's packet.
 
-It is opt-in and has separate local-only dependencies; no PyAV/NumPy
-dependency is added to the released `colabcola` installation.
-To try the experiment in a *separate experimental environment*:
+A matched Linux CI A/B, using the same 640×360 scenes, showed:
+
+| Median stage latency | 12 FPS: subprocess | 12 FPS: PyAV | 60 FPS: subprocess | 60 FPS: PyAV |
+| --- | ---: | ---: | ---: | ---: |
+| Capture to encoded packet | 85.0 ms | **2.1 ms** | 17.9 ms | **1.4 ms** |
+| Packet to local socket receipt | 0.1 ms | 0.1 ms | ~0.0 ms | ~0.0 ms |
+| Local socket receipt to decoded RGB | 167.7 ms | **0.4 ms** | 33.9 ms | **0.4 ms** |
+| **Total capture to decoded RGB** | **252.8 ms** | **2.6 ms** | **51.8 ms** | **1.8 ms** |
+| Frames decoded | 24/24 | 24/24 | 48/48 | 48/48 |
+| Frames decoded before input end | 20/24 | 23/24 | 44/48 | 47/48 |
+
+The in-process trials maintained approximately **12.01 FPS** and
+**60.18 FPS** active decode cadence, respectively. Encoded sizes
+differ somewhat between the two implementations because their
+encoder configurations are not identical, so this is a controlled
+**architectural feasibility comparison**, not a microbenchmark
+attributing every millisecond exclusively to one specific FFmpeg
+component. It demonstrates that H.264 itself need not introduce
+a three-frame pipeline delay on these test cases.
+
+These are **CPU-only, precomputed RGB scenes with a same-process
+local socketpair**. No render/capture workload, real network
+conditions, Jupyter proxy, remote CUDA, external listeners, GUI
+compositor, or game input are included. In-process stream
+performance on Windows and on real managed Colab has not yet been
+tested.
+
+PyAV and NumPy remain **optional local-only development
+dependencies**, not dependencies of the released `colabcola`
+installation:
 
 ```powershell
 python -m pip install av numpy
@@ -800,12 +827,14 @@ python -m colabcola.bridge_video_inprocess `
   --width 640 --height 360 --frames 48 --fps 60 --pattern square
 ```
 
-**Important:** PyAV binaries can embed x264/FFmpeg libraries under
-GPL-related licensing obligations. A future production integration
-requires a separate distribution and licensing review. This comparison
-does not introduce a public port, managed Colab connection, real GPU
-capture, remote media-serving service, or an end-to-end game stream.
-Performance is not guaranteed until run and measured.
+**Distribution licensing:** PyAV binary wheels may embed
+FFmpeg/x264 components subject to GPL licensing obligations.
+A production codec integration would need a licensing and binary
+distribution review. The demonstrated low-latency in-process
+packet interface could alternatively be implemented using another
+appropriately licensed FFmpeg integration or a platform-native
+codec API. Do not assume the existing Colab Jupyter kernel can or
+should be used as a general video-serving platform.
 
 ## Architecture boundary
 
