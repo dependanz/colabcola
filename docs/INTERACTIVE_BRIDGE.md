@@ -1045,23 +1045,53 @@ This is **not** physical device-input-to-display latency. The timing
 starts when Tk accepts a mouse/keyboard callback and ends when the
 label is configured, before OS compositor/scanout.
 
-#### Next controlled experiment: 60 FPS local application path
+#### v22: 60 FPS local H.264 application path verified on Windows
 
-At 30 FPS the producer can wait almost a full 33.3 ms frame interval
-before responding to an input callback. To test whether a 60 FPS
-source reduces that contribution, retain the successful 8 ms GUI
-polling interval and increase only the source frame rate:
+Using the same 8 ms Tk queue polling as v21, the user ran the live
+640×360 H.264 scene for 30 seconds with a **60 FPS source**.
+The experiment produced and decoded **1,800/1,800 frames** at
+**60.01 decoded FPS** and ended normally.
 
-```powershell
-python -m colabcola.bridge_video_live `
-  --show --width 640 --height 360 --fps 60 `
-  --max-seconds 30 --viewer-poll-ms 8
-```
+| Metric | v21: 30 FPS, 8 ms poll | v22: 60 FPS, 8 ms poll |
+| --- | ---: | ---: |
+| Input callback → Tk configured image | **29.0 ms** | **22.05 ms** |
+| Decoded RGB → Tk configured image | 13.8 ms | 11.8 ms |
+| Tk frame configuration (typical) | ~30 FPS | ~60 FPS |
+| Input callback → decoded RGB, whole-session p50 | 16.11 ms | **9.13 ms** |
+| Capture → decoded RGB, whole-session p50 | 2.080 ms | 2.184 ms |
+| Produced / decoded frames | 900/900 | 1800/1800 |
+| Inputs reflected in decoded frames | 433 | 623 |
 
-Compare decoded/Tk FPS, callback→Tk, capture→decoded RGB, and
-decode→Tk against v21 at 30 FPS. This remains a CPU-only, local
-PyAV/Tk experiment: no Colab allocation, network transport, public
-listener, GPU, or changes to the released batch workflow.
+The callback→Tk figures are **medians of per-window medians**:
+12 qualifying windows for v21 and 14 for v22. Raising the source
+rate from 30 to 60 FPS corresponded to a **6.95 ms (~24%)**
+lower callback-to-Tk delay while local H.264 processing stayed
+near 2 ms. Both experiments were independent live sessions with
+different input activity, and the window medians do not constitute
+a paired event-by-event statistical test.
+
+Tk configuration ran close to 60 FPS for **10 of 14** reporting
+windows. Four windows reported 48.9–58.0 FPS, even though decoded
+frames remained at approximately 60 FPS. This shows a working
+local 60 FPS H.264 application demonstration but **not perfectly
+stable or compositor-verified presentation**.
+
+The next substantive bottleneck to study is not further small
+Tk timer tuning: it is how encoded video behaves under
+**variable network latency, jitter, bandwidth limits and packet
+loss**, while keeping freshness and input responsiveness. A
+safe next experiment would be a **local-only impaired-link
+harness** between the persistent H.264 packet producer and decoder,
+with a bounded queue and controlled delay/jitter. Predictive
+H.264 frames cannot be arbitrarily dropped without considering
+reference dependencies and IDR/keyframe recovery. This is a
+design direction, **not an implemented or measured remote
+transport**.
+
+No managed Colab allocation, public socket, GPU, network
+proxy, or changes to the released batch runner are involved.
+The latency measurements end at Tk label configuration, not
+physical display scanout or input-to-photon.
 
 ## Architecture boundary
 
