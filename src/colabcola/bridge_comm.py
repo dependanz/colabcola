@@ -372,8 +372,17 @@ class KernelCommBridge:
 
 def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
                 frames: queue.Queue, stopped, deadline: float,
-                poll_hz: int = 6, probe_link: bool = False) -> None:
-    """Exactly one outstanding frame request: no unbounded transport backlog."""
+                poll_hz: int = 6, probe_link: bool = False,
+                in_flight: int = 1) -> None:
+    """One-in-flight proven default, or explicitly opted-in bounded pipeline."""
+    if type(in_flight) is not int or not 1 <= in_flight <= 4:
+        raise ValueError("in-flight requests must be between 1 and 4")
+    if in_flight > 1:
+        if probe_link:
+            raise ValueError("link probe and frame pipeline cannot be combined")
+        from .bridge_pipeline import stream_comm_pipeline
+        return stream_comm_pipeline(
+            peer, gpu, outgoing, frames, stopped, deadline, poll_hz, in_flight)
     meter = BridgeTransferMeter()
     last_seq = -1
     input_seq = 0
