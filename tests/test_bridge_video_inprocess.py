@@ -9,11 +9,11 @@ from colabcola.bridge_video_inprocess import compare_inprocess
 def test_inprocess_requires_valid_configuration_without_importing_pyav():
     for kwargs in ({"fps": 0}, {"fps": 61}, {"pattern": "invalid"},
                    {"width": 63}, {"height": 47}, {"frames": 49}):
+        arguments = {"width": 64, "height": 48, "frames": 8,
+                     "fps": 12, "pattern": "square"}
+        arguments.update(kwargs)
         with pytest.raises(ValueError):
-            compare_inprocess(width=64, height=48, frames=8, fps=12, **{
-                **kwargs, **{k: v for k, v in {"width": 64, "height": 48,
-                "frames": 8, "fps": 12}.items() if k not in kwargs}
-            })
+            compare_inprocess(**arguments)
 
 
 def _pyav_available():
