@@ -147,9 +147,9 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
         if decoded_pixels[0] == decoded_pixels[-1]:
             raise RuntimeError("in-process decoded video did not change")
 
-        ages = [(decode_at - captured_at) / 1e6
+        ages = [(decode_at - capture_at) / 1e6
                 for capture_at, decode_at in zip(captured_ns, decoded_ns)]
-        to_packet = [(ready - captured_at) / 1e6
+        to_packet = [(ready - capture_at) / 1e6
                      for capture_at, ready in zip(captured_ns, packet_ready_ns)]
         to_socket = [(recv - ready) / 1e6
                      for ready, recv in zip(packet_ready_ns, socket_recv_ns)]
