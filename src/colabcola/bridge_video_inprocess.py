@@ -72,6 +72,10 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
     left, right = socket.socketpair()
     left.settimeout(5)
     right.settimeout(5)
+    # perf_counter_ns is the high-resolution elapsed-time clock. On some
+    # Windows/Python combinations monotonic_ns is too coarse to resolve
+    # the 96x64 codec operations and yields zero-length samples.
+    # All stage timestamps, including decoder flush, use the same clock.
     captured_ns: list[int] = []
     packet_ready_ns: list[int] = []
     socket_recv_ns: list[int] = []
@@ -93,7 +97,7 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
             if len(pixels) != width * height * 3:
                 raise RuntimeError("in-process H.264 decoded frame has incorrect dimensions")
             decoded_pixels.append(pixels)
-            decoded_ns.append(time.monotonic_ns())
+            decoded_ns.append(time.perf_counter_ns())
             if source_active:
                 decoded_before_end += 1
 
@@ -106,7 +110,7 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
             raise RuntimeError("unexpected extra H.264 packet")
         seq = next_packet
         next_packet += 1
-        ready = time.monotonic_ns()
+        ready = time.perf_counter_ns()
         packet_ready_ns.append(ready)
         wire = packet_bytes(VideoAccessUnit(
             seq=seq, pts_ns=round(seq * 1_000_000_000 / fps),
@@ -117,7 +121,7 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
         received = receive_packet(right)
         if received is None or received.seq != seq:
             raise RuntimeError("local H.264 sequence ID mismatch")
-        socket_recv_ns.append(time.monotonic_ns())
+        socket_recv_ns.append(time.perf_counter_ns())
         encoded_bytes += len(payload)
         keyframes += int(received.keyframe)
         decode_packet(received.data, seq, source_active)
@@ -127,7 +131,7 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
             remaining = started + seq / fps - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
-            captured_ns.append(time.monotonic_ns())
+            captured_ns.append(time.perf_counter_ns())
             array = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3))
             source_frame = av.VideoFrame.from_ndarray(array, format="rgb24")
             source_frame.pts = seq
@@ -138,7 +142,7 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
         for frame in decoder.decode(None):
             pixels = frame.to_ndarray(format="rgb24").tobytes()
             decoded_pixels.append(pixels)
-            decoded_ns.append(time.monotonic_ns())
+            decoded_ns.append(time.perf_counter_ns())
 
         if (next_packet != frames or len(decoded_pixels) != frames
                 or len(decoded_ns) != frames or len(packet_ready_ns) != frames):
@@ -166,9 +170,8 @@ def compare_inprocess(*, width: int = 192, height: int = 120,
             "decoded_frames": len(decoded_pixels),
             "decoded_before_source_finished": decoded_before_end,
             "live_decode_fps": round(active_fps, 2),
-            # The tiny 96x64 Windows test can finish in under 0.05 ms.
-            # One decimal place of milliseconds rounded genuine positive
-            # latency to 0.0 and made the test incorrectly fail.
+            # The tiny 96x64 Windows operations need a high-resolution
+            # clock and sub-millisecond precision in the returned report.
             "capture_to_decoded_p50_ms": round(median(ages), 3),
             "capture_to_decoded_p50_us": round(median(ages) * 1000, 2),
             "capture_to_packet_p50_ms": round(median(to_packet), 3),
