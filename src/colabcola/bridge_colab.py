@@ -305,15 +305,35 @@ def run_colab(args) -> int:
                     save(args.run_dir, state, "allocated", endpoint=endpoint)
                     print("[colabcola] T4 allocated; starting remote CUDA renderer", flush=True)
                     session = wait_for_session(provider, endpoint, min(deadline, time.monotonic() + 90))
-                    remote, details = start_worker(provider, session, state["run_id"], args.fps)
-                    save(args.run_dir, state, "running", gpu_name=details["gpu"])
-                    print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
-                    run_viewer("127.0.0.1", 0, "", width=640, height=360,
-                               title="Colab Cola · Google Colab T4",
-                               worker=lambda outgoing, frames, stopped:
-                                   stream_remote(provider, session, remote, state["run_id"],
-                                                 details["gpu"], outgoing, frames, stopped,
-                                                 deadline, args.poll_hz))
+                    transport = getattr(args, "transport", "files")
+                    if transport == "comm":
+                        # Opt-in persistent Jupyter kernel websocket.
+                        # The proven Contents-API polling route remains the default.
+                        from .bridge_comm import KernelCommBridge, stream_comm
+                        peer = KernelCommBridge(provider, session, state["run_id"], args.fps)
+                        try:
+                            details = peer.open()
+                            save(args.run_dir, state, "running", gpu_name=details["gpu"],
+                                 transport="comm")
+                            print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
+                            run_viewer("127.0.0.1", 0, "", width=640, height=360,
+                                       title="Colab Cola · T4 (kernel Comm)",
+                                       worker=lambda outgoing, frames, stopped:
+                                           stream_comm(peer, details["gpu"], outgoing, frames,
+                                                       stopped, deadline, args.poll_hz))
+                        finally:
+                            peer.close()
+                    else:
+                        remote, details = start_worker(provider, session, state["run_id"], args.fps)
+                        save(args.run_dir, state, "running", gpu_name=details["gpu"],
+                             transport="files")
+                        print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
+                        run_viewer("127.0.0.1", 0, "", width=640, height=360,
+                                   title="Colab Cola · Google Colab T4",
+                                   worker=lambda outgoing, frames, stopped:
+                                       stream_remote(provider, session, remote, state["run_id"],
+                                                     details["gpu"], outgoing, frames, stopped,
+                                                     deadline, args.poll_hz))
                 finally:
                     print("[colabcola] Releasing only the owned T4 runtime...", flush=True)
                     if not release_owned(provider, args.run_dir, state):
