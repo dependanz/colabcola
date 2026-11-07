@@ -123,7 +123,7 @@ def test_local_callback_timestamp_travels_through_encoded_packet_to_gui_queue():
             timed.append(data)
     assert len(timed) == 12
     assert all(isinstance(sample[1], LocalFrameTiming) for sample in timed)
-    assert all(sample[0].startswith(b"P6\\n96 64\\n255\\n") for sample in timed)
+    assert all(sample[0].startswith(b"P6\n96 64\n255\n") for sample in timed)
     assert timed[0][1].input_callback_ns == callback_ns
 
     meter = ViewerPresentationMeter(started_at=10.0)
