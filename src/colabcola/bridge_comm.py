@@ -17,6 +17,7 @@ from .bridge_colab import offer_update, unpack_frame
 from .bridge_telemetry import BridgeTransferMeter
 from .lifecycle_io import LifecycleError
 from .lifecycle_kernel import safe_client_class
+from .bridge_ws_probe import KernelWebSocketProbe, safe_error_type
 
 TARGET = "colabcola.bridge.v1"
 MAX_ENCODED_FRAME = 3 * 1024 * 1024
@@ -92,22 +93,54 @@ class KernelCommBridge:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
         kernel_id = self.provider._kernel(self.session)["id"]
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
-        self.client = safe_client_class(base)(
-            server_url=self.session.url, token=self.session.token, kernel_id=kernel_id,
-            client_kwargs={
-                "subprotocol": jkc.JupyterSubprotocol.DEFAULT,
-                "extra_params": {"colab-runtime-proxy-token": self.session.token},
-            },
-            headers={
-                "X-Colab-Client-Agent": "colab-cli",
-                "X-Colab-Runtime-Proxy-Token": self.session.token,
-            },
-        )
+        # Only connection setup may be retried. Once an execute_request is
+        # submitted, an uncertain response must NEVER trigger replay.
+        reports = []
+        for connect_attempt in range(2):
+            client = safe_client_class(base)(
+                server_url=self.session.url, token=self.session.token, kernel_id=kernel_id,
+                client_kwargs={
+                    "subprotocol": jkc.JupyterSubprotocol.DEFAULT,
+                    "extra_params": {"colab-runtime-proxy-token": self.session.token},
+                },
+                headers={
+                    "X-Colab-Client-Agent": "colab-cli",
+                    "X-Colab-Runtime-Proxy-Token": self.session.token,
+                },
+            )
+            probe = KernelWebSocketProbe()
+            wire = None
+            try:
+                wire = client._manager.client
+                probe.install(wire)
+                client.start()
+                if not wire.connection_ready.is_set():
+                    wire.connection_ready.wait(timeout=2)
+                if wire.connection_ready.is_set():
+                    self.client = client
+                    self.wire = wire
+                    break
+                reports.append(probe.summary(wire))
+            except Exception as exc:
+                summary = probe.summary(wire) if wire is not None else "wire=unavailable"
+                reports.append(summary + ", start_error=" + safe_error_type(exc))
+            finally:
+                if self.client is not client:
+                    try:
+                        client.stop()
+                    except Exception as exc:
+                        raise LifecycleError(
+                            "kernel websocket failed and connection cleanup failed: "
+                            + safe_error_type(exc)
+                        ) from None
+            if connect_attempt == 0:
+                time.sleep(2)
+        if self.wire is None:
+            raise LifecycleError(
+                "kernel websocket did not open after 2 pre-execution connections: "
+                + " | ".join(reports)
+            )
         try:
-            self.client.start()
-            self.wire = self.client._manager.client
-            if not self.wire.connection_ready.is_set():
-                raise LifecycleError("kernel websocket did not open")
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
