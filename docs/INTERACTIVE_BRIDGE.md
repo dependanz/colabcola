@@ -441,7 +441,7 @@ three frame requests in flight in this test, and displays only new frames.
 The delivered FPS measures unique frames queued for the Tk viewer,
 not input-to-photon latency or guaranteed application display FPS.
 
-### v13 credit-window sweep (implemented, not Colab-live verified)
+### v13 credit-window sweep (live verified)
 
 The successful v12 pipeline delivered roughly **9.38 unique FPS** with
 `--inflight 3` at a 12 FPS remote renderer and 12 Hz pull rate. RTT
@@ -468,9 +468,7 @@ remain intact throughout the run. Per-phase reports show unique received
 FPS, response RTT median, fresh/total response count, observed input
 acknowledgment median, and most recent remote renderer rate.
 
-The comparison will show whether two credits capture most of the
-benefit of three, and whether four increase throughput or simply
-increase buffering. The single-credit default and existing rate sweep
+The comparison was completed in v13; the results are documented below. The single-credit default and existing rate sweep
 remain unchanged. The benchmark automatically ends after all five
 phases and invokes the same owned T4 cleanup. This path is experimental
 and should not be interpreted as production-ready streaming.
@@ -489,6 +487,57 @@ Use a new run directory. Verify `phase: released` afterward, and
 retry `bridge cleanup` only if release is unconfirmed. The benchmark
 cannot be combined with the link probe, old renderer-rate sweep,
 or a manually selected `--inflight > 1`.
+
+### v13 observed results: two frame credits are sufficient for this scene
+
+The real v13 credit sweep used one managed Colab T4 and one kernel
+connection, with 12 FPS remote rendering and 12 Hz request pacing
+throughout. It ran all five phases and confirmed runtime release.
+
+| Credits | New frames received / second | Frame RTT p50 | Input ACK p50 | Fresh replies |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 5.75 FPS | 172 ms | 250 ms | 58/58 |
+| **2** | **9.53 FPS** | **157 ms** | **250 ms** | **96/97** |
+| 3 | 9.19 FPS | 156 ms | 235 ms | 93/93 |
+| 4 | 9.58 FPS | 156 ms | 242 ms | 97/97 |
+| 1 (baseline repeat) | 6.30 FPS | 156 ms | 234 ms | 64/64 |
+
+Increasing the credit limit from one to two produced roughly **66% more
+received unique FPS** compared with the first baseline. Four credits
+provided only **0.05 FPS** beyond two in this controlled run.
+The remote renderer remained near 12 FPS; only 1/409 replies
+repeated an older renderer sequence. The repeated single-credit
+baseline was somewhat faster, consistent with mild within-run variation.
+
+For this specific scene, **two credits are the preferred experimental
+configuration**. This is not yet a general recommendation across
+workloads, resolutions or Colab sessions; the single-credit default
+is intentionally unchanged.
+
+### Opt-in local Tk viewer measurement (not yet live tested)
+
+`--viewer-stats` independently measures frames that the local Tk
+event loop actually decodes and configures on the image label.
+Its two-second terminal reports are separate from the network-side
+received FPS and include median local Tk image+label processing time.
+This is **not** an OS compositor/presentation or input-to-photon
+measurement. It can reveal whether the GUI itself falls behind when
+the bridge receives 9–10 FPS. The window remains fixed-size, and
+the meter is disabled by default.
+
+For an optional live comparison with **two credits** (a new T4
+allocation that may consume compute units):
+
+```powershell
+colabcola --profile pypi-new-account-test bridge colab `
+  --run-dir I:\colabcola-bridge-t4-proof-v14 `
+  --transport comm --gpu T4 --fps 12 --poll-hz 12 `
+  --inflight 2 --viewer-stats `
+  --max-seconds 180 --confirm-allocation
+```
+
+Look for `GUI configured` and `kernel Comm` lines in the same
+terminal. Always verify the owned journal ends with `phase: released`.
 
 ## Architecture boundary
 
