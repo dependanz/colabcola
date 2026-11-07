@@ -15,6 +15,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .bridge_protocol import (
     BridgeProtocolError,
