@@ -234,15 +234,17 @@ def photoimage_from_ppm(master, data: bytes):
     return tk.PhotoImage(master=master, data=data, format="PPM")
 
 
-def run_viewer(host: str, port: int, token: str) -> None:
-    # Tk stays on the main thread; network I/O stays on a dedicated asyncio loop.
+def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
+               height: int = HEIGHT, title: str | None = None,
+               worker=None) -> None:
+    # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
     outgoing: queue.Queue = queue.Queue(maxsize=64)
     frames: queue.Queue = queue.Queue(maxsize=2)
     stopped = threading.Event()
     root = tk.Tk()
-    root.title("Colab Cola · Interactive Bridge Prototype")
+    root.title(title or "Colab Cola · Interactive Bridge Prototype")
     status = tk.StringVar(value="Connecting...")
     label = tk.Label(root, text="Waiting for frames", width=30, height=8)
     label.pack()
@@ -261,11 +263,12 @@ def run_viewer(host: str, port: int, token: str) -> None:
         if now - last_motion[0] < 0.03:
             return
         last_motion[0] = now
-        enqueue({"event": "mouse", "x": max(0.0, min(1.0, event.x / WIDTH)),
-                 "y": max(0.0, min(1.0, event.y / HEIGHT))})
+        enqueue({"event": "mouse", "x": max(0.0, min(1.0, event.x / width)),
+                 "y": max(0.0, min(1.0, event.y / height))})
 
     def poll() -> None:
         if stopped.is_set():
+            root.destroy()
             return
         try:
             while True:
@@ -274,8 +277,10 @@ def run_viewer(host: str, port: int, token: str) -> None:
                     status.set(data)
                 elif kind == "frame":
                     image = photoimage_from_ppm(root, data)
-                    label.configure(image=image, text="", width=WIDTH, height=HEIGHT)
+                    label.configure(image=image, text="", width=width, height=height)
                     label.image = image
+                    if status.get() == "Connecting...":
+                        status.set("Connected")
         except queue.Empty:
             pass
         root.after(30, poll)
@@ -283,15 +288,18 @@ def run_viewer(host: str, port: int, token: str) -> None:
     label.bind("<Motion>", mouse)
     root.bind("<KeyPress>", lambda e: enqueue({"event": "key", "key": e.keysym[:32]}))
     root.protocol("WM_DELETE_WINDOW", lambda: (stopped.set(), root.destroy()))
-    thread = threading.Thread(
-        target=lambda: asyncio.run(stream_viewer(host, port, token, outgoing, frames, stopped)),
-        daemon=True,
-    )
+    def dispatch() -> None:
+        if worker is not None:
+            worker(outgoing, frames, stopped)
+        else:
+            asyncio.run(stream_viewer(host, port, token, outgoing, frames, stopped))
+
+    thread = threading.Thread(target=dispatch, daemon=True)
     thread.start()
     root.after(30, poll)
     root.mainloop()
     stopped.set()
-    thread.join(timeout=2)
+    thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -307,7 +315,35 @@ def main(argv: list[str] | None = None) -> int:
     server = sub.choices["serve"]
     server.add_argument("--fps", type=int, default=8)
     server.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    from .profiles import add_profile_argument
+    add_profile_argument(parser)
+    remote = sub.add_parser("colab", help="allocate one managed T4 for an interactive GPU scene")
+    remote.add_argument("--run-dir", type=Path)
+    remote.add_argument("--gpu", choices=("T4",), default="T4")
+    remote.add_argument("--fps", type=int, default=6)
+    remote.add_argument("--poll-hz", type=int, default=3)
+    remote.add_argument("--max-seconds", type=int, default=600)
+    remote.add_argument("--confirm-allocation", action="store_true")
+    remote.add_argument("--preflight-only", action="store_true")
+    clean = sub.add_parser("cleanup", help="release a previously owned interactive T4")
+    clean.add_argument("--run-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.action in ("colab", "cleanup"):
+        from .bridge_colab import cleanup_colab, run_colab
+        from .lifecycle_io import LifecycleError
+        try:
+            if args.action == "cleanup":
+                return cleanup_colab(args)
+            if args.run_dir is None and not args.preflight_only:
+                parser.error("colab requires --run-dir except for --preflight-only")
+            if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= 6:
+                parser.error("colab FPS must be 1..12 and poll-hz must be 1..6")
+            if not 120 <= args.max_seconds <= 1800:
+                parser.error("colab --max-seconds must be within 120..1800")
+            return run_colab(args)
+        except LifecycleError as exc:
+            print("[colabcola] " + str(exc))
+            return 2
     if args.host not in LOOPBACK_HOSTS:
         parser.error("prototype transport is loopback-only; use an authenticated provider adapter for remote compute")
     if not 1 <= args.port <= 65535:
