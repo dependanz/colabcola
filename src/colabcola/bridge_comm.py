@@ -223,8 +223,47 @@ class KernelCommBridge:
             self.close()
             raise
 
-    def next_frame(self, seconds: float) -> tuple[int, int, bytes, int]:
-        """Receive one framed IOPub comm_msg, ignoring unrelated notebook data."""
+    def _frame_payload(self, message) -> dict | None:
+        """Filter unrelated Jupyter traffic and maintain control ACK state."""
+        if not isinstance(message, dict) or message.get("header", {}).get("msg_type") != "comm_msg":
+            return None
+        content = message.get("content", {})
+        if not isinstance(content, dict) or content.get("comm_id") != self.comm_id:
+            return None
+        payload = content.get("data")
+        if (not isinstance(payload, dict) or payload.get("v") != 1
+                or payload.get("run_id") != self.run_id):
+            return None
+        kind = payload.get("kind")
+        if kind == "error":
+            raise LifecycleError("remote kernel bridge reported an error")
+        if kind == "rate_ack":
+            rate_seq = payload.get("seq")
+            if type(rate_seq) is int and self.latest_rate_ack < rate_seq < 10000:
+                self.latest_rate_ack = rate_seq
+        return payload if kind == "frame" else None
+
+    def _decode_frame(self, payload: dict, *, require_pull_id: bool = False):
+        encoded = payload.get("data")
+        if not isinstance(encoded, str) or len(encoded) > MAX_ENCODED_FRAME:
+            raise LifecycleError("kernel frame encoding exceeds limit")
+        try:
+            binary = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError):
+            raise LifecycleError("kernel frame Base64 invalid") from None
+        sequence, ack, width, height, ppm = unpack_frame(binary)
+        if width != 640 or height != 360:
+            raise LifecycleError("kernel frame dimensions invalid")
+        self.latest_renderer_metrics = validated_renderer_metrics(
+            payload.get("metrics"), self.run_id)
+        if require_pull_id:
+            pull_id = payload.get("pull_seq")
+            if type(pull_id) is not int or not 1 <= pull_id <= 100000000:
+                raise LifecycleError("kernel frame response has invalid request ID")
+            return pull_id, sequence, ack, ppm, len(binary)
+        return sequence, ack, ppm, len(binary)
+
+    def _recv_frame(self, seconds: float, *, require_pull_id: bool, optional: bool):
         if self.wire is None or not self.comm_id:
             raise LifecycleError("kernel bridge not started")
         deadline = time.monotonic() + seconds
@@ -232,39 +271,30 @@ class KernelCommBridge:
             if not self.wire.connection_ready.is_set():
                 raise LifecycleError("kernel websocket disconnected")
             try:
-                message = self.wire.iopub_channel.get_msg(timeout=min(.25, max(.01, deadline-time.monotonic())))
+                message = self.wire.iopub_channel.get_msg(
+                    timeout=min(.25, max(.01, deadline - time.monotonic())))
             except queue.Empty:
                 continue
-            if message.get("header", {}).get("msg_type") != "comm_msg":
-                continue
-            content = message.get("content", {})
-            if content.get("comm_id") != self.comm_id:
-                continue
-            payload = content.get("data")
-            if not isinstance(payload, dict) or payload.get("v") != 1 or payload.get("run_id") != self.run_id:
-                continue
-            if payload.get("kind") != "frame":
-                if payload.get("kind") == "error":
-                    raise LifecycleError("remote kernel bridge reported an error")
-                if payload.get("kind") == "rate_ack":
-                    rate_seq = payload.get("seq")
-                    if type(rate_seq) is int and self.latest_rate_ack < rate_seq < 10000:
-                        self.latest_rate_ack = rate_seq
-                continue
-            encoded = payload.get("data")
-            if not isinstance(encoded, str) or len(encoded) > MAX_ENCODED_FRAME:
-                raise LifecycleError("kernel frame encoding exceeds limit")
-            try:
-                binary = base64.b64decode(encoded, validate=True)
-            except (ValueError, TypeError):
-                raise LifecycleError("kernel frame Base64 invalid") from None
-            sequence, ack, width, height, ppm = unpack_frame(binary)
-            self.latest_renderer_metrics = validated_renderer_metrics(
-                payload.get("metrics"), self.run_id)
-            if width != 640 or height != 360:
-                raise LifecycleError("kernel frame dimensions invalid")
-            return sequence, ack, ppm, len(binary)
+            payload = self._frame_payload(message)
+            if payload is not None:
+                return self._decode_frame(payload, require_pull_id=require_pull_id)
+        if optional:
+            return None
         raise LifecycleError("kernel frame timeout; no reply to last pull")
+
+    def next_frame(self, seconds: float) -> tuple[int, int, bytes, int]:
+        """Receive one ordinary frame (legacy single-in-flight contract)."""
+        return self._recv_frame(seconds, require_pull_id=False, optional=False)
+
+    def poll_pipeline_frame(self, seconds: float):
+        """Return (pull ID, frame sequence, ACK, pixels, bytes) or None.
+
+        A short timeout does not imply transport failure; the pipeline
+        maintains independent per-request deadlines and a strict credit cap.
+        """
+        if not 0 < seconds <= .5:
+            raise ValueError("pipeline receive timeout must be within (0, 0.5] seconds")
+        return self._recv_frame(seconds, require_pull_id=True, optional=True)
 
     def probe_small_message_rtt(self, samples: int = 8) -> int:
         """Measure tiny shell→IOPub Comm round trip before streaming starts.
@@ -306,8 +336,13 @@ class KernelCommBridge:
                 raise LifecycleError("tiny Comm ping timed out")
         return round(median(durations))
 
-    def request_frame(self):
-        self._send("pull")
+    def request_frame(self, pull_seq: int | None = None):
+        if pull_seq is None:
+            self._send("pull")
+        else:
+            if type(pull_seq) is not int or not 1 <= pull_seq <= 100000000:
+                raise ValueError("invalid frame request ID")
+            self._send("pull", pull_seq=pull_seq)
 
     def send_input(self, seq: int, event: dict) -> None:
         self._send("input", seq=seq, **event)
