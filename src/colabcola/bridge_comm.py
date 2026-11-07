@@ -1,0 +1,234 @@
+"""Persistent Jupyter Comm transport for Colab Cola's experimental T4 bridge.
+
+One authenticated kernel WebSocket carries discrete input events and
+credit-limited frame snapshots. It never exposes a server, adds a proxy,
+or modifies the established batch execution and checkpoint code paths.
+"""
+from __future__ import annotations
+
+import base64
+import importlib.resources
+import json
+import queue
+import time
+from typing import Any
+
+from .bridge_colab import offer_update, unpack_frame
+from .bridge_telemetry import BridgeTransferMeter
+from .lifecycle_io import LifecycleError
+from .lifecycle_kernel import safe_client_class
+
+TARGET = "colabcola.bridge.v1"
+MAX_ENCODED_FRAME = 3 * 1024 * 1024
+
+
+class KernelCommBridge:
+    def __init__(self, provider, session, run_id: str, fps: int):
+        self.provider = provider
+        self.session = session
+        self.run_id = run_id
+        self.fps = fps
+        self.client = None
+        self.wire = None
+        self.comm_id = None
+        self._closed = False
+
+    def _send(self, kind: str, **fields: object) -> None:
+        if self._closed or not self.comm_id or self.wire is None:
+            raise LifecycleError("kernel bridge not attached")
+        if not self.wire.connection_ready.is_set():
+            raise LifecycleError("kernel websocket disconnected")
+        data = {"v": 1, "kind": kind, "run_id": self.run_id, **fields}
+        msg = self.wire.session.msg("comm_msg",
+                                    {"comm_id": self.comm_id, "data": data})
+        self.wire.shell_channel.send(msg)
+
+    def open(self) -> dict[str, Any]:
+        """Upload runtime code, attach to owned kernel, then submit bootstrap once."""
+        from ._vendor import jupyter_kernel_client as jkc
+
+        remote = f"content/colabcola-bridge/{self.run_id}"
+        root = "/" + remote
+        self.provider._execute(self.session, 
+            f"from pathlib import Path\nPath({root!r}).mkdir(parents=True, exist_ok=True)")
+        files = importlib.resources.files("colabcola")
+        for name in ("bridge_colab_runtime.py", "bridge_colab_comm_runtime.py"):
+            self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
+        kernel_id = self.provider._kernel(self.session)["id"]
+        base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
+        self.client = safe_client_class(base)(
+            server_url=self.session.url, token=self.session.token, kernel_id=kernel_id,
+            client_kwargs={
+                "subprotocol": jkc.JupyterSubprotocol.DEFAULT,
+                "extra_params": {"colab-runtime-proxy-token": self.session.token},
+            },
+            headers={
+                "X-Colab-Client-Agent": "colab-cli",
+                "X-Colab-Runtime-Proxy-Token": self.session.token,
+            },
+        )
+        try:
+            self.client.start()
+            self.wire = self.client._manager.client
+            if not self.wire.connection_ready.is_set():
+                raise LifecycleError("kernel websocket did not open")
+            code = ("import runpy\n"
+                    f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
+                    "run_name='__main__', init_globals={"
+                    f"'BRIDGE_DIRECTORY':{root!r}, 'BRIDGE_FPS':{self.fps}, "
+                    f"'BRIDGE_RUN_ID':{self.run_id!r},"
+                    f"'BRIDGE_RENDERER_PATH':{root + '/bridge_colab_runtime.py'!r}"
+                    "})\n")
+            # Never replay an uncertain request. A new run directory is required
+            # after any ambiguous submission outcome.
+            request_id = self.wire.execute(code, allow_stdin=False, store_history=False)
+            deadline = time.monotonic() + 65
+            while time.monotonic() < deadline:
+                if not self.wire.connection_ready.is_set():
+                    raise LifecycleError("kernel websocket disconnected during bootstrap")
+                for channel in (self.wire.iopub_channel, self.wire.shell_channel):
+                    try:
+                        msg = channel.get_msg(timeout=.1)
+                    except queue.Empty:
+                        continue
+                    if msg.get("parent_header", {}).get("msg_id") != request_id:
+                        continue
+                    kind = msg.get("header", {}).get("msg_type")
+                    content = msg.get("content", {})
+                    if kind == "execute_reply" and content.get("status") != "ok":
+                        raise LifecycleError("kernel bridge bootstrap execution failed")
+                    if kind != "comm_open":
+                        continue
+                    if content.get("target_name") != TARGET:
+                        continue
+                    details = content.get("data", {})
+                    if (details.get("v") != 1 or details.get("kind") != "ready"
+                            or details.get("run_id") != self.run_id
+                            or details.get("device") != "cuda" or "T4" not in details.get("gpu", "")
+                            or details.get("width") != 640 or details.get("height") != 360):
+                        raise LifecycleError("kernel bridge CUDA handshake invalid")
+                    comm_id = content.get("comm_id")
+                    if not isinstance(comm_id, str) or not 1 <= len(comm_id) <= 128:
+                        raise LifecycleError("kernel bridge communication id invalid")
+                    self.comm_id = comm_id
+                    return details
+            raise LifecycleError("kernel bridge bootstrap timeout")
+        except BaseException:
+            self.close()
+            raise
+
+    def next_frame(self, seconds: float) -> tuple[int, int, bytes, int]:
+        """Receive one framed IOPub comm_msg, ignoring unrelated notebook data."""
+        if self.wire is None or not self.comm_id:
+            raise LifecycleError("kernel bridge not started")
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if not self.wire.connection_ready.is_set():
+                raise LifecycleError("kernel websocket disconnected")
+            try:
+                message = self.wire.iopub_channel.get_msg(timeout=min(.25, max(.01, deadline-time.monotonic())))
+            except queue.Empty:
+                continue
+            if message.get("header", {}).get("msg_type") != "comm_msg":
+                continue
+            content = message.get("content", {})
+            if content.get("comm_id") != self.comm_id:
+                continue
+            payload = content.get("data")
+            if not isinstance(payload, dict) or payload.get("v") != 1 or payload.get("run_id") != self.run_id:
+                continue
+            if payload.get("kind") != "frame":
+                if payload.get("kind") == "error":
+                    raise LifecycleError("remote kernel bridge reported an error")
+                continue
+            encoded = payload.get("data")
+            if not isinstance(encoded, str) or len(encoded) > MAX_ENCODED_FRAME:
+                raise LifecycleError("kernel frame encoding exceeds limit")
+            try:
+                binary = base64.b64decode(encoded, validate=True)
+            except (ValueError, TypeError):
+                raise LifecycleError("kernel frame Base64 invalid") from None
+            sequence, ack, width, height, ppm = unpack_frame(binary)
+            if width != 640 or height != 360:
+                raise LifecycleError("kernel frame dimensions invalid")
+            return sequence, ack, ppm, len(binary)
+        raise LifecycleError("kernel frame timeout; no reply to last pull")
+
+    def request_frame(self):
+        self._send("pull")
+
+    def send_input(self, seq: int, event: dict) -> None:
+        self._send("input", seq=seq, **event)
+
+    def close(self):
+        if self._closed:
+            return
+        if self.comm_id and self.wire and self.wire.connection_ready.is_set():
+            try:
+                self._send("close")
+            except Exception:
+                pass
+        self._closed = True
+        if self.client:
+            try:
+                self.client.stop()
+            finally:
+                self.client = None
+                self.wire = None
+
+
+def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
+                frames: queue.Queue, stopped, deadline: float,
+                poll_hz: int = 6) -> None:
+    """Exactly one outstanding frame request: no unbounded transport backlog."""
+    meter = BridgeTransferMeter()
+    last_seq = -1
+    input_seq = 0
+    seen = 0
+    transferred = 0
+    last_report = time.monotonic()
+    interval = 1 / poll_hz
+    print("[colabcola] Persistent kernel Comm connected", flush=True)
+    offer_update(frames, ("status", f"Kernel Comm · {gpu}"))
+    try:
+        while not stopped.is_set() and time.monotonic() < deadline:
+            start = time.monotonic()
+            latest = None
+            while True:
+                try:
+                    latest = outgoing.get_nowait()
+                except queue.Empty:
+                    break
+            if latest:
+                input_seq += 1
+                meter.sent(input_seq, time.monotonic())
+                peer.send_input(input_seq, latest)
+            peer.request_frame()
+            sequence, ack, ppm, size = peer.next_frame(min(8.0, max(0.1, deadline-time.monotonic())))
+            now = time.monotonic()
+            if sequence > last_seq:
+                last_seq = sequence
+                seen += 1
+                transferred += size
+                offer_update(frames, ("frame", ppm))
+            meter.received_ack(ack, now)
+            if now-last_report >= 2:
+                elapsed = max(now-last_report, .001)
+                stats = meter.flush()
+                result = (f"{gpu} · kernel Comm {seen/elapsed:.1f} FPS · "
+                          f"{transferred/elapsed/1024:.0f} KiB/s")
+                if stats["ack"] is not None:
+                    result += f" · input ACK observed p50 {stats['ack']} ms"
+                print("[colabcola] "+result, flush=True)
+                offer_update(frames, ("status", result))
+                seen = 0
+                transferred = 0
+                last_report = now
+            sleep_for = max(0, interval-(time.monotonic()-start))
+            if sleep_for:
+                time.sleep(sleep_for)
+    except Exception as exc:
+        print("[colabcola] Persistent kernel Comm failed: " + type(exc).__name__, flush=True)
+        raise LifecycleError("kernel Comm transport interrupted") from None
+    finally:
+        stopped.set()
