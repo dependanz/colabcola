@@ -155,6 +155,13 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
     root.mkdir()
     rendered = packed_frame()
     (root / "frame.bin").write_bytes(rendered)
+    run_id = "d" * 32
+    renderer_metrics = {
+        "schema": 1, "run_id": run_id, "seq": 3,
+        "renderer_fps": 5.9, "render_copy_ms": 13.5,
+        "compress_ms": 2.0, "publish_ms": 0.5,
+    }
+    (root / "render-metrics.json").write_text(json.dumps(renderer_metrics))
     fake_renderer = tmp_path / "fake_renderer.py"
     fake_renderer.write_text(
         "from pathlib import Path\n"
@@ -192,7 +199,6 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
     monkeypatch.setitem(sys.modules, "ipykernel.comm", legacy)
     path = importlib.resources.files("colabcola").joinpath("bridge_colab_comm_runtime.py")
     env = runpy.run_path(str(path), run_name="test_comm")
-    run_id = "d" * 32
     env["start"](str(root), run_id, 6, str(fake_renderer))
     channel = channels[0]
     assert channel.open_message["data"]["gpu"] == "Tesla T4"
@@ -202,6 +208,7 @@ def test_remote_comm_handler_uses_frame_credit_and_validates_input(tmp_path, mon
     channel.callback({"content": {"data": {"v": 1, "kind": "pull", "run_id": run_id}}})
     assert len(channel.replies) == 1
     assert base64.b64decode(channel.replies[0]["data"], validate=True) == rendered
+    assert channel.replies[0]["metrics"] == renderer_metrics
     channel.callback({"content": {"data": {"v": 1, "kind": "close", "run_id": run_id}}})
     assert channel.closed
     assert (root / "stop").is_file()
