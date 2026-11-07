@@ -57,8 +57,7 @@ jobs:
       - name: Install FFmpeg (Linux codec regression)
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - name: Install PyAV and NumPy (optional Linux comparison only)
-        if: runner.os == 'Linux'
+      - name: Install PyAV and NumPy (optional in-process codec regression)
         run: python -m pip install 'av>=17,<20' 'numpy>=2,<3'
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
