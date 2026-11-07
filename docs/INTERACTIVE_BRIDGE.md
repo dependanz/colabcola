@@ -1438,12 +1438,44 @@ fixed-depth virtual playout outcomes. A request can only be made
 after a received frame exposes a loss; a final lost frame with
 no later packet may remain undetected.
 
-The expected first scenario is an actual 60-frame H.264 stream at
-30 FPS with GOP 24 and explicit whole-frame erasures at source IDs
-5 and 27. The model can compare no-controller periodic IDRs
-against up to eight rate-limited receiver feedback requests.
-A second scenario exercises bandwidth changes, age-based drops
-and seeded jitter. The streaming adaptation remains limited to
+The first scenario has now been verified by cross-platform CI:
+**140 passing tests on Ubuntu** and **134 passed / 6 skipped
+on Windows** (the skips require an external FFmpeg executable).
+With a real synthetic **60-frame H.264 stream, 30 FPS, GOP 24**
+and explicitly erased media frames **5 and 27**, the virtual
+receiver detected both gaps only on arrival of a subsequent
+access unit. Feedback requests were generated at virtual times
+**240.0 ms** and **973.333 ms**, reached the source at
+**260.0 ms** and **993.333 ms**, and caused IDRs at frame
+indices **8 and 30**, respectively. Both new keyframes
+were verified through real H.264 decoding.
+
+| v25 modeled outcome | Periodic GOP 24 | Two receiver-feedback IDRs |
+| --- | ---: | ---: |
+| Frames actually decoded | **20/60** | **54/60** |
+| On-time unique frames at 40 ms fixed playout | 20/60 | **54/60** |
+| Media wire bytes | 20,465 | 20,527 |
+| Encoded IDRs | 3 | 4 |
+| Lost access units | 2 | 2 |
+| Applied feedback requests | 0 | 2 |
+
+There are **34 more valid decoded frames** than with periodic
+keyframes alone in this deliberately challenging small example.
+The media-byte difference (62 bytes) is content-dependent,
+and it excludes feedback-message bytes and encoder-reset CPU
+cost. Real link timings, congestion feedback, and physical
+presentation remain unmeasured.
+
+The second verified Linux CI scenario had a piecewise bandwidth
+profile of 2,500 → 130 → 2,200 kbps, ±15 ms seeded jitter,
+bounded queue 6 and max modeled frame age 200 ms. It delivered
+and decoded **60/60 frames without any requested IDRs**;
+a static 40 ms playout buffer met 8 deadlines, 80 ms met 57,
+and 160 ms or 240 ms met all 60. This reinforces the
+separation between reference-chain recovery and jitter-buffer
+tradeoffs.
+
+Streaming adaptation remains limited to
 **IDR recovery**: the H.264 CRF/bitrate is fixed and the playback
 buffers remain a set of fixed comparisons. A rate controller and
 adaptive buffer clock are separate future experiments; neither
