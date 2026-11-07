@@ -10,6 +10,7 @@ import base64
 import importlib.resources
 import json
 import queue
+from statistics import median
 import time
 from typing import Any
 
@@ -263,7 +264,10 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
     input_seq = 0
     seen = 0
     transferred = 0
+    pulls = 0
+    pull_rtts_ms: list[float] = []
     last_report = time.monotonic()
+    last_fresh_frame = last_report
     interval = 1 / poll_hz
     print("[colabcola] Persistent kernel Comm connected", flush=True)
     offer_update(frames, ("status", f"Kernel Comm · {gpu}"))
@@ -280,26 +284,37 @@ def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
                 input_seq += 1
                 meter.sent(input_seq, time.monotonic())
                 peer.send_input(input_seq, latest)
+            pull_started = time.monotonic()
             peer.request_frame()
             sequence, ack, ppm, size = peer.next_frame(min(8.0, max(0.1, deadline-time.monotonic())))
             now = time.monotonic()
+            pulls += 1
+            pull_rtts_ms.append((now - pull_started) * 1000)
             if sequence > last_seq:
                 last_seq = sequence
+                last_fresh_frame = now
                 seen += 1
                 transferred += size
                 offer_update(frames, ("frame", ppm))
+            elif now - last_fresh_frame >= 30:
+                raise LifecycleError("kernel renderer published no fresh frame for 30 seconds")
             meter.received_ack(ack, now)
             if now-last_report >= 2:
                 elapsed = max(now-last_report, .001)
                 stats = meter.flush()
                 result = (f"{gpu} · kernel Comm {seen/elapsed:.1f} FPS · "
                           f"{transferred/elapsed/1024:.0f} KiB/s")
+                if pull_rtts_ms:
+                    result += f" · pull RTT p50 {median(pull_rtts_ms):.0f} ms"
+                    result += f" · fresh {seen}/{pulls}"
                 if stats["ack"] is not None:
                     result += f" · input ACK observed p50 {stats['ack']} ms"
                 print("[colabcola] "+result, flush=True)
                 offer_update(frames, ("status", result))
                 seen = 0
                 transferred = 0
+                pulls = 0
+                pull_rtts_ms.clear()
                 last_report = now
             sleep_for = max(0, interval-(time.monotonic()-start))
             if sleep_for:
