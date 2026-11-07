@@ -20,6 +20,40 @@ from .lifecycle_kernel import safe_client_class
 
 TARGET = "colabcola.bridge.v1"
 MAX_ENCODED_FRAME = 3 * 1024 * 1024
+_SAFE_BOOTSTRAP_STAGES = frozenset({
+    "imports", "loading_renderer", "starting_renderer", "waiting_cuda",
+    "creating_comm", "registering_handler", "ready",
+})
+_SAFE_ERROR_TYPES = frozenset({
+    "ModuleNotFoundError", "ImportError", "NameError", "RuntimeError",
+    "TypeError", "ValueError", "AttributeError", "FileNotFoundError",
+    "OSError", "NotImplementedError", "SyntaxError", "KeyError",
+    "PermissionError", "AssertionError", "SystemError",
+})
+
+
+def bootstrap_error_summary(provider, session, remote: str, run_id: str,
+                            reply: object) -> str:
+    """Return only vetted error classes and pipeline stages; never error values."""
+    name = ""
+    if isinstance(reply, dict) and reply.get("ename") in _SAFE_ERROR_TYPES:
+        name = reply["ename"]
+    try:
+        diagnostic = provider._json_file(
+            session, remote + "/bridge-bootstrap-diagnostic.json")
+    except Exception:
+        diagnostic = None
+    if (isinstance(diagnostic, dict) and diagnostic.get("schema") == 1
+            and diagnostic.get("run_id") == run_id
+            and diagnostic.get("state") == "failed"):
+        stage = diagnostic.get("stage")
+        if stage not in _SAFE_BOOTSTRAP_STAGES:
+            stage = "unknown"
+        error_type = diagnostic.get("error_type")
+        if error_type not in _SAFE_ERROR_TYPES:
+            error_type = name or "RemoteException"
+        return f"stage={stage}, error_type={error_type}"
+    return "error_type=" + (name or "RemoteException")
 
 
 class KernelCommBridge:
@@ -96,7 +130,15 @@ class KernelCommBridge:
                     kind = msg.get("header", {}).get("msg_type")
                     content = msg.get("content", {})
                     if kind == "execute_reply" and content.get("status") != "ok":
-                        raise LifecycleError("kernel bridge bootstrap execution failed")
+                        summary = bootstrap_error_summary(
+                            self.provider, self.session, remote, self.run_id, content)
+                        raise LifecycleError("kernel bridge bootstrap execution failed: " + summary)
+                    if kind == "error":
+                        # IOPub error often precedes execute_reply, but it may
+                        # be lost/reordered by a hosted kernel proxy.
+                        summary = bootstrap_error_summary(
+                            self.provider, self.session, remote, self.run_id, content)
+                        raise LifecycleError("kernel bridge bootstrap execution failed: " + summary)
                     if kind != "comm_open":
                         continue
                     if content.get("target_name") != TARGET:
