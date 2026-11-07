@@ -68,6 +68,12 @@ Python workload + inputs
                   Google Drive + verified results
 ```
 
+## Beyond batch jobs: a compute connection
+
+Colab Cola is being developed as a **connection between local applications and remote compute**. Its Python job runner, verified artifact transport, and automatic checkpoint recovery remain core capabilities. Future interactive sessions would also carry input events, rendered frames, and other application I/O across that connection, with provider-independent transports.
+
+An experimental **loopback-only** graphics/input bridge is under development; it does not yet connect to managed Colab runtimes. See [Interactive bridge](docs/INTERACTIVE_BRIDGE.md) for a runnable local demonstration, tests, and the remaining integration work.
+
 ## Platform support
 
 | Host platform | Status for v0.1.0 |
