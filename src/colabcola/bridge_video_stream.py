@@ -142,6 +142,21 @@ def _launch(ffmpeg: str, arguments: list[str]) -> subprocess.Popen:
         raise RuntimeError("local FFmpeg launch failed: " + type(exc).__name__) from None
 
 
+def frame_stage_times_ms(captured_ns: int, packetized_ns: int,
+                         received_ns: int, decoded_ns: int) -> tuple[float, float, float]:
+    """Decompose one frame's local age into consecutive monotonic intervals.
+
+    Encoder output is observed after access-unit parsing; the first component
+    includes the packetizer's lookahead. The second includes local socket and
+    thread scheduling. The last includes decoder input buffering/conversion.
+    """
+    if not (0 <= captured_ns <= packetized_ns <= received_ns <= decoded_ns):
+        raise ValueError("invalid local frame stage timestamps")
+    return ((packetized_ns - captured_ns) / 1e6,
+            (received_ns - packetized_ns) / 1e6,
+            (decoded_ns - received_ns) / 1e6)
+
+
 def _encoder(ffmpeg: str, width: int, height: int, fps: int):
     return _launch(ffmpeg, [
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s:v", f"{width}x{height}",
@@ -197,6 +212,8 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
     failures = queue.Queue()
     source_done = threading.Event()
     captured_ns: list[int] = []
+    packetized_ns: list[int] = []
+    received_ns: list[int] = []
     decoded_results: list[tuple[int, int, bool, bytes]] = []
     sent_packets: list[VideoAccessUnit] = []
     metadata: queue.Queue[VideoAccessUnit] = queue.Queue(maxsize=48)
@@ -235,6 +252,9 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
                 index, round(index * 1_000_000_000 / fps),
                 captured_ns[index], unit, is_keyframe(unit),
             )
+            # Record before sendall so a concurrent receiver cannot observe
+            # the packet before its local enqueue timestamp is recorded.
+            packetized_ns.append(time.monotonic_ns())
             sender.sendall(packet_bytes(packet))
             sent_packets.append(packet)
             index += 1
@@ -260,6 +280,7 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
             if packet.seq != previous + 1:
                 raise ValueError("encoded video packet arrived out of order")
             previous = packet.seq
+            received_ns.append(time.monotonic_ns())
             metadata.put(packet, timeout=5)
             decoder.stdin.write(packet.data)
         decoder.stdin.close()
@@ -298,11 +319,17 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
             raise RuntimeError("local video streaming worker failed: " + failures.get())
         if encoder.wait(timeout=5) or decoder.wait(timeout=5):
             raise RuntimeError("local FFmpeg encoder or decoder failed")
-        if len(decoded_results) != frames or len(sent_packets) != frames:
+        if (len(decoded_results) != frames or len(sent_packets) != frames
+                or len(packetized_ns) != frames or len(received_ns) != frames):
             raise RuntimeError("local video stream did not decode all frames")
         if decoded_results[0][3] == decoded_results[-1][3]:
             raise RuntimeError("decoded stream had no visual changes")
 
+        stage_ms = [
+            frame_stage_times_ms(captured_ns[index], packetized_ns[index],
+                                 received_ns[index], when)
+            for index, when, preclose, pixels in decoded_results
+        ]
         ages_ms = [(when - captured_ns[index]) / 1e6
                    for index, when, preclose, pixels in decoded_results]
         during = [(index, when) for index, when, preclose, pixels
@@ -318,6 +345,10 @@ def compare_stream(*, width: int = 192, height: int = 120, frames: int = 24,
             "live_decode_fps": round(live_fps, 2),
             "capture_to_decoded_p50_ms": round(median(ages_ms), 1),
             "capture_to_decoded_max_ms": round(max(ages_ms), 1),
+            "capture_to_packet_p50_ms": round(median(s[0] for s in stage_ms), 1),
+            "packet_to_socket_p50_ms": round(median(s[1] for s in stage_ms), 1),
+            "socket_to_decoded_p50_ms": round(median(s[2] for s in stage_ms), 1),
+            "capture_to_decoded_frame_periods": round(median(ages_ms) * fps / 1000, 2),
             "h264_bytes": encoded_bytes, "zlib_bytes": zlib_bytes,
             "h264_relative_size": round(encoded_bytes / zlib_bytes, 4),
             "keyframes": sum(int(packet.keyframe) for packet in sent_packets),
