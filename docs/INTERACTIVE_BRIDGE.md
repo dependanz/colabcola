@@ -1529,6 +1529,70 @@ was on time for **8/60**, an 80 ms buffer **57/60**, and
 160/240 ms buffers **60/60**. No actual network latency or
 screen-presentation timing was measured.
 
+### v26 verified results and limitations (cross-platform CI)
+
+The opt-in adaptive encoder, causal feedback state machine and
+actual RGB quality tests pass on both platforms: **147 tests on
+Ubuntu**, and **141 passed / 6 external-FFmpeg-related skips on
+Windows**. The integrated 90-frame / 30 FPS / 128×72
+textured-scene experiment was run through a deterministic link
+whose virtual bandwidth changed from 1,200 to 90 and back to
+1,200 kbps. All frame sizes came from actual libx264 encoding.
+
+| v26 virtual-link outcome | Fixed target 650 kbps | Adaptive target 650/95 kbps |
+| --- | ---: | ---: |
+| Admitted media wire bytes | 211,788 | **193,760** |
+| Link-delivered units | 54 / 90 | 54 / 90 |
+| Actual decoded frames | **36 / 90** | **46 / 90** |
+| Link-dropped units | 36 | 36 |
+| 40 ms fixed playout: timely frames | 29 | **32** |
+| 160 ms fixed playout: timely frames | 36 | **46** |
+| Pooled RGB PSNR over each policy's decoded frames | 12.969 dB | 12.477 dB |
+| RGB PSNR on exactly the same **36** decoded frame IDs | 12.969 dB | **12.585 dB** |
+| Actual IDRs in encoded stream | 4 | 6 |
+| Source rate switches | 0 | 4 |
+
+The adaptive policy sent about **8.5% fewer admitted media
+bytes**, while preserving **10 more decodable frames**
+than the fixed high-rate stream. Its quality on the
+**same decoded frames** was approximately **0.384 dB lower**.
+This is a real quality/freshness tradeoff, not a claim that
+the adaptive version is always better.
+
+A first, more reactive two-level controller switched
+**eight** times on this trace, exhausting its switch budget
+and recovering 48/90 frames; it also met only 22 deadlines
+at the 40 ms buffer. Adding three consecutive high-delay
+observations before downshift, eight low-delay observations
+before upshift, and a 350 ms minimum between requests
+produced the four-switch result above. The more stable
+policy traded two total reconstructed frames for better
+40 ms on-time delivery (32 versus 22 in these independent
+controller runs).
+
+**Important causal limitation:** the adapted sender switched
+at source frames **7, 18, 62 and 75**. The modeled bandwidth
+outage ran between virtual 600 and 1,750 ms, but the
+critical second downshift did not occur until frame 62
+(about 2,067 ms), *after* the outage ended. Under
+congestion, feedback packets containing the evidence
+can be delayed or starved by the very bottleneck they
+must detect. This controller makes real causal decisions,
+but its observed improvements should not be confused
+with prompt adaptation to the outage. Its early
+low-rate segment and IDR resets also affect the outcome.
+
+This experiment deliberately uses a deterministic moving
+high-entropy texture, not representative gameplay video.
+PSNR computed on different decoded-frame subsets is
+not directly comparable; the matched-frame PSNR is the
+appropriate narrower quality comparison. The simulator's
+media byte counts are transmitted/admitted access units,
+not only delivered payloads. All bandwidth, latency,
+timeliness and feedback times are **virtual**. The actual
+encoder/decoder run locally; no GPU/Colab/real network or
+physical display was involved.
+
 ### v26: receiver-feedback high/low H.264 bitrate adaptation
 
 The separate research module `src/colabcola/bridge_video_rate.py`
