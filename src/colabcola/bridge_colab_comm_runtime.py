@@ -12,16 +12,55 @@ import json
 from pathlib import Path
 import runpy
 import time
-from comm import create_comm
+import os
+
+BOOTSTRAP_STAGE = "imports"
+
+
+def _create_kernel_comm(*, target_name, data):
+    """Use the Colab-documented ipykernel Comm API, with a modern fallback."""
+    try:
+        from ipykernel import comm as kernel_comm
+        comm_class = getattr(kernel_comm, "Comm", None)
+        if comm_class is not None:
+            return comm_class(target_name=target_name, data=data)
+    except ImportError:
+        pass
+    from comm import create_comm
+    return create_comm(target_name=target_name, data=data)
+
+
+def _record_bootstrap_failure(directory, run_id, error):
+    """Persist only a known stage and exception type, never arbitrary traceback."""
+    try:
+        safe_stage = BOOTSTRAP_STAGE if BOOTSTRAP_STAGE in {
+            "imports", "loading_renderer", "starting_renderer", "waiting_cuda",
+            "creating_comm", "registering_handler", "ready",
+        } else "unknown"
+        name = type(error).__name__
+        if not isinstance(name, str) or not name.isidentifier() or len(name) > 80:
+            name = "Exception"
+        payload = {"schema": 1, "run_id": run_id, "state": "failed",
+                   "stage": safe_stage, "error_type": name}
+        destination = Path(directory) / "bridge-bootstrap-diagnostic.json"
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, destination)
+    except Exception:
+        pass
 
 MAX_FRAME_BYTES = 2 * 1024 * 1024 + 20
 TARGET = "colabcola.bridge.v1"
 
 
 def start(directory: str, run_id: str, fps: int, renderer_path: str):
+    global BOOTSTRAP_STAGE
     root = Path(directory)
+    BOOTSTRAP_STAGE = "loading_renderer"
     renderer = runpy.run_path(renderer_path)
+    BOOTSTRAP_STAGE = "starting_renderer"
     renderer["start"](directory, fps, run_id)
+    BOOTSTRAP_STAGE = "waiting_cuda"
     deadline = time.monotonic() + 45
     details = None
     while time.monotonic() < deadline:
@@ -42,7 +81,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
     if details.get("device") != "cuda" or "T4" not in details.get("gpu", ""):
         raise RuntimeError("remote bridge did not verify T4 CUDA compute")
 
-    comm = create_comm(target_name=TARGET, data={
+    BOOTSTRAP_STAGE = "creating_comm"
+    comm = _create_kernel_comm(target_name=TARGET, data={
         "v": 1, "kind": "ready", "run_id": run_id,
         "gpu": details["gpu"], "device": "cuda", "width": details["width"],
         "height": details["height"],
@@ -93,9 +133,15 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
             renderer["atomic_bytes"](root / "stop", b"1")
             comm.close()
 
+    BOOTSTRAP_STAGE = "registering_handler"
     comm.on_msg(on_message)
+    BOOTSTRAP_STAGE = "ready"
     return comm
 
 
 if __name__ == "__main__":
-    start(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, BRIDGE_FPS, BRIDGE_RENDERER_PATH)
+    try:
+        start(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, BRIDGE_FPS, BRIDGE_RENDERER_PATH)
+    except BaseException as exc:
+        _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
+        raise
