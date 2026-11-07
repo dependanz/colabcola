@@ -94,9 +94,25 @@ owned allocation has been confirmed absent. Allocation identity is recorded
 before the allocation request. Other people's or independently allocated
 runtimes must never be released automatically.
 
-The first managed T4 integration is experimental, and still needs the live
-Windows/Colab proof. There is no claim of measured remote frame rate,
-interactive latency, or confirmed cross-provider behavior yet.
+The managed T4 connection completed its first real Windows/Colab test on
+November 6, 2026. At 640×360, the first successful live run observed about
+0.3–0.7 displayed FPS and initial input-acknowledgement estimates around
+1–2 seconds. The T4 released successfully and a separate cleanup check
+confirmed its absence. This validates the authenticated remote interaction
+path, but **not** a low-latency user experience or other compute providers.
+
+Subsequent instrumentation reports local GET/PUT/decompression request costs,
+each as a median over the latest reporting interval. The ACK statistic is
+measured from the beginning of a local input upload until a fetched frame
+acknowledges that input; it is **not** an end-to-end input-to-photon latency
+measurement. Intervals with no new acknowledgements deliberately omit the
+ACK statistic instead of recycling stale values.
+
+Do not infer CUDA render throughput from the current displayed FPS: each
+frame is separately retrieved using an authenticated HTTP Contents API call
+and input writes are also performed through that API. The next architectural
+experiment is a lower-latency persistent transport with explicit ownership
+and cleanup boundaries.
 
 ### Verification
 
