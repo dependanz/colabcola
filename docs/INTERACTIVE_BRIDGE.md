@@ -1135,6 +1135,24 @@ using PyAV on synthetic 128×72, 24 FPS frames with an IDR every
 
 The erased predicted frame cost **7 decodable frames**: the
 erased frame itself plus six reference-dependent frames 6–11.
+
+A third Linux CI example held an encoded **320×180, 30 FPS,
+48-frame** stream at a piecewise bandwidth of **2,500 kbps
+(0–500 ms), 120 kbps (500–1,000 ms), then 2,500 kbps**
+with 50 ms base delay, ±25 ms jitter, a six-unit in-flight
+queue and a 250 ms age cutoff. **All 48/48 frames decoded**
+and peak in-flight occupancy was five, but the *virtual*
+source-to-arrival latency increased to **166.27 ms maximum**
+(median **54.84 ms**) and the largest gap between actually
+decoded frame arrivals was **94.69 ms**. The received-cadence
+estimate over the entire simulated span was **29.54 FPS**.
+
+This is instructive: **near-30 FPS average delivery can coexist
+with a ~95 ms interruption in a continuous frame stream**.
+The model has no playout jitter buffer and no real network
+capture, so it is evidence for the behavior of this specified
+virtual link, not evidence about a particular cloud service.
+
 The modeled receiver did **not** falsely count dependent frames as
 decoded; it opened a new H.264 decoder at IDR index 12.
 Virtual capture-to-arrival medians were about **28.6 ms** and
