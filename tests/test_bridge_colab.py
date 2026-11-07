@@ -217,6 +217,7 @@ def test_boot_uploads_worker_to_owned_colab_kernel():
     assert len(provider.commands) == 2
     assert "runpy.run_path" in provider.commands[1]
     assert "BRIDGE_RUN_ID" in provider.commands[1]
+    compile(provider.commands[1], "remote_bootstrap.py", "exec")
     assert len(provider.files) == 1
     assert provider.files[0][0] == remote + "/bridge_colab_runtime.py"
     compile(provider.files[0][1], "uploaded_worker.py", "exec")
