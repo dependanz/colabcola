@@ -447,3 +447,85 @@ def test_comm_bridge_retries_attachment_but_executes_once(monkeypatch):
     assert len(second.commands) == 1
     peer.close()
     assert created[1].stopped
+
+
+def test_cli_accepts_12hz_comm_but_preserves_file_polling_limit(monkeypatch):
+    from colabcola.cli import main
+    from colabcola import bridge_colab
+    selected = []
+    monkeypatch.setattr(bridge_colab, "run_colab", lambda opts: selected.append(
+        (opts.transport, opts.fps, opts.poll_hz)) or 0)
+    assert main(["--profile", "example", "bridge", "colab", "--preflight-only",
+                 "--transport", "comm", "--fps", "12", "--poll-hz", "12"]) == 0
+    assert selected == [("comm", 12, 12)]
+    with pytest.raises(SystemExit) as exc:
+        main(["--profile", "example", "bridge", "colab", "--preflight-only",
+              "--transport", "files", "--fps", "12", "--poll-hz", "12"])
+    assert exc.value.code == 2
+
+
+def test_kernel_comm_frame_rtt_and_freshness_instrumentation(monkeypatch, capsys):
+    """Exercise the reporting loop without a GPU, file API or elapsed wall time."""
+    from colabcola import bridge_comm
+    from types import SimpleNamespace
+    from itertools import count
+
+    ticks = count(0)
+    clock = SimpleNamespace(
+        monotonic=lambda: next(ticks) / 10,
+        sleep=lambda seconds: None,
+    )
+    monkeypatch.setattr(bridge_comm, "time", clock)
+    stopped = threading.Event()
+    outgoing = queue.Queue()
+    frames = queue.Queue(maxsize=2)
+
+    class FakePeer:
+        def __init__(self):
+            self.requests = 0
+            self.received = 0
+        def request_frame(self):
+            self.requests += 1
+        def send_input(self, seq, event):
+            raise AssertionError("unexpected input")
+        def next_frame(self, seconds):
+            self.received += 1
+            if self.received >= 15:
+                stopped.set()
+            # Duplicate frames should not count as new delivered frames.
+            return self.received // 2, 0, b"test", 1400
+
+    peer = FakePeer()
+    bridge_comm.stream_comm(peer, "Tesla T4", outgoing, frames,
+                            stopped, deadline=100, poll_hz=12)
+    output = capsys.readouterr().out
+    assert "pull RTT p50" in output
+    assert "fresh" in output
+    assert "kernel Comm" in output
+    assert peer.requests == peer.received == 15
+
+
+def test_kernel_comm_repeated_stale_frames_trigger_bounded_failure(monkeypatch):
+    from colabcola import bridge_comm
+    from types import SimpleNamespace
+    from itertools import count
+
+    ticks = count(0)
+    monkeypatch.setattr(bridge_comm, "time", SimpleNamespace(
+        monotonic=lambda: next(ticks) / 2,
+        sleep=lambda seconds: None,
+    ))
+    stopped = threading.Event()
+    frames = queue.Queue(maxsize=2)
+
+    class StalePeer:
+        def request_frame(self):
+            pass
+        def next_frame(self, seconds):
+            return 0, 0, b"frame", 1400
+
+    with pytest.raises(LifecycleError, match="kernel Comm transport interrupted"):
+        bridge_comm.stream_comm(
+            StalePeer(), "Tesla T4", queue.Queue(), frames,
+            stopped, deadline=300, poll_hz=12)
+    assert stopped.is_set()
