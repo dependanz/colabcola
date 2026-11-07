@@ -30,7 +30,8 @@ def test_live_limits_reject_invalid_inputs():
     for width, height, fps, frames in (
         (63, 64, 12, 12), (96, 47, 12, 12), (96, 64, 0, 12),
         (96, 64, 61, 12), (96, 64, 12, 3),
-        (96, 64, 12, 241), (True, 64, 12, 12),
+        (96, 64, 12, 10801), (96, 64, 1, 181),
+        (True, 64, 12, 12),
     ):
         with pytest.raises(ValueError):
             validate_live(width, height, fps, frames)
