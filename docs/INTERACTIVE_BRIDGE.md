@@ -1093,6 +1093,91 @@ proxy, or changes to the released batch runner are involved.
 The latency measurements end at Tk label configuration, not
 physical display scanout or input-to-photon.
 
+## v23 local-only H.264 network-impairment experiment
+
+This new **deterministic virtual-time test harness** addresses what
+makes continuous encoded video fragile when the connection fluctuates.
+It is deliberately separate from every Colab/provider transport.
+It creates real synthetic-scene H.264 access units using an optional
+in-process PyAV/libx264 encoder, then schedules those units through
+a simulated FIFO access-unit link. At the receiver it uses an
+**actual in-process H.264 decoder** and validates the decoded RGB.
+
+The virtual link models **fixed delay, seeded jitter, a finite
+bandwidth rate, piecewise bandwidth steps, whole-access-unit erasure,
+a bounded number of admitted in-flight frames, and a maximum
+frame-age cutoff**. Only queued/admitted frames consume link bandwidth;
+an erased frame does consume bandwidth, whereas a queue-full frame
+never enters the link. Every unit is counted once as delivered or
+dropped. Actual wire framing is validated through the versioned
+bounded `VideoAccessUnit` format used by prior local experiments.
+
+**Important predictive-video safety property:** when an H.264
+predicted frame is erased or dropped, dependent frames must not be
+blindly fed to the decoder. This experiment marks the reference
+chain broken, suppresses dependent frames, and starts a fresh
+H.264 decoder only at a **verified IDR** carrying its own SPS/PPS.
+A fixed closed-GOP encoding interval controls the next possible
+recovery point. This is conservative and intentionally sacrifices
+continuity to avoid presenting corrupted reconstructed frames.
+No dynamic keyframe-request feedback or retransmission is implemented.
+
+### Three useful offline runs
+
+From the experimental branch, with PyAV and NumPy already installed:
+
+```powershell
+# 1. Delay and jitter alone: intact encoded stream
+python -m colabcola.bridge_video_impairment `
+  --width 320 --height 180 --fps 30 --frames 48 --gop 12 `
+  --delay-ms 50 --jitter-ms 20 --bandwidth-kbps 2000 `
+  --max-inflight 12 --max-age-ms 300 --seed 7
+
+# 2. Lose a predicted frame (source index 5): wait for IDR at index 12
+python -m colabcola.bridge_video_impairment `
+  --width 320 --height 180 --fps 30 --frames 48 --gop 12 `
+  --delay-ms 40 --jitter-ms 0 --bandwidth-kbps 0 `
+  --max-inflight 12 --max-age-ms 0 --drop-seqs 5
+
+# 3. Throughput drops sharply and then recovers (virtual millisecond clock)
+python -m colabcola.bridge_video_impairment `
+  --width 320 --height 180 --fps 30 --frames 48 --gop 12 `
+  --delay-ms 50 --jitter-ms 25 --seed 7 `
+  --bandwidth-steps "0:2500,500:120,1000:2500" `
+  --max-inflight 6 --max-age-ms 250
+```
+
+The JSON report separates **link delivered frames**, **erased,
+queue-full and stale drops**, **frames skipped due to missing H.264
+dependencies**, **IDR resynchronizations**, and **contiguous runs
+of actually decoded frames**. It also reports virtual source-to-
+arrival age, arrival cadence/gaps, queued bytes, and separately
+the actual codec decoder call time. If a keyframe itself is lost,
+the decoder must wait for the *next* valid IDR to resume.
+
+Use `--seed` to reproduce jitter and random loss, and
+`--loss-percent` to add repeatable whole-frame erasures. All
+simulated times are **virtual**, not measured network latency;
+real H.264 encoding and decoding occur locally but do not delay
+the simulated clock. A bandwidth step is a piecewise-constant
+bit rate, integrated over packets that cross a change boundary.
+
+**Limitations:** this is a bounded access-unit-level **ordered
+virtual link**, not an actual UDP/IP packet network, WebRTC
+implementation, FEC/retransmission layer, network jitter buffer,
+congestion-control algorithm, or live GUI/input test.
+It does not fragment frames into MTU packets or simulate reordering.
+The model uses fixed periodic IDRs and does not request a keyframe
+in response to loss. Thus it provides a transparent baseline for
+correctness under impairment, **not a demonstrated solution for
+cloud game streaming** or a promise of smooth playback.
+
+Its frame count is capped at 120, queue at 128, link rate and
+timings bounded, and it has no Colab allocation, real network
+interface, GUI listener or GPU use. It leaves the existing remote
+Jupyter Comm and released batch runner unchanged. These experiments
+need only the optional local PyAV/NumPy research dependencies.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.
