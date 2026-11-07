@@ -170,6 +170,8 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
     last_stats = start
     seen = 0
     transferred = 0
+    last_frame_at = start
+    last_input_latency_ms = None
     print("[colabcola] Interactive T4 bridge connected; close the viewer to release compute", flush=True)
     try:
         offer_update(frames, ("status", f"Connected · {gpu} · remote rendering"))
@@ -190,6 +192,11 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
             try:
                 packed = remote_file(provider, session, remote + "/frame.bin")
             except FileNotFoundError:
+                if time.monotonic() - last_frame_at >= 30:
+                    status = provider._json_file(session, remote + "/status.json")
+                    if status and status.get("state") == "failed":
+                        raise LifecycleError("remote renderer failed: " + str(status.get("message", "unknown"))[:160])
+                    raise LifecycleError("remote renderer published no frame within 30 seconds")
                 time.sleep(0.15)
                 continue
             frame_seq, ack, width, height, ppm = unpack_frame(packed)
@@ -197,21 +204,26 @@ def stream_remote(provider, session, remote: str, run_id: str, gpu: str,
                 raise LifecycleError("unexpected remote frame dimensions")
             if frame_seq > last_seq:
                 last_seq = frame_seq
+                last_frame_at = time.monotonic()
                 seen += 1
                 transferred += len(packed)
                 # Only keep the newest frame; never allow a slow window to build latency.
                 offer_update(frames, ("frame", ppm))
+            elif time.monotonic() - last_frame_at >= 30:
+                status = provider._json_file(session, remote + "/status.json")
+                if status and status.get("state") == "failed":
+                    raise LifecycleError("remote renderer failed: " + str(status.get("message", "unknown"))[:160])
+                raise LifecycleError("remote renderer frame is stale for 30 seconds")
             now = time.monotonic()
-            latency = None
             if ack > acked and ack in pending:
-                latency = round(1000 * (now - pending[ack]))
+                last_input_latency_ms = round(1000 * (now - pending[ack]))
                 acked = ack
                 pending = {n: sent for n, sent in pending.items() if n > acked}
             if now - last_stats >= 2:
                 elapsed = max(now - last_stats, .001)
                 text = f"{gpu} · {seen / elapsed:.1f} FPS · {transferred / elapsed / 1024:.0f} KiB/s"
-                if latency is not None:
-                    text += f" · input-to-frame {latency} ms"
+                if last_input_latency_ms is not None:
+                    text += f" · input-to-frame {last_input_latency_ms} ms"
                 offer_update(frames, ("status", text))
                 print("[colabcola] " + text, flush=True)
                 seen = 0
