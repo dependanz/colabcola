@@ -221,3 +221,33 @@ def test_boot_uploads_worker_to_owned_colab_kernel():
     assert len(provider.files) == 1
     assert provider.files[0][0] == remote + "/bridge_colab_runtime.py"
     compile(provider.files[0][1], "uploaded_worker.py", "exec")
+
+
+def test_remote_frame_accepts_wrapped_base64_contents():
+    payload = make_frame()
+    encoded = base64.b64encode(payload).decode("ascii")
+    folded = "\\r\\n".join(encoded[i:i + 76] for i in range(0, len(encoded), 76))
+    assert bridge.decode_remote_file_record({
+        "type": "file", "format": "base64", "content": folded,
+    }) == payload
+
+
+@pytest.mark.parametrize("bad", [
+    None,
+    {"type": "file", "format": "base64", "content": None},
+    {"type": "file", "format": "text", "content": "test"},
+    {"type": "directory", "format": "base64", "content": ""},
+    {"type": "file", "format": "base64", "content": "not base64!"}
+])
+def test_remote_frame_encoding_errors_are_sanitized(bad):
+    with pytest.raises(LifecycleError) as exc:
+        bridge.decode_remote_file_record(bad)
+    assert "not base64!" not in str(exc.value)
+    assert "remote frame" in str(exc.value)
+
+
+def test_remote_frame_rejects_oversized_encoded_body():
+    with pytest.raises(LifecycleError, match="size limit"):
+        bridge.decode_remote_file_record({
+            "type": "file", "format": "base64", "content": "A" * (3 * 1024 * 1024)
+        })
