@@ -6483,7 +6483,7 @@
           }
         ],
         "formula": "work_bits = debt_bits + 8 * pending_wire_bytes; service_kbps = min(cap_kbps, max(base_kbps, work_bits / drain_ms)); with queue_boost disabled service_kbps = base_kbps",
-        "note": "base and cap are fixed from initial target plus nominal framing, not capacity estimates; rate refreshes only after complete enqueue, expiry or dispatch mutations; no refresh at observation endpoints, reports or target-only changes; the work horizon includes the last unit's post-dispatch debt and is not a dispatch-wait or end-to-end latency guarantee; tail mutations still refresh service"
+        "note": "base and cap are fixed from initial target plus nominal framing, not capacity estimates; rate refreshes only after complete enqueue, expiry or dispatch mutations; no refresh at observation endpoints, reports or target-only changes; the rolling work horizon includes the last unit's post-dispatch debt and is not a dispatch-wait or end-to-end latency guarantee; tail mutations still refresh service"
       },
       "last_capture_ms": 2966.6666666666665,
       "last_dispatch_ms": 2966.6666666666665,
@@ -9265,7 +9265,7 @@
           }
         ],
         "formula": "work_bits = debt_bits + 8 * pending_wire_bytes; service_kbps = min(cap_kbps, max(base_kbps, work_bits / drain_ms)); with queue_boost disabled service_kbps = base_kbps",
-        "note": "base and cap are fixed from initial target plus nominal framing, not capacity estimates; rate refreshes only after complete enqueue, expiry or dispatch mutations; no refresh at observation endpoints, reports or target-only changes; the work horizon includes the last unit's post-dispatch debt and is not a dispatch-wait or end-to-end latency guarantee; tail mutations still refresh service"
+        "note": "base and cap are fixed from initial target plus nominal framing, not capacity estimates; rate refreshes only after complete enqueue, expiry or dispatch mutations; no refresh at observation endpoints, reports or target-only changes; the rolling work horizon includes the last unit's post-dispatch debt and is not a dispatch-wait or end-to-end latency guarantee; tail mutations still refresh service"
       },
       "last_capture_ms": 2966.6666666666665,
       "last_dispatch_ms": 2966.6666666666665,
