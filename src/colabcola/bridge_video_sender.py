@@ -124,6 +124,14 @@ class LocalSenderQueue:
     def pending_count(self) -> int:
         return len(self._queue)
 
+    def _after_queue_mutation(self, cause: str) -> None:
+        """Extension point after an atomic queue change at the settled clock.
+
+        The v31 sender keeps its target-based rate unchanged. A separate
+        service policy can update its rate here without making it depend
+        on arbitrary advance() observation endpoints.
+        """
+
     def _event_times(self) -> tuple[float, float]:
         ready_ms = (self.clock_ms + self.debt_bits / self.pacing_kbps
                     if self.config.pacing else self.clock_ms)
@@ -231,6 +239,7 @@ class LocalSenderQueue:
         if self.need_idr and not verified_idr:
             self._drop(unit, "sender_dependency")
             self._request_repair(trigger_seq, trigger)
+            self._after_queue_mutation("enqueue")
             return
         if verified_idr:
             self.need_idr = False
@@ -239,6 +248,7 @@ class LocalSenderQueue:
         self._pending_wire_bytes += wire_size
         self._peak_pending_frames = max(self._peak_pending_frames, len(self._queue))
         self._peak_pending_bytes = max(self._peak_pending_bytes, self._pending_wire_bytes)
+        self._after_queue_mutation("enqueue")
 
     def take_repair_before(self, now_ms: float, source_seq: int) -> dict | None:
         """Consume a local request only before a strictly later source frame."""
@@ -272,6 +282,7 @@ class LocalSenderQueue:
             if expires:
                 first_seq = self._discard_chain("sender_age")
                 self._request_repair(first_seq, "sender_age")
+                self._after_queue_mutation("expiry")
                 continue
             unit = self._pop()
             delay = at_ms - unit.source_ms
@@ -283,6 +294,7 @@ class LocalSenderQueue:
             # Reaching ready_ms settles the old debt. Floating point
             # subtraction can leave a tiny residue; no old bytes are refunded.
             self.debt_bits = unit.wire_size * 8.0 if self.config.pacing else 0.0
+            self._after_queue_mutation("dispatch")
         self._settle_debt(now_ms)
         return output
 

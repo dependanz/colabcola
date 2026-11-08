@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "milestone": "v32",
+  "base_commit": "b76beb176b4760aa9eb29d3ba7e34793072fb938",
+  "declared_at_utc": "2026-11-08T02:36:42.423617+00:00",
+  "selection": "Policy, five profiles, controls and primary metric declared before executing v32 codec scenarios; no parameter sweep planned.",
+  "service_policy": {
+    "fixed_base": "initial encoder high target + 8 * framing_header_bytes * fps / 1000",
+    "cap": "2 * fixed_base",
+    "drain_ms": 50,
+    "max_rate_factor": 2,
+    "queue_service": "min(cap, max(base, (debt_bits + 8 * pending_wire_bytes) / drain_ms))",
+    "fixed_service": "base",
+    "rationale": "A 50 ms rolling work-drain objective is half the retained 100 ms local age bound; a 2x cap limits service allowance without reading link capacity.",
+    "updates": "After atomic enqueue including dependency/count drops, complete expiry chain removal, and dispatch pop+full debt charge. Hold between mutations. Never refresh merely on an advance/report call or encoder target change.",
+    "debt": "All framed dispatch attempts charged; settle elapsed debt at old rate; no idle credit, refunds or resets. Include debt even with an empty local queue and all pending framed bytes.",
+    "tail": "No further encoder/control actions after final capture. Actual queue dispatch/expiry mutations may continue to update service."
+  },
+  "sender_policy": {
+    "max_pending": 3,
+    "max_age_ms": 100,
+    "max_repair_requests": 8
+  },
+  "encoder_burst": {
+    "vbv_ms": 100
+  },
+  "arms": [
+    "immediate_live",
+    "target_paced_live",
+    "fixed_service_live",
+    "queue_service_live",
+    "immediate_replay_queue_source"
+  ],
+  "primary_metric": "on-time frames at 80 ms buffering, retaining every original source slot",
+  "secondary_metrics": [
+    "actually decoded frames and runs",
+    "longest unfresh interval",
+    "source, local discard, attempt, admitted and rejected framed bytes",
+    "local wait, tail and dependency-safe IDR outcomes",
+    "service decisions including boost/cap binding and actual dispatch-window peaks",
+    "matched RGB quality on source IDs decoded in all five arms"
+  ],
+  "attribution": "Fixed versus queue service is a complete feedback-coupled policy contrast. Immediate replay of all queue-service-generated packets isolates combined sender handling conditioned on that realized source, including packets locally discarded. No claim that replay isolates queue boost alone.",
+  "profiles": {
+    "historical.json": [
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "observable-congestion.json": [
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:300,2200:1200",
+      "--max-inflight",
+      "32",
+      "--max-age-ms",
+      "1000",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "persistent-collapse.json": [
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:90",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "clean.json": [
+      "--frames",
+      "36",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--max-inflight",
+      "16",
+      "--buffers-ms",
+      "40,80,160"
+    ]
+  },
+  "limits": [
+    "Whole access units, not packet-level transport",
+    "Service floor/cap are configured local allowances, not estimated or guaranteed available bandwidth",
+    "Rolling work/rate objective is not a hard queue-age or drainage guarantee",
+    "No future link/admission/loss/occupancy signals",
+    "Same random seed does not ensure per-frame pairing after different admissions",
+    "Real local H.264; virtual forward/reverse/playout clocks; no Colab allocation"
+  ]
+}

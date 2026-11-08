@@ -20,6 +20,7 @@ from .bridge_video_impairment import LinkConfig, LinkTrace, parse_bandwidth_step
 from .bridge_video_load import LoadControlConfig, LoadRateReceiver
 from .bridge_video_rate import EncoderBurstConfig, RateConfig, _encoder, _raw_frame, _texture, stream_with_rate_control
 from .bridge_video_sender import LocalSenderQueue, SenderQueueConfig
+from .bridge_video_sender_service import SenderServiceConfig, ServiceSenderQueue
 from .bridge_video_stream import MAX_PACKET, PACKET_HEADER, VideoAccessUnit, is_keyframe, packet_bytes
 from .bridge_video_watchdog import _summarize_rate_streams
 
@@ -44,7 +45,8 @@ def _immediate_sender(packets, *, fps: int) -> dict:
 def stream_with_sender_queue(*, width: int, height: int, fps: int, frames: int,
                              gop: int, link: LinkConfig, rates: RateConfig,
                              load: LoadControlConfig, recovery: ControllerConfig,
-                             burst: EncoderBurstConfig, sender: SenderQueueConfig) -> tuple[list, LinkTrace, dict]:
+                             burst: EncoderBurstConfig, sender: SenderQueueConfig,
+                             service: SenderServiceConfig | None = None) -> tuple[list, LinkTrace, dict]:
     """Capture at fixed source times; dispatch queued units on a separate clock.
 
     Queued expiry/dispatch events through each capture time run first. Arrivals
@@ -60,6 +62,10 @@ def stream_with_sender_queue(*, width: int, height: int, fps: int, frames: int,
         raise ValueError("invalid sender experiment configuration")
     if rates.max_switches + recovery.max_requests > 20:
         raise ValueError("existing rate and recovery budgets must not exceed 20")
+    if service is not None and not isinstance(service, SenderServiceConfig):
+        raise ValueError("invalid sender service configuration")
+    if service is not None and not sender.pacing:
+        raise ValueError("sender service requires pacing")
     try:
         import av
         import numpy as np
@@ -69,7 +75,9 @@ def stream_with_sender_queue(*, width: int, height: int, fps: int, frames: int,
     texture = _texture(np, width, height)
     receiver = LoadRateReceiver(rates, load, fps=fps, wire_aware=True)
     recovery_state = MultiGapFeedbackController(recovery)
-    local = LocalSenderQueue(sender, fps=fps, initial_target_kbps=rates.high_kbps)
+    local = (LocalSenderQueue(sender, fps=fps, initial_target_kbps=rates.high_kbps)
+             if service is None else ServiceSenderQueue(
+                 sender, fps=fps, initial_target_kbps=rates.high_kbps, service=service))
     media = VirtualAccessUnitLink(link)
     waiting_arrivals = []
     dispatches = []

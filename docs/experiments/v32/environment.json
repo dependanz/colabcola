@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "base_commit": "b76beb176b4760aa9eb29d3ba7e34793072fb938",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "design_sha256": "3a583845b7a262887ad29755d327a48c40300d7ecf01b3463755fa498a62d033",
+  "source_sha256": {
+    "src/colabcola/bridge_video_sender.py": "81224a0766ecafc609218125b2481fa6dd7b922489a4acd39ed4a051c987736a",
+    "src/colabcola/bridge_video_sender_service.py": "d22a70dcabf7c73fd247f0200d74134be0fd293da4100e4c782c1df2300a2992",
+    "src/colabcola/bridge_video_pacing.py": "6c3a6889eceb49acaa61dde5204eb3c37644211ea377b702a9e333f1851dedd4",
+    "src/colabcola/bridge_video_service.py": "b7dc29f94c4e100ae94b3d8bf3d37cdc7f271069c2237709e4421a5e223b750b",
+    "src/colabcola/bridge_video_controller.py": "75e88f397c916340781be8bfb6b548e31c21cf36b28ab55ce27f00866b72e5f9",
+    "src/colabcola/bridge_video_rate.py": "5d2e8a012177aa6f18b28febf63097cae4502dfb51a416b0774cfceb6b058f5a",
+    "src/colabcola/bridge_video_load.py": "619190abb3c82aec482a20179005cac7ddbaadfbc643205dcc37e326f8aaeb0f",
+    "src/colabcola/bridge_video_impairment.py": "0f00d66bd240cbc2e000695ad0bf76b9c7d893d57a072771d228f124c6b3203d",
+    "src/colabcola/bridge_video_watchdog.py": "2df9282295fd6183d45c3364a1e209d4386722b1f3866f7998ae6dc2bf613e71",
+    "src/colabcola/bridge_video_stream.py": "ce5201b02b198c33649191fc9d3ba5a2c1f260b5ffb92f4f3f5f84cf94decc0f"
+  },
+  "captured_runs": {
+    "historical.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_service",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "62defa3541b6c7f59c076ca10487eca4c72c043eee62cc329f26b24401d241e0",
+      "report_bytes": 333447,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "zero-jitter.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_service",
+        "--jitter-ms",
+        "0",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "820fdb1c29ce1dc405f419bbde03197b4571aca8816d93a52aa8230fc193c47d",
+      "report_bytes": 333155,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "observable-congestion.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_service",
+        "--frames",
+        "120",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps",
+        "0:1200,600:300,2200:1200",
+        "--max-inflight",
+        "32",
+        "--max-age-ms",
+        "1000",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "a1ed59f00d87bfafcd4665e45c4caa43dd6510c824d3570c9b782fd715f44c63",
+      "report_bytes": 413978,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "persistent-collapse.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_service",
+        "--frames",
+        "120",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps",
+        "0:1200,600:90",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "648fe4ac031fbd1366f9a7809582ffc448fe8fb06d89f38e5c5ba9ea30fbb1d9",
+      "report_bytes": 430001,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clean.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_service",
+        "--frames",
+        "36",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps=",
+        "--bandwidth-kbps",
+        "0",
+        "--max-age-ms",
+        "0",
+        "--max-inflight",
+        "16",
+        "--buffers-ms",
+        "40,80,160"
+      ],
+      "report_sha256": "22693b6bf13e2f4da82f870c9ac51e2aa72cf1468d1b3b1f46ba50436ffa56c3",
+      "report_bytes": 144113,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "focused_tests": {
+    "passed": 139,
+    "elapsed_seconds": 4.02,
+    "new_sender_service_and_integration_tests": 24
+  },
+  "legacy_v31_full_reports_unchanged": [
+    "historical.json",
+    "zero-jitter.json",
+    "observable-congestion.json",
+    "persistent-collapse.json",
+    "clean.json"
+  ],
+  "note": "Five predeclared source/link profiles; no parameter sweep or post-result policy tuning. All report stderr was empty and warnings remain enabled. Queue service improves v31 deadline counts in all five profiles, ties v30 immediate in two, trails by one on-time frame in three. No measured win over immediate or short-window burst reduction. New service-arm local bounds and configured service cap do not activate in these five profiles; explicit regression cases cover them. Later source comments/documentation clarified interpretation without changing policy or report trajectories."
+}
