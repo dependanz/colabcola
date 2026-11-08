@@ -1930,16 +1930,17 @@ IDRs does not generally save bandwidth.
 ```powershell
 Set-Location C:\dev\colabcola-bridge-prototype
 git pull --ff-only origin feature/interactive-bridge-prototype
+$colabPython = 'C:\dev\colabcola-bridge-prototype\.venv\Scripts\python.exe'
 
-python -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py
+& $colabPython -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py
 
-python -m colabcola.bridge_video_recovery --buffers-ms "40,80,160,240,350"
+& $colabPython -m colabcola.bridge_video_recovery --buffers-ms "40,80,160,240,350"
 
-python -m colabcola.bridge_video_recovery `
+& $colabPython -m colabcola.bridge_video_recovery `
   --jitter-ms 0 --buffers-ms "40,80,160,240,350"
 
 # Erase the first recovery IDR, then create a second independent loss.
-python -m colabcola.bridge_video_recovery `
+& $colabPython -m colabcola.bridge_video_recovery `
   --width 128 --height 72 --fps 30 --frames 60 --gop 24 `
   --delay-ms 40 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
   --max-age-ms 0 --max-inflight 16 --drop-seqs "5,8,27" `
@@ -1981,6 +1982,225 @@ control experiment should use observed delivery and actual encoded wire
 load to choose a sustainable target, while keeping this recovery path
 independent. All timing here is virtual, with local real codecs; this
 adds no production transport or Colab allocation.
+
+### Windows v28 confirmation and interpreter correction
+
+The subsequent user transcript confirms **40 tests passed in 4.41 seconds**.
+The historical and zero-jitter commands each ran twice; all four complete
+JSON reports match the retained v28 evidence field for field. The explicit
+lost-IDR CLI command is not in this transcript, though its tests and prior
+Linux CI demonstration remain verified. The comparison receipt is
+[`experiments/v28/windows-confirmation.json`](experiments/v28/windows-confirmation.json).
+
+The earlier collection errors came from invoking Anaconda base Python.
+The successful run explicitly selected this checkout's
+`.venv\Scripts\python.exe`, which imported `src\colabcola\__init__.py`.
+The shell still displayed `(base)`; explicit interpreter selection was
+sufficient. The Windows commands above and below now use `$colabPython`.
+
+## v29: measured wire load and bounded rate probing
+
+The new opt-in `bridge_video_load_control.py` experiment measures actual
+encoded output before link admission and can use delayed receiver delivery
+reports to select a lower encoder target. It retains independent IDR
+recovery and real libx264 target changes. The existing two-rate commands
+keep their behavior; all three complete retained v28 reports are unchanged.
+
+The measurement distinguishes three quantities:
+
+- **Encoder target:** the configured `bit_rate` and VBV parameters.
+- **Offered wire load:** every produced access unit plus its 30-byte framing
+  header, including units subsequently rejected by the queue. Initial,
+  periodic and recovery IDRs all count. At 30 FPS, framing alone is 7.2 kbps.
+- **Observed delivery rate:** bytes in arrived units over receiver elapsed
+  time. This is not a measurement of unused capacity; a source sending less
+  than the link can carry cannot discover that capacity from goodput alone.
+
+The v28 fixed-650 stream, for example, produces 755.136 payload kbps over
+the historical 90-frame run; fixed 650 with its matched restart schedule
+produces 1,035.864 payload kbps. The short encoder segments and IDR bursts
+make the difference between a target and observed load material.
+
+### Controller and comparison
+
+The receiver uses only arrived unit sequence numbers, sizes, source times
+and arrival times. Its throughput window requires at least three contiguous
+arrivals spanning at least 200 ms within a 300 ms window. For arrivals
+`i..j`, the rate is `8 * sum(wire_bytes[i+1:j+1]) / (arrival[j]-arrival[i])`
+in kbps. The anchor unit's bytes are excluded because its completion marks
+the start of the measured interval. Compressed, short or gapped windows
+cannot supply a wire-rate estimate.
+
+Receiver age reports use the existing 110/65 ms congestion/healthy
+thresholds and 3/8 sample counts. A gap alone clears healthy progress but
+does not lower the target; independent recovery handles missing references.
+The 150 ms silence timer can now generate further bounded reductions while
+the target is already low. It still arms only after an arrival and cannot
+invent a delivery-rate sample during silence.
+
+Reports have a 35 ms reverse delay, a **350 ms receiver-report dwell** and
+a separate cap of 128. Frame quantization can make adjacent applied changes
+333.333 ms apart, so the dwell is not a strict encoder-restart spacing.
+Reports older than 400 ms are ignored, including silence reports. Normal
+age/healthy feedback must refer to the current target epoch. Returning to
+an earlier numerical target starts a new epoch; old samples cannot be reused.
+Silence bypasses the epoch requirement, allowing another cut without a new
+arrival. Each report is consumed once, and exact feedback/source-time ties
+wait for a later frame.
+
+The sender measures prior encoded frames from the current target epoch in
+a 300 ms window. The hook runs before `media.send()`, so it has no access
+to admission decisions, queue occupancy or future bandwidth steps. If an
+age-congestion report has valid delivery rate `G`, measured payload rate
+`P` and framing rate `F`, the wire-derived target is:
+
+```text
+wire_candidate = current_target * max(0, 0.8 * G - F) / P
+```
+
+The sender chooses the smaller of that candidate and a 0.5 multiplicative
+cut, rounds down, and clips to 20..650 kbps. Insufficient telemetry uses the
+multiplicative fallback. Silence only uses that fallback. Healthy feedback
+permits a bounded 1.25-times probe, without treating sender-limited delivery
+as a permanent capacity ceiling. At most 12 actual rate changes and eight
+recovery requests can generate at most 20 restarts; coincident commands
+still share a restart. Minimum-target and overhead-budget failures are
+explicitly recorded, not presented as successful rate enforcement.
+
+Four arms distinguish the effects of the changes:
+
+1. `two_rate_recovery`: the v28 high/low controller plus independent recovery.
+2. `age_only_recovery`: the new cuts, probes and repeated silence policy,
+   with the wire-derived candidate disabled.
+3. `wire_load_recovery`: the same policy with the wire calculation enabled.
+4. `matched_restart_high_rate`: fixed 650 kbps with every restart from arm 3;
+   an offline ablation conditioned on that run, not a deployable controller.
+
+The experiment checks source/arrival prefix identity before different
+encoder actions, complete IDR-schedule matching, and conservation of offered
+bytes as admitted bytes plus queue-rejected bytes. If no wire candidate
+changes the clipped decision, arms 2 and 3 must be byte/trace identical.
+The legacy arm retains its existing request-budget semantics; the new
+policy's 12-change budget is separate from its feedback-report budget.
+
+### A binding wire calculation improves the observable-congestion fixture
+
+This declared fixture uses 120 frames at 30 FPS, 128x72, GOP 24, 40 ms
+delay and zero jitter. Capacity changes 1,200 -> 300 -> 1,200 kbps at
+600/2,200 ms, with 32 in-flight slots and a 1,000 ms age cutoff so that
+the receiver can observe more of the congested stream.
+
+At source frame **30 (1,000 ms)**, the receiver's measured rate is 300 kbps.
+The sender's preceding nine frames contain 871.653 kbps of payload plus
+7.2 kbps of framing. The 240 kbps calculation gives a target of 173.601,
+rounded to **173 kbps**, versus the age-only target of **325 kbps**. This
+is the one binding wire-derived decision in this fixture; it changes the
+subsequent stream and feedback trajectory.
+
+| Observable-congestion result | Two-rate + recovery | Age-only multirate | Wire-load multirate | Fixed high, matched restarts |
+| --- | ---: | ---: | ---: | ---: |
+| Actually decoded frames | 97/120 | 76/120 | 103/120 | 81/120 |
+| On time with 80 ms buffer | 54 | 54 | 60 | 12 |
+| Admitted media wire bytes | 309,265 | 233,941 | 195,956 | 519,038 |
+| All offered wire bytes | 309,265 | 241,897 | 199,864 | 540,828 |
+| Longest unfresh interval at 80 ms | 1,666.67 ms | 1,900 ms | 1,733.33 ms | 3,400 ms |
+| RGB PSNR on the same 76 decoded frames | 12.859 dB | 12.452 dB | 11.935 dB | 13.019 dB |
+
+Wire feedback adds 27 decoded frames and six on-time frames relative to
+the otherwise identical age-only policy, with fewer admitted and offered
+bytes. Against the two-rate policy it adds six decoded/on-time frames,
+but its matched-frame quality is lower and its longest unfresh interval
+is about 66.7 ms longer. It does not improve every playback metric.
+
+**The wire budget is not enforced:** the following target-173 segment
+actually offers **432 kbps** over its 11 frames, exceeding the computed
+240 kbps budget. A measured ratio from the old encoder segment does not
+guarantee the next segment's output after a restart. This is a useful
+feedback-driven reduction, not a demonstrated sustainable-rate controller.
+
+### Severe collapse: separate policy gains from wire measurement
+
+The original v28 1,200 -> 90 -> 1,200 kbps profiles produce no binding
+wire calculation. The age-only and wire-load arms are exactly identical.
+
+| 90-frame profile | Two-rate: decoded / on time at 80 ms | New policy: decoded / on time at 80 ms | New admitted wire bytes |
+| --- | ---: | ---: | ---: |
+| Historical +/-8 ms jitter | 46 / 33 | 54 / 42 | 133,020 |
+| Zero jitter | 47 / 34 | 46 / 40 | 144,862 |
+
+These differences come from the additional targets, repeated silence cuts
+and probes. They are not evidence of a wire-estimation benefit. Zero jitter
+also shows a tradeoff: one fewer decoded frame, but six more on-time frames.
+Matched PSNR falls from 12.536 to 11.878 dB in the historical case and from
+12.695 to 11.680 dB without jitter. Each comparison uses **46 common frame
+IDs**, not the 36-frame intersection in the earlier v28 tables, so those
+PSNR values must not be compared directly across experiment versions.
+
+### Persistent 90 kbps collapse remains unrecovered
+
+A fourth declared fixture holds capacity at 90 kbps after 600 ms, with
+120 source frames, zero jitter, ten in-flight slots and a 350 ms cutoff.
+The new policy lowers its target through **325, 162, 81, 40 and 20 kbps**.
+Its final 53-frame segment offers **32.513 wire kbps** on average, below
+the 90 kbps capacity, yet **51 of those 53 units are rejected at admission**.
+All later IDRs are stale or queue-rejected. No new usable media reaches
+the recovery controller, so it cannot issue an arrival-driven IDR request.
+
+All four arms decode only **18/120 frames**, with 12 on time at 80 ms.
+The old admitted backlog continues to occupy bandwidth and in-flight slots
+inside this model. Lowering newly produced load does not clear it during
+the four-second source horizon. This does not prove that recovery would
+remain impossible in a longer stream.
+
+**Next distinct work:** hold this controller fixed and measure/control
+encoder restart bursts and bounded sender queuing. The evidence now calls
+for a burst/queue experiment; adding more target levels alone would not
+resolve the observed backlog and lost-IDR failure.
+
+### Reproduce v29 on Windows
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+$colabPython = 'C:\dev\colabcola-bridge-prototype\.venv\Scripts\python.exe'
+
+& $colabPython -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py
+
+# Observable congestion: isolate a binding wire-derived decision.
+& $colabPython -m colabcola.bridge_video_load_control `
+  --frames 120 --jitter-ms 0 `
+  --bandwidth-steps "0:1200,600:300,2200:1200" `
+  --max-inflight 32 --max-age-ms 1000 --buffers-ms "40,80,160,240,350"
+
+# Persistent severe collapse: retain the failed recovery as evidence.
+& $colabPython -m colabcola.bridge_video_load_control `
+  --frames 120 --jitter-ms 0 --bandwidth-steps "0:1200,600:90" `
+  --buffers-ms "40,80,160,240,350"
+
+# Historical severe-collapse controls.
+& $colabPython -m colabcola.bridge_video_load_control --buffers-ms "40,80,160,240,350"
+& $colabPython -m colabcola.bridge_video_load_control --jitter-ms 0 --buffers-ms "40,80,160,240,350"
+```
+
+Local validation passed **67 focused tests**, including 27 new policy and
+integration cases. Both platforms run these suites in CI; Linux also runs
+all four commands. Inspect `controllers.wire_load_recovery.decisions` for
+the measured inputs, candidate, selected target, epoch/freshness fallback
+and binding flag. Each arm's `target_segments` includes actual offered
+load and all IDRs, including same-rate recovery. Full outputs and source
+hashes are retained in
+[`experiments/v29/historical.json`](experiments/v29/historical.json),
+[`experiments/v29/zero-jitter.json`](experiments/v29/zero-jitter.json),
+[`experiments/v29/observable-congestion.json`](experiments/v29/observable-congestion.json),
+[`experiments/v29/persistent-collapse.json`](experiments/v29/persistent-collapse.json), and
+[`experiments/v29/environment.json`](experiments/v29/environment.json).
+
+All media, control and playout timing remains virtual. The reverse path is
+ideal and reliable; there is no packet transport, pacer, physical display,
+Colab allocation or capacity guarantee. Quality excludes lost frames and
+must be read alongside continuity and deadline results. Seeded jitter can
+be assigned to different source frames when admissions differ; the
+zero-jitter comparisons remove that pairing ambiguity.
 
 ## Architecture boundary
 

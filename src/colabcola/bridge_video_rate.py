@@ -1,4 +1,4 @@
-"""v26-v28: causal H.264 rate and recovery experiments on a virtual link.
+"""v26-v29: causal H.264 rate and recovery experiments on a virtual link.
 
 Each frame is encoded by real libx264. The sender changes the encoder's
 target bitrate only AFTER receiving a delayed report derived from media
@@ -97,6 +97,18 @@ class RateReceiver:
         self.silence_expired = False
         self.silence_events: list[dict] = []
         self.watchdog_stopped = False
+        self.source_frames_encoded = 0
+
+    def observe_encoded(self, packet: VideoAccessUnit, source_ms: float,
+                        target_kbps: int) -> None:
+        """Sender-only observation before link admission; legacy policy ignores load."""
+        if (not isinstance(packet, VideoAccessUnit)
+                or packet.seq != self.source_frames_encoded
+                or type(source_ms) not in (int, float)
+                or not math.isfinite(source_ms) or source_ms < 0
+                or type(target_kbps) is not int or target_kbps <= 0):
+            raise ValueError("invalid encoded source observation")
+        self.source_frames_encoded += 1
 
     def _request(self, target: int, at_ms: float, *, trigger: str,
                  seq: int, age_ms: float | None = None,
@@ -292,7 +304,8 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
                              frames: int, gop: int, link: LinkConfig,
                              rates: RateConfig, adapt: bool,
                              restart_seqs: tuple[int, ...] = (),
-                             recovery: ControllerConfig | None = None) -> tuple[
+                             recovery: ControllerConfig | None = None,
+                             rate_policy: RateReceiver | None = None) -> tuple[
                                  list[VideoAccessUnit], LinkTrace, dict]:
     """Encode in source order, drain only already arrived packets, adapt rate.
 
@@ -303,12 +316,20 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     Optional v28 recovery runs independently of rate selection. Its delayed
     IDR requests can restart the current rate, including LOW. A due rate
     change and any due IDR requests share one encoder restart.
+    A fresh optional rate_policy receives encoded source observations before
+    link admission. It cannot observe queue occupancy or admission decisions.
     """
     _validate_video(width, height, fps, frames, gop)
     if not isinstance(link, LinkConfig) or not isinstance(rates, RateConfig):
         raise ValueError("invalid simulator configuration")
     if type(adapt) is not bool:
         raise ValueError("adapt must be a boolean")
+    if rate_policy is not None and (
+            not isinstance(rate_policy, RateReceiver) or not adapt
+            or rate_policy.settings != rates or rate_policy.clock_ms != 0
+            or rate_policy.observations or rate_policy.requests
+            or rate_policy.source_frames_encoded or rate_policy.watchdog_stopped):
+        raise ValueError("rate_policy must be fresh, adaptive, and match rates")
     if recovery is not None and not isinstance(recovery, ControllerConfig):
         raise ValueError("invalid recovery configuration")
     if (recovery is not None
@@ -327,7 +348,7 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
 
     source = _texture(np, width, height)
     media = VirtualAccessUnitLink(link)
-    receiver = RateReceiver(rates)
+    receiver = RateReceiver(rates) if rate_policy is None else rate_policy
     decoder_recovery = MultiGapFeedbackController(recovery) if recovery is not None else None
     restarts: list[dict] = []
     kbps = rates.high_kbps
@@ -384,6 +405,8 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
         if seq == origin_seq and not packet.keyframe:
             raise RuntimeError("encoder segment failed to begin with an IDR")
         packets.append(packet)
+        if adapt:
+            receiver.observe_encoded(packet, now, kbps)
         media.send(packet, fps=fps)
     if e.encode(None):
         raise RuntimeError("unexpected H.264 packets at source end")

@@ -1,0 +1,103 @@
+{
+  "base_commit": "65f507c523b4978fcb9ba5a45d25bf76f9f5075c",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "commands": {
+    "historical.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_load_control",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_load_control",
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "observable-congestion.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_load_control",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:300,2200:1200",
+      "--max-inflight",
+      "32",
+      "--max-age-ms",
+      "1000",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "persistent-collapse.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_load_control",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:90",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ]
+  },
+  "source_sha256": {
+    "src/colabcola/bridge_video_rate.py": "d6c5f38d6975823af80b09f317271edf06741d87bc68a73e62fd7d8760e10e95",
+    "src/colabcola/bridge_video_load.py": "619190abb3c82aec482a20179005cac7ddbaadfbc643205dcc37e326f8aaeb0f",
+    "src/colabcola/bridge_video_load_control.py": "6484944ee55956de88710948a863c1cfa758b694da4c22843ed20bfcb5fdca84"
+  },
+  "legacy_v28_full_reports_unchanged": [
+    "historical.json",
+    "zero-jitter.json",
+    "lost-idr.json"
+  ],
+  "note": "Real local H.264; virtual link, feedback and playout timing. Four declared configurations, no tuned parameter sweep. Observed delivery rate is not unused capacity; source load includes all produced framed units."
+}

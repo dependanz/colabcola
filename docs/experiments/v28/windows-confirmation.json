@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "kind": "user-provided-windows-v28-reproduction",
+  "source_filename": "Pasted text(20261108-000140).txt",
+  "source_sha256": "c0d14f308d29d23512b8bcae2c643d45278b3a20f6d242d46d8e7624179dc1c4",
+  "compared_with_commit": "65f507c523b4978fcb9ba5a45d25bf76f9f5075c",
+  "interpreter": "project .venv/Scripts/python.exe",
+  "package_location": "project src/colabcola/__init__.py",
+  "tests": {
+    "files": [
+      "tests/test_bridge_video_controller.py",
+      "tests/test_bridge_video_rate.py",
+      "tests/test_bridge_video_watchdog.py",
+      "tests/test_bridge_video_recovery.py"
+    ],
+    "passed": 40,
+    "elapsed_seconds": 4.41
+  },
+  "comparisons": [
+    {
+      "run_index": 1,
+      "retained_report": "docs/experiments/v28/historical.json",
+      "retained_file_sha256": "b82106c3b925b5b62a349296768e17201dc94b0617b6704ded3c00aa3dce1fb1",
+      "all_json_fields_equal": true
+    },
+    {
+      "run_index": 2,
+      "retained_report": "docs/experiments/v28/zero-jitter.json",
+      "retained_file_sha256": "0057d5aa35a409604b4cb59d9592943c6f1c45f58b47c85254434d0f09db501f",
+      "all_json_fields_equal": true
+    },
+    {
+      "run_index": 3,
+      "retained_report": "docs/experiments/v28/historical.json",
+      "retained_file_sha256": "b82106c3b925b5b62a349296768e17201dc94b0617b6704ded3c00aa3dce1fb1",
+      "all_json_fields_equal": true
+    },
+    {
+      "run_index": 4,
+      "retained_report": "docs/experiments/v28/zero-jitter.json",
+      "retained_file_sha256": "0057d5aa35a409604b4cb59d9592943c6f1c45f58b47c85254434d0f09db501f",
+      "all_json_fields_equal": true
+    }
+  ],
+  "scope": "Observed in the user-provided Windows transcript. Historical and zero-jitter CLI experiments each ran twice. The lost-IDR CLI experiment was not present; this does not replace its existing CI and test evidence."
+}
