@@ -22,6 +22,9 @@ on:
       - 'src/colabcola/bridge_video_pacing.py'
       - 'src/colabcola/bridge_video_sender_service.py'
       - 'src/colabcola/bridge_video_service.py'
+      - 'src/colabcola/bridge_video_packetization.py'
+      - 'src/colabcola/bridge_video_packet_transport.py'
+      - 'src/colabcola/bridge_video_datagram.py'
       - 'src/colabcola/bridge_viewer_stats.py'
       - 'src/colabcola/bridge_colab.py'
       - 'src/colabcola/bridge_telemetry.py'
@@ -52,6 +55,9 @@ on:
       - 'tests/test_bridge_video_pacing.py'
       - 'tests/test_bridge_video_sender_service.py'
       - 'tests/test_bridge_video_service.py'
+      - 'tests/test_bridge_video_packetization.py'
+      - 'tests/test_bridge_video_packet_transport.py'
+      - 'tests/test_bridge_video_datagram.py'
       - 'tests/test_bridge_viewer_stats.py'
       - 'tests/test_bridge_colab.py'
       - 'tests/test_bridge_comm.py'
@@ -90,7 +96,7 @@ jobs:
         run: python -m pip install 'av>=17,<20' 'numpy>=2,<3'
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py
+        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py tests/test_bridge_video_datagram.py tests/test_bridge_video_packet_transport.py tests/test_bridge_video_packetization.py
       - name: Demonstrate paced local H.264 video stream (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -133,6 +139,29 @@ jobs:
           python -m colabcola.bridge_video_service --frames 120 --jitter-ms 0 --bandwidth-steps 0:1200,600:300,2200:1200 --max-inflight 32 --max-age-ms 1000 --buffers-ms 40,80,160,240,350
           python -m colabcola.bridge_video_service --frames 120 --jitter-ms 0 --bandwidth-steps 0:1200,600:90 --buffers-ms 40,80,160,240,350
           python -m colabcola.bridge_video_service --frames 36 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 --max-age-ms 0 --max-inflight 16 --buffers-ms 40,80,160
+      - name: Verify complete v33 packetization reports (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path('docs/experiments/v33')
+          design = json.loads((root / 'design.json').read_text(encoding='utf-8'))
+          for filename, arguments in design['profiles'].items():
+              run = subprocess.run([sys.executable, '-m', 'colabcola.bridge_video_packetization', *arguments],
+                                   check=True, capture_output=True, text=True)
+              if run.stderr:
+                  print(run.stderr, file=sys.stderr, end='')
+              actual = json.loads(run.stdout)
+              expected = json.loads((root / filename).read_text(encoding='utf-8'))
+              assert actual == expected, f'{filename}: complete JSON differs from retained evidence'
+              digest = hashlib.sha256(json.dumps(actual, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+              print(f'v33 full-report match: {filename} canonical_sha256={digest}', flush=True)
+          PY
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py
+        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py tests/test_bridge_video_datagram.py tests/test_bridge_video_packet_transport.py tests/test_bridge_video_packetization.py
