@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "kind": "user-provided-windows-v30-reproduction",
+  "source_filename": "Pasted text(20261108-012752).txt",
+  "source_sha256": "53b1dd0e8ee4d438cad52ac50cddfbfa63abaa3ab17133bb74c7420f9bbc66b7",
+  "observed_branch": "feature/interactive-bridge-prototype",
+  "observed_head": "9e48f14",
+  "tests": {
+    "files": [
+      "tests/test_bridge_video_controller.py",
+      "tests/test_bridge_video_rate.py",
+      "tests/test_bridge_video_watchdog.py",
+      "tests/test_bridge_video_recovery.py",
+      "tests/test_bridge_video_load.py",
+      "tests/test_bridge_video_load_control.py",
+      "tests/test_bridge_video_burst.py",
+      "tests/test_bridge_video_burst_compare.py"
+    ],
+    "passed": 87,
+    "elapsed_seconds": 3.46
+  },
+  "comparisons": [
+    {
+      "retained_report": "docs/experiments/v30/observable-congestion.json",
+      "retained_file_sha256": "0bc3ed9e7dacf130f177a6c6cf956d99e67276ba88641f60ba5574e1b5e9402c",
+      "all_json_fields_equal": true
+    },
+    {
+      "retained_report": "docs/experiments/v30/persistent-collapse.json",
+      "retained_file_sha256": "030f4b6e559f8c848f6e926b21c5e2c3f4bd6ee83fd49022558fa42f6106a85e",
+      "all_json_fields_equal": true
+    }
+  ],
+  "scope": "User-provided Windows execution with explicit project .venv interpreter; complete parsed reports compared to retained evidence. Historical, zero-jitter and clean v30 CLI profiles were not in this transcript."
+}

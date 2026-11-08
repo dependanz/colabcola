@@ -2418,6 +2418,283 @@ still leave multi-second stalls. All media/control/playout timing here
 remains virtual, with real local H.264 codecs and ideal reverse feedback;
 there is no physical network/display measurement or Colab allocation.
 
+### Windows v30 confirmation
+
+The subsequent user transcript at branch head `9e48f14` confirms **87 tests
+passed in 3.46 seconds**, using the explicit project `.venv` interpreter.
+Both complete observable-congestion and persistent-collapse reports match
+the retained v30 JSON field for field. The historical, zero-jitter and clean
+CLI profiles are not in this transcript. The comparison receipt is
+[`experiments/v30/windows-confirmation.json`](experiments/v30/windows-confirmation.json).
+
+## v31: bounded sender queue and pacing, with a retained negative result
+
+The new opt-in `bridge_video_pacing.py` separates fixed source capture times
+from actual virtual dispatch times. It adds a local queue of unsent encoded
+units, whole-access-unit pacing, dependency-safe local drops, and bounded
+local IDR requests. All arms retain the v29 rate/recovery policy and v30's
+nominal 100 ms encoder allowance.
+
+**Result and decision:** this declared pacing policy meets fewer 80 ms
+presentation deadlines than v30 immediate sending in **all five retained
+profiles**. Local queue bounds work, and improve the FIFO pacing control
+in some cases, but do not establish an improvement over immediate sending.
+Keep **v30 tight immediate** as the preferred measured baseline. The new
+command remains a separate research comparison; all five complete v30
+reports are unchanged.
+
+### Sender policy and causal clocks
+
+The pacer admits one complete access unit whenever its outstanding debt
+has reached zero, then charges its entire framed bit size. Between events:
+
+```text
+wire_budget_kbps = current_encoder_target_kbps + 30 * 8 * fps / 1000
+debt_bits(t) = max(0, debt_bits(previous) - wire_budget_kbps * elapsed_ms)
+after_dispatch: debt_bits += 8 * framed_unit_bytes
+```
+
+At 30 FPS, nominal framing contributes **7.2 kbps**. A target change first
+pays elapsed debt at the previous rate, then changes the drain rate.
+Debt survives encoder restarts and local drops. Idle time earns no extra
+credit. Every dispatch attempt is charged even if the downstream link
+rejects it, because the local sender has no admission-result input.
+
+The declared bounded queue permits **three unsent units**, expires a unit
+at **100 ms from original capture**, and allows at most **eight local repair
+requests**. The FIFO control has room for the entire bounded 120-frame
+source and disables local expiry and repair. These values were declared
+before measurement; no parameter sweep was performed.
+
+An expired or overflow-selected unit and its unsent predicted descendants
+are discarded until a verified queued IDR is reached; that IDR and its
+independent chain are retained. If none remains, future predicted units are suppressed
+until a new verified IDR is available. A local repair can affect only a
+strictly later source frame and can share one encoder restart with a rate
+change or receiver request. The existing 12 rate-change and eight remote
+recovery budgets remain unchanged; local requests add at most eight more
+causes, for a maximum of 28 possible restarts before coalescing.
+
+Queued events through a source time run first, with expiry winning a
+dispatch tie within 1e-9 ms. The actual expiry timestamp is retained and
+never processed beyond the current observation endpoint. Arrivals through that time then reach the receiver;
+feedback/local repair at the exact capture time waits for a later frame.
+The new capture can dispatch immediately if eligible. Source observation
+still records **every generated frame at capture time**, including units
+later suppressed locally; it does not substitute the post-queue byte count
+for v29's measured source load.
+
+`VirtualAccessUnitLink.send(..., dispatch_ms=...)` begins serialization at
+`max(dispatch_ms, link_free_ms)`, while receiver age and playout deadlines
+retain the original capture time. The local sender receives no link object,
+future capacity, downstream in-flight occupancy or future loss information. Already
+dispatched data remains committed to the existing forward FIFO. A 100 ms
+local waiting bound therefore does not bound end-to-end frame age.
+
+After the last capture, the watchdog stops and no further rate/encoder
+action applies. The local queue drains or expires at the frozen target,
+then remaining link arrivals are observed. Reports retain those tail
+dispatches and the full original presentation horizon.
+
+### Four comparison arms
+
+| Arm | Sender handling | Source actions |
+| --- | --- | --- |
+| `immediate_live` | Existing immediate dispatch | Causal v29 rate/recovery, v30 tight encoder |
+| `paced_fifo_live` | Debt pacing, no local expiry/repair | Same causal rate/recovery |
+| `bounded_paced_live` | Debt pacing, three-unit/100 ms queue, dependency handling and local repair | Same rate/recovery plus bounded local repair |
+| `immediate_replay_bounded_source` | Immediate dispatch of every generated bounded-run packet | Exact encoded bytes and complete IDR schedule from bounded live, offline |
+
+The last arm includes even packets discarded by the bounded sender. It
+isolates post-encoder sender handling conditioned on the bounded run's
+realized source. FIFO versus bounded includes eviction, dependency
+suppression and local repair together. No comparison separately attributes
+all outcomes to eviction alone.
+
+Source bytes must agree before the first different encoder action. Arrival
+prefixes may differ immediately because pacing changes dispatch. Exact
+source replay checks complete packet identity, encoded-source hashes and
+matched-frame decoded quality.
+
+### All five declared profiles retain worse 80 ms deadlines
+
+Cells below give **actually decoded / on time with 80 ms buffering**.
+
+| Profile | Immediate live | Paced FIFO | Bounded paced | Immediate replay of bounded source |
+| --- | ---: | ---: | ---: | ---: |
+| Clean, 36 frames | **36 / 36** | 36 / 34 | 36 / 34 | 36 / 36 |
+| Observable congestion, 120 frames | **120 / 79** | 120 / 57 | 120 / 57 | 120 / 70 |
+| Persistent 90 kbps collapse, 120 frames | **32 / 27** | 19 / 12 | 19 / 12 | 19 / 17 |
+| Historical +/-8 ms jitter, 90 frames | **53 / 51** | 19 / 12 | 47 / 34 | 52 / 50 |
+| Historical zero jitter, 90 frames | **53 / 51** | 39 / 12 | 51 / 24 | 50 / 48 |
+
+The jittered FIFO arm waits up to **1,385.686 ms locally** and dispatches
+32 units after the last capture. The bounded arm limits dispatched-unit
+waiting to **98.023 ms**, drops 13 local units and applies three local
+repairs, recovering 47 frames overall. That is a useful improvement over
+FIFO's 19, while remaining worse than immediate's 53 decoded and 51 on-time
+frames. The zero-jitter profile also improves FIFO continuity while losing
+deadlines versus immediate. Different admissions can shift seeded jitter
+draws, so the zero-jitter controls remain the cleaner attribution cases.
+
+### Observable congestion: the bound never activates
+
+The existing 1,200 -> 300 -> 1,200 kbps profile retains zero link drops in
+all four arms. Maximum paced local waiting is **73.579 ms**, so the bounded
+queue neither drops a unit nor requests local repair. Its source and trace
+are exactly the FIFO arm's, an invariant the comparison checks.
+
+Immediate live presents **79/120** frames on time at 80 ms, versus **57/120**
+for both paced arms. The longest unfresh interval worsens from **1,300 to
+1,633.33 ms**. Sending the bounded run's exact encoded source immediately
+instead reaches **70/120** on-time frames. That replay demonstrates a
+13-frame deadline cost from sender handling under identical encoded bytes;
+the full live comparison also includes different feedback actions.
+
+Admitted and generated bytes are **148,280** for immediate live versus
+**151,207** for both paced arms and their exact-source replay. Matched RGB
+PSNR is **11.956 versus 11.929 dB**, respectively, over all **120 source IDs**.
+This cohort differs from v30's 82-frame intersection; comparing their table
+values directly would confound source selection.
+
+### Persistent collapse: delayed reduction and exhausted local repair
+
+At persistent 90 kbps, immediate live still decodes frames 0..18 and
+107..119, for **32 frames**. All other arms decode only **0..18**. Bounded
+pacing reaches only 12 on-time frames and a **3,400 ms unfresh interval**,
+versus immediate's 27 and 3,033.33 ms.
+
+The first 650 -> 325 kbps reduction moves from **frame 25 / 833.333 ms**
+under immediate sending to **frame 33 / 1,100 ms** under either paced arm.
+The retained report shows the coupling with the unchanged receiver policy:
+
+- Immediate sends a healthy report at 320.087 ms. Its later silence report
+  is generated at 774.407 ms and reaches the source at 809.407 ms.
+- Pacing shifts the healthy report to 562.572 ms. The existing 350 ms report
+  dwell postpones eligibility after a 779.004 ms silence timeout. Frame 18
+  arrives at 891.923 ms before eligibility, resets the timer, and the first
+  actual silence report is generated at 1,041.923 ms.
+
+These are observations from the trace, not a newly changed dwell rule.
+They show why adding a sender queue can change the controller trajectory
+even when its implementation is held fixed.
+
+The bounded arm discards **53 local units**: nine age expirations and
+44 dependent units. It generates and applies all **eight local requests**,
+then retains dependency suppression when that budget is exhausted. IDRs
+75 and 89 expire locally; the other late IDRs are rejected at link admission
+or arrive stale. At the final 20 kbps target, a 775-byte framed IDR charges
+**227.941 ms** of debt at 27.2 wire kbps, longer than the 100 ms local expiry
+budget. Repeated repair therefore interacts with the pacing/queue budget.
+
+| Persistent byte accounting | Immediate live | Paced FIFO | Bounded paced | Immediate replay |
+| --- | ---: | ---: | ---: | ---: |
+| Generated framed bytes | 105,837 | 122,281 | 125,804 | 125,804 |
+| Locally discarded bytes | 0 | 0 | 7,300 | 0 |
+| Attempted dispatch bytes | 105,837 | 122,281 | 118,504 | 125,804 |
+| Admitted link wire bytes | 84,442 | 86,711 | 86,578 | 85,708 |
+| Link-admission-rejected bytes | 21,395 | 35,570 | 31,926 | 40,096 |
+| All encoded IDR framed bytes | 22,632 | 20,987 | 27,890 | 27,890 |
+
+The immediate exact-source replay also fails to recover, despite removing
+all local discards. The persistent failure therefore cannot be attributed
+solely to local eviction. Both the resulting encoded source/control
+trajectory and its sender handling matter. All four arms' common quality
+sample is only the 19 initial frames (0..18), so its identical **12.909 dB** says
+nothing about the immediate arm's successfully recovered tail.
+
+### Clean control: pacing can add delay and increase a short-window peak
+
+The clean 36-frame case has identical encoded packets, **94,950 framed
+bytes**, no controller action and no drop in all arms. Pacing alone adds
+up to **48.042 ms** local waiting, moving two frames beyond the 80 ms
+presentation deadline. All 36 still decode, with identical **12.902 dB**
+matched quality.
+
+The maximum attempted wire rate over a 100 ms virtual dispatch window
+also increases from **904.400 to 1,059.040 kbps**. This is consistent with
+the declared complete-unit debt model: it allows one whole unit at zero
+debt and can shift several capture-time units into a shorter dispatch
+interval. It does not establish packet-level smoothing or a strict
+short-window rate cap. Window endpoints use a tested 1e-9 ms tolerance so
+floating-point frame periods cannot count an exact endpoint twice.
+
+### Validation, accounting and reproduction
+
+Local validation passed **115 focused tests**, including **28 new sender
+and integration cases**. They verify exact debt integration, no idle credit
+or rejection refunds, dispatch/expiry ties, retained capture age, immutable
+admitted serialization, dependency-safe dropping, bounded repairs,
+three-way restart coalescing with real H.264, legacy unpaced identity,
+future-capacity independence, tail deadlines, complete frame/byte partitions,
+exact-source replay and sliding-window endpoint arithmetic.
+
+Every generated unit has exactly one sender outcome. Every dispatched unit
+then has exactly one link outcome. Reports enforce:
+
+```text
+generated_frames = sender_discarded_frames + dispatch_attempts
+dispatch_attempts = delivered_frames + link_drops
+generated_bytes = sender_discarded_bytes + dispatch_attempted_bytes
+dispatch_attempted_bytes = admitted_wire_bytes + link_admission_rejected_bytes
+```
+
+Erased/stale admitted units still consume wire bytes. `link_drop_reasons`
+remains link-only; `sender_drop_reasons` records local age, count and
+dependency discards. `idr_delivery` names either loss layer, and every
+playout evaluation retains every original source slot. `senders` contains
+the complete dispatch/drop/request/rate timeline. `peak_dispatch_windows`
+measures attempted complete-unit bytes in virtual dispatch-time windows,
+including units subsequently rejected by the link.
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+$colabPython = 'C:\dev\colabcola-bridge-prototype\.venv\Scripts\python.exe'
+
+& $colabPython -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py
+
+# Observable congestion: the local bound stays inactive, exposing pacing cost.
+& $colabPython -m colabcola.bridge_video_pacing `
+  --frames 120 --jitter-ms 0 `
+  --bandwidth-steps "0:1200,600:300,2200:1200" `
+  --max-inflight 32 --max-age-ms 1000 --buffers-ms "40,80,160,240,350"
+
+# Persistent collapse: all eight local repairs are spent without recovery.
+& $colabPython -m colabcola.bridge_video_pacing `
+  --frames 120 --jitter-ms 0 --bandwidth-steps "0:1200,600:90" `
+  --buffers-ms "40,80,160,240,350"
+
+# Clean fixed-source control and the two historical profiles.
+& $colabPython -m colabcola.bridge_video_pacing `
+  --frames 36 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
+  --max-age-ms 0 --max-inflight 16 --buffers-ms "40,80,160"
+& $colabPython -m colabcola.bridge_video_pacing --buffers-ms "40,80,160,240,350"
+& $colabPython -m colabcola.bridge_video_pacing --jitter-ms 0 --buffers-ms "40,80,160,240,350"
+```
+
+Both CI platforms run the tests; Linux runs all five declared commands.
+Complete outputs, commands, source hashes and codec versions are retained in
+[`experiments/v31/historical.json`](experiments/v31/historical.json),
+[`experiments/v31/zero-jitter.json`](experiments/v31/zero-jitter.json),
+[`experiments/v31/observable-congestion.json`](experiments/v31/observable-congestion.json),
+[`experiments/v31/persistent-collapse.json`](experiments/v31/persistent-collapse.json),
+[`experiments/v31/clean.json`](experiments/v31/clean.json), and
+[`experiments/v31/environment.json`](experiments/v31/environment.json).
+All five retained runs produced empty stderr; codec warnings remain enabled.
+
+**Next decision:** separate the pacing service budget and queue-wait
+objective from the encoder's payload target, while retaining the immediate
+baseline and exact-source controls. Reducing encoder load and draining
+already queued bytes are different operations. Packet granularity must also
+be modeled before extrapolating this complete-unit experiment to a real
+transport. [WebRTC's pacing documentation](https://webrtc.googlesource.com/src/+/refs/heads/main/modules/pacing/g3doc/index.md)
+describes packetization before pacing, a separately configured send rate,
+and a queue-time mechanism that can increase that rate when needed. Those
+are useful design references, not features implemented by this experiment.
+All link/control/playout clocks remain virtual, with ideal reverse feedback;
+there is no physical network/display measurement or Colab allocation.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.

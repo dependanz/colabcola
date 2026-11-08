@@ -1,0 +1,168 @@
+{
+  "base_commit": "9e48f1462a96d1cc93478e159d6d35083d236855",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "commands": {
+    "historical.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_pacing",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_pacing",
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "observable-congestion.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_pacing",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:300,2200:1200",
+      "--max-inflight",
+      "32",
+      "--max-age-ms",
+      "1000",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "persistent-collapse.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_pacing",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:90",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "clean.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_pacing",
+      "--frames",
+      "36",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--max-inflight",
+      "16",
+      "--buffers-ms",
+      "40,80,160"
+    ]
+  },
+  "source_sha256": {
+    "src/colabcola/bridge_video_controller.py": "75e88f397c916340781be8bfb6b548e31c21cf36b28ab55ce27f00866b72e5f9",
+    "src/colabcola/bridge_video_sender.py": "9dae42b335332aef87122d221ff9e41dbb4e8e037d56d39fe93cf8d776be5e3d",
+    "src/colabcola/bridge_video_pacing.py": "e3278ebe7744419ce3edc1d319fdf18005d1a4db88f109e74ea530d7dc108833",
+    "src/colabcola/bridge_video_rate.py": "5d2e8a012177aa6f18b28febf63097cae4502dfb51a416b0774cfceb6b058f5a",
+    "src/colabcola/bridge_video_load.py": "619190abb3c82aec482a20179005cac7ddbaadfbc643205dcc37e326f8aaeb0f",
+    "src/colabcola/bridge_video_impairment.py": "0f00d66bd240cbc2e000695ad0bf76b9c7d893d57a072771d228f124c6b3203d"
+  },
+  "captured_runs": {
+    "historical.json": {
+      "report_sha256": "2e7e5ceb649df5159b06dc404f2cf431cf6b2bcdd4fb8b0a70e15b46fa89aae7",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "zero-jitter.json": {
+      "report_sha256": "1eeed140eb35334602582ff972b6bd85ab15e8cfa8b126b8bfdca98ad2ebcb9a",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "observable-congestion.json": {
+      "report_sha256": "5b58b8ed083e4617126c0867432cb2d7823477ca5cf347b2364dccb919c2933e",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "persistent-collapse.json": {
+      "report_sha256": "e03a866b212f47f9e1bbcade05f8436b06bf04e3e8d1c8bd152f8f65a18c8614",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clean.json": {
+      "report_sha256": "bd7fe2e62761c3ca6b978eca9a05aab97861d5a3bebe64a86a7fa5470d719214",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "legacy_v30_full_reports_unchanged": [
+    "historical.json",
+    "zero-jitter.json",
+    "observable-congestion.json",
+    "persistent-collapse.json",
+    "clean.json"
+  ],
+  "predeclared_sender_policy": {
+    "vbv_ms": 100,
+    "pacing": "whole-access-unit framed-bit debt at encoder target plus nominal framing rate",
+    "idle_credit_bits": 0,
+    "max_pending_units": 3,
+    "max_local_age_ms": 100,
+    "max_local_repair_requests": 8,
+    "fifo_control_max_pending_units": 120,
+    "fifo_control_age_or_repair": false
+  },
+  "note": "Five predeclared v30 link/source profiles, no parameter sweep. V29 rate/recovery policy and v30 tight encoder unchanged. All attempts incur debt, local drops affect unsent units only, capture ages and full source horizon retained. Offline arm immediately replays all generated bounded-run packets exactly. Bounded pacing loses on-time80 frames versus immediate live in all five profiles; retain the negative result and keep v30 immediate as the preferred baseline. Final report generation includes an endpoint-tolerance fix for half-open virtual dispatch-window metrics; policy trajectories were unchanged. Final source also resolves fractional expiry/dispatch ties with an explicit 1e-9 ms tolerance while retaining the actual expiry endpoint; all five complete reports otherwise match the preceding runs exactly.",
+  "focused_tests": {
+    "passed": 115,
+    "elapsed_seconds": 3.27,
+    "new_sender_and_integration_tests": 28
+  }
+}

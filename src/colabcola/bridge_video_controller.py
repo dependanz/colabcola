@@ -68,6 +68,7 @@ class VirtualAccessUnitLink:
         self.last_arrival_ms = 0.0
         self.wire_sent_bytes = 0
         self.peak = 0
+        self._last_dispatch_ms = 0.0
 
     def arrive_by(self, time_ms: float) -> list[ScheduledUnit]:
         """Advance the receiver's observable frontier, in arrival order."""
@@ -79,21 +80,34 @@ class VirtualAccessUnitLink:
                 observed.append(item)
         return observed
 
-    def send(self, packet: VideoAccessUnit, *, fps: int) -> None:
+    def send(self, packet: VideoAccessUnit, *, fps: int,
+             dispatch_ms: float | None = None) -> None:
+        """Attempt admission at dispatch time, retaining original capture age.
+
+        Omitting dispatch_ms preserves the original capture-time scheduler.
+        A local sender may delay dispatch, but it cannot move an admitted
+        unit or its serialization backward or reset the source timestamp.
+        """
         if type(fps) is not int or not 1 <= fps <= 60:
             raise ValueError("invalid source rate")
         if not isinstance(packet, VideoAccessUnit):
             raise ValueError("invalid video packet")
         source_ms = packet.seq * 1000.0 / fps
-        if self.inflight and self.inflight[0][0].arrival_ms <= source_ms:
+        at_ms = source_ms if dispatch_ms is None else dispatch_ms
+        if (type(at_ms) not in (int, float) or not math.isfinite(at_ms)
+                or at_ms < source_ms or at_ms < self._last_dispatch_ms):
+            raise ValueError("dispatch time must be finite, monotonic and after capture")
+        if self.inflight and self.inflight[0][0].arrival_ms <= at_ms:
             raise RuntimeError("receiver arrivals must be drained before send")
         wire_size = len(packet_bytes(packet))
         if len(self.inflight) >= self.config.max_inflight:
+            self._last_dispatch_ms = at_ms
             self.dropped.append((packet.seq, "queue_full"))
             return
         if self.wire_sent_bytes + wire_size > MAX_WIRE_BYTES:
             raise ValueError("virtual link wire budget exceeded")
-        started = max(source_ms, self.link_free_ms)
+        self._last_dispatch_ms = at_ms
+        started = max(at_ms, self.link_free_ms)
         finished = _serialize_ms(started, wire_size * 8, self.config)
         self.link_free_ms = finished
         jitter = (self.rng.uniform(-self.config.jitter_ms, self.config.jitter_ms)
