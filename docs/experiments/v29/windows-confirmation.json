@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "kind": "user-provided-windows-v29-reproduction",
+  "source_filename": "Pasted text(20261108-002804).txt",
+  "source_sha256": "1e2319720ec8bcc1ea1a95d3aee2ca5597e9bb4073ed96c59e22c73840f8d764",
+  "observed_branch": "feature/interactive-bridge-prototype",
+  "observed_head": "f119da8",
+  "tests": {
+    "files": [
+      "tests/test_bridge_video_controller.py",
+      "tests/test_bridge_video_rate.py",
+      "tests/test_bridge_video_watchdog.py",
+      "tests/test_bridge_video_recovery.py",
+      "tests/test_bridge_video_load.py",
+      "tests/test_bridge_video_load_control.py"
+    ],
+    "passed": 67,
+    "elapsed_seconds": 2.65
+  },
+  "comparisons": [
+    {
+      "retained_report": "docs/experiments/v29/observable-congestion.json",
+      "retained_file_sha256": "98347e46d47bae2a5ea517521cd5b26be8eebf43f62b022a0b482b79109687e2",
+      "all_json_fields_equal": true
+    },
+    {
+      "retained_report": "docs/experiments/v29/persistent-collapse.json",
+      "retained_file_sha256": "199074fd9d6b67b9a208a5fe91adb7b0337d2f254cb3850538aedd6d974f1df3",
+      "all_json_fields_equal": true
+    }
+  ],
+  "scope": "User-provided Windows execution with explicit project .venv interpreter; complete parsed reports compared to retained evidence. Historical and zero-jitter v29 CLI profiles were not in this transcript."
+}

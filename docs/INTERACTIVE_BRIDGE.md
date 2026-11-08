@@ -2202,6 +2202,222 @@ must be read alongside continuity and deadline results. Seeded jitter can
 be assigned to different source frames when admissions differ; the
 zero-jitter comparisons remove that pairing ambiguity.
 
+### Windows v29 confirmation
+
+The subsequent user transcript at branch head `f119da8` confirms **67 tests
+passed in 2.65 seconds**, using the explicit project `.venv` interpreter.
+Both complete observable-congestion and persistent-collapse reports match
+the retained v29 JSON field for field. The historical and zero-jitter CLI
+profiles are not in this transcript. The comparison receipt is
+[`experiments/v29/windows-confirmation.json`](experiments/v29/windows-confirmation.json).
+
+## v30: isolate encoder burst allowance before changing the queue
+
+The new opt-in `bridge_video_burst.py` experiment changes the nominal H.264
+VBV allowance from **1,000 ms to 100 ms**, holding the v29 rate policy,
+independent IDR recovery and virtual FIFO link implementation fixed.
+Only `vbv-bufsize` changes. The initial-fill option, maximum rate, codec
+preset, tuning, source, GOP and other encoder options remain as before.
+The original commands retain their behavior: all four complete v29 reports
+remain unchanged with the new optional arguments omitted.
+
+This encoder setting constrains its bit budget; it is not an additional
+100 ms playback queue or a measured 100 ms codec delay. For target `R` kbps
+and source rate `f` FPS, the wrapper requests this integer-kilobit buffer:
+
+```text
+max(1, ceil(R * vbv_ms / 1000), ceil(R / f))
+```
+
+The last term is our explicit minimum allowance for one nominal source
+frame. At 650 kbps and 30 FPS, the two settings request 650 versus 65 kbits.
+At 173 kbps, the tighter setting rounds to 18 kbits, equivalent to
+104.046 ms. Reports give the requested duration, configured size and
+equivalent duration after this rounding/floor. These are not measurements
+of libx264's internal buffer occupancy. The implementation uses the
+documented [`x264-params` interface](https://ffmpeg.org/ffmpeg-codecs.html#libx264_002c-libx264rgb)
+and leaves `vbv-init` unspecified in both settings.
+
+### Four arms separate the encoder change from changed feedback actions
+
+Smaller encoded units change arrival observations, so identical controller
+code can choose a different target/recovery schedule. Two offline crossover
+controls therefore replay every target and encoder restart, including
+same-rate recovery IDRs:
+
+| Arm | Nominal VBV duration | Target and restart schedule |
+| --- | ---: | --- |
+| `legacy_live` | 1,000 ms | Causal v29 policy and recovery |
+| `tight_live` | 100 ms | Same causal policy and recovery |
+| `tight_replay_legacy_schedule` | 100 ms | Exact actions from `legacy_live` |
+| `legacy_replay_tight_schedule` | 1,000 ms | Exact actions from `tight_live` |
+
+The two live arms measure the full feedback-loop effect. Each same-schedule
+pair isolates the encoder change conditioned on that observed schedule.
+The replay arms are offline ablations, not deployable controllers. Their
+complete IDR sequences, including periodic IDRs, must match their source
+schedule. Same-setting replay must also reproduce bytes and the link trace.
+Different buffer settings may change bytes from frame zero, so prefix-byte
+equality is checked only between arms with the same encoder setting.
+
+### Observable congestion: complete decoding, with deadlines still missed
+
+The declared 120-frame / 30 FPS / 128x72 profile uses capacity
+1,200 -> 300 -> 1,200 kbps at 600/2,200 ms, zero jitter, a 40 ms base delay,
+32 in-flight slots and a 1,000 ms age cutoff.
+
+| Observable-congestion result | Legacy live | Tight live | Tight, legacy schedule | Legacy, tight schedule |
+| --- | ---: | ---: | ---: | ---: |
+| Actually decoded frames | 103/120 | 120/120 | 120/120 | 92/120 |
+| On time with 80 ms buffer | 60 | 79 | 82 | 57 |
+| Admitted media wire bytes | 195,956 | 148,280 | 115,393 | 240,878 |
+| All offered wire bytes | 199,864 | 148,280 | 115,393 | 240,878 |
+| Longest unfresh interval at 80 ms | 1,733.33 ms | 1,300 ms | 1,233.33 ms | 1,766.67 ms |
+| RGB PSNR on the same 82 decoded frames | 11.887 dB | 12.130 dB | 11.515 dB | 12.601 dB |
+
+Both tight-buffer arms deliver and decode all 120 frames without a link
+drop. The live comparison gains 17 decoded and 19 on-time frames. It still
+has a **1.3-second interval without a fresh frame** at the 80 ms deadline;
+successful eventual decoding does not establish responsive playback.
+
+The schedule-matched legacy-target segment at source frames **30..40**
+directly revisits v29's 173 kbps overshoot:
+
+| Same 173 kbps target and restart | Legacy buffer | Tight buffer |
+| --- | ---: | ---: |
+| Restart IDR including framing | 6,877 bytes | 1,757 bytes |
+| First three source frames: offered wire rate | 1,108.240 kbps | 234.880 kbps |
+| All 11 source frames: offered wire rate | 432.000 kbps | 191.891 kbps |
+
+The latter now falls below the earlier 240 kbps wire budget in this
+specific segment. This does not establish a universal cap: for example,
+the tight live arm's final three-frame target-269 segment offers
+334.880 wire kbps. Codec settings, short source-window rates and actual
+network throughput remain different measurements.
+
+Quality requires the schedule controls too. Tight live has higher matched
+PSNR than legacy live here because the closed loop follows different
+targets and restart timing. With each schedule held fixed, the tighter
+buffer lowers matched PSNR: 11.887 -> 11.515 dB under the legacy schedule,
+and 12.601 -> 12.130 dB under the tight schedule. All four values use the
+same **82 source-frame IDs**; the earlier v29 table used 76, so its PSNR
+values are not directly comparable to this table.
+
+### Persistent 90 kbps collapse: late recovery, not acceptable continuity
+
+This retained profile keeps capacity at 90 kbps after 600 ms, with
+120 frames, zero jitter, ten slots and a 350 ms age cutoff.
+
+| Persistent-collapse result | Legacy live | Tight live | Tight, legacy schedule | Legacy, tight schedule |
+| --- | ---: | ---: | ---: | ---: |
+| Actually decoded frames | 18/120 | 32/120 | 24/120 | 18/120 |
+| On time with 80 ms buffer | 12 | 27 | 22 | 12 |
+| Admitted media wire bytes | 124,861 | 84,442 | 82,715 | 124,510 |
+| All offered wire bytes | 173,276 | 105,837 | 104,973 | 175,563 |
+| Longest unfresh interval at 80 ms | 3,400 ms | 3,033.33 ms | 3,233.33 ms | 3,400 ms |
+
+With the tighter live encoder, arriving frame 95 exposes the missing
+reference chain at virtual time **3,505.511 ms**. Its recovery request
+reaches the source at **3,540.511 ms**, generating a same-rate 20 kbps IDR
+at source frame **107**, which arrives at **3,675.556 ms**. Frames 107..119
+decode, but only 109..118 meet the 80 ms presentation deadline. The decoder
+also decoded frames 0..18 before the outage. The legacy-schedule tight
+replay waits for its periodic IDR at frame 115 and decodes only 24 frames
+overall. Neither legacy-buffer arm recovers within the measured run.
+
+The reduction in offered bytes permits late recovery without changing
+queue semantics. It does not remove the accumulated backlog promptly:
+the tight live arm still loses 81 units, including 62 admission rejections,
+and stalls for about three seconds at the 80 ms deadline. Its matched PSNR
+is 12.904 versus 13.026 dB, but the 18-frame quality intersection contains
+only the pre-outage frames. That figure says nothing about the quality of
+the newly recovered low-rate tail.
+
+### Clean control and retained severe-collapse profiles
+
+On a clean, unlimited-bandwidth virtual link, both settings decode all
+36 frames and present all 36 on time at 80 ms. No target change or recovery
+restart occurs. Offered bytes fall **135,275 -> 94,950**, maximum three-frame
+offered rate falls **1,612.640 -> 904.400 kbps**, and matched PSNR falls
+**12.993 -> 12.902 dB**. This isolates the encoder-output and quality effect
+without dropped-frame selection or different control actions. Even the
+tighter buffer can exceed the 650 kbps target over a short source window.
+
+| Historical 90-frame profile | Legacy: decoded / on time at 80 ms | Tight: decoded / on time at 80 ms | Legacy / tight admitted wire bytes |
+| --- | ---: | ---: | ---: |
+| +/-8 ms jitter | 54 / 42 | 53 / 51 | 133,020 / 89,286 |
+| Zero jitter | 46 / 40 | 53 / 51 | 144,862 / 88,814 |
+
+The jittered fixture retains a negative result: one fewer decoded frame
+despite more on-time frames and fewer bytes. Equal seeds can assign
+different jitter draws to source frames once admissions diverge; the
+zero-jitter cases provide the cleaner comparison. No parameter sweep or
+selection of a best-performing duration was performed.
+
+### Reproduce v30 on Windows
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+$colabPython = 'C:\dev\colabcola-bridge-prototype\.venv\Scripts\python.exe'
+
+& $colabPython -m pytest -q tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py
+
+# Observable congestion: live comparison and both exact-schedule replays.
+& $colabPython -m colabcola.bridge_video_burst `
+  --frames 120 --jitter-ms 0 `
+  --bandwidth-steps "0:1200,600:300,2200:1200" `
+  --max-inflight 32 --max-age-ms 1000 --buffers-ms "40,80,160,240,350"
+
+# Persistent severe collapse: inspect the late recovery and remaining stall.
+& $colabPython -m colabcola.bridge_video_burst `
+  --frames 120 --jitter-ms 0 --bandwidth-steps "0:1200,600:90" `
+  --buffers-ms "40,80,160,240,350"
+
+# Codec-only control and historical comparisons.
+& $colabPython -m colabcola.bridge_video_burst `
+  --frames 36 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
+  --max-age-ms 0 --max-inflight 16 --buffers-ms "40,80,160"
+& $colabPython -m colabcola.bridge_video_burst --buffers-ms "40,80,160,240,350"
+& $colabPython -m colabcola.bridge_video_burst --jitter-ms 0 --buffers-ms "40,80,160,240,350"
+```
+
+Local validation passed **87 focused tests**, including 20 new encoder,
+replay and accounting cases. These verify unchanged legacy behavior,
+strict configuration bounds, same-setting byte/trace replay, complete
+target/IDR schedule matching, real decoding, exact burst arithmetic,
+truncated windows and offered/admitted/rejected-byte conservation.
+Both CI platforms run the suites; Linux runs all five declared commands.
+
+Each arm's `encoder_segments` splits at every restart, including same-rate
+IDRs. Initial 1/3/9-frame windows stop at the next restart or source end,
+report their actual duration, and mark incomplete windows. The separate
+`peak_source_windows` measures full sliding windows across the source.
+All rates divide bytes by source-frame duration, not receiver elapsed time.
+`target_segments` retains the v29 rate-epoch view, and `idr_delivery` gives
+arrival times or drop reasons for every periodic/restart IDR.
+
+Complete reports, commands, source hashes and codec versions are retained in
+[`experiments/v30/historical.json`](experiments/v30/historical.json),
+[`experiments/v30/zero-jitter.json`](experiments/v30/zero-jitter.json),
+[`experiments/v30/observable-congestion.json`](experiments/v30/observable-congestion.json),
+[`experiments/v30/persistent-collapse.json`](experiments/v30/persistent-collapse.json),
+[`experiments/v30/clean.json`](experiments/v30/clean.json), and
+[`experiments/v30/environment.json`](experiments/v30/environment.json).
+All five retained runs produced empty stderr; encoder warnings are not
+suppressed, and this is not a claim that every requested VBV budget is met.
+
+**Next distinct work:** add a bounded sender queue/pacer as a separate
+factor. Capture time and dispatch time must be separate; waiting must
+count toward frame age. Dropping an unsent predicted unit requires a
+dependency-aware recovery policy, while already serialized/in-flight
+bytes cannot be removed retroactively. The policy must use causal source
+and feedback observations, not future simulator bandwidth. The current
+results justify that queue experiment because smaller new bursts alone
+still leave multi-second stalls. All media/control/playout timing here
+remains virtual, with real local H.264 codecs and ideal reverse feedback;
+there is no physical network/display measurement or Colab allocation.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.

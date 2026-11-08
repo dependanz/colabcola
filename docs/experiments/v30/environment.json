@@ -1,0 +1,155 @@
+{
+  "base_commit": "f119da829d42e6b540bcb76c003c850c5a192c43",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "commands": {
+    "historical.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_burst",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_burst",
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "observable-congestion.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_burst",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:300,2200:1200",
+      "--max-inflight",
+      "32",
+      "--max-age-ms",
+      "1000",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "persistent-collapse.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_burst",
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:90",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "clean.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_burst",
+      "--frames",
+      "36",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--max-inflight",
+      "16",
+      "--buffers-ms",
+      "40,80,160"
+    ]
+  },
+  "source_sha256": {
+    "src/colabcola/bridge_video_rate.py": "5d2e8a012177aa6f18b28febf63097cae4502dfb51a416b0774cfceb6b058f5a",
+    "src/colabcola/bridge_video_burst.py": "10615d4eb0ff35a1390acb3cc297ba1f9c2b380d5514e6cefa31271b55554e7c",
+    "src/colabcola/bridge_video_load.py": "619190abb3c82aec482a20179005cac7ddbaadfbc643205dcc37e326f8aaeb0f",
+    "src/colabcola/bridge_video_controller.py": "5c3a6f8c60bcc9f5422b54300291c59f4380286c8f21df26e788697b95ba5736",
+    "src/colabcola/bridge_video_impairment.py": "0f00d66bd240cbc2e000695ad0bf76b9c7d893d57a072771d228f124c6b3203d"
+  },
+  "captured_runs": {
+    "historical.json": {
+      "report_sha256": "06b269ebdf7a6ebe0673e34a28987800d34f1b1104f88a9cb8690ade8f7fe916",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "zero-jitter.json": {
+      "report_sha256": "bfe506159be7960a78f1b5bc5c357905fc34d5071a9f9ae333fd8929b219bb60",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "observable-congestion.json": {
+      "report_sha256": "0bc3ed9e7dacf130f177a6c6cf956d99e67276ba88641f60ba5574e1b5e9402c",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "persistent-collapse.json": {
+      "report_sha256": "030f4b6e559f8c848f6e926b21c5e2c3f4bd6ee83fd49022558fa42f6106a85e",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clean.json": {
+      "report_sha256": "16b81e30ec24290f815a41c54716fb666c2dbc328a7dc31de87efec8afd5bb56",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "legacy_v29_full_reports_unchanged": [
+    "historical.json",
+    "zero-jitter.json",
+    "observable-congestion.json",
+    "persistent-collapse.json"
+  ],
+  "focused_tests": {
+    "passed": 87,
+    "elapsed_seconds": 2.84
+  },
+  "note": "Five predeclared profiles, no parameter sweep. Varies only vbv-bufsize; v29 rate policy, recovery and FIFO link unchanged. Both replay arms are offline exact target/restart ablations. Source-window rates and configured VBV metadata are not network-rate guarantees or measured internal occupancy. All five commands produced empty stderr in this environment; encoder warnings are not suppressed."
+}

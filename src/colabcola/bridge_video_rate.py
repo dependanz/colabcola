@@ -1,4 +1,4 @@
-"""v26-v29: causal H.264 rate and recovery experiments on a virtual link.
+"""v26-v30: H.264 rate, recovery and encoder-burst experiments on a virtual link.
 
 Each frame is encoded by real libx264. The sender changes the encoder's
 target bitrate only AFTER receiving a delayed report derived from media
@@ -6,6 +6,8 @@ packets actually observed by the receiver. Any rate switch starts a new
 closed-GOP IDR segment (intentionally modeled as an encoder restart).
 An opt-in receiver silence timer can also request the low rate without a
 new arrival. It knows only elapsed receiver time, never future link state.
+Optional offline replay uses a previously observed target/restart schedule
+for encoder comparisons; that replay is not a causal feedback policy.
 
 The link clock, feedback path, queue limits, jitter and losses are VIRTUAL.
 There is no real socket, GPU, Colab runtime, production media protocol,
@@ -67,6 +69,25 @@ class RateConfig:
                 raise ValueError(f"invalid {name}")
         if self.recovered_age_ms >= self.congested_age_ms:
             raise ValueError("recovery age must be below congestion age")
+
+
+@dataclass(frozen=True)
+class EncoderBurstConfig:
+    """Nominal VBV duration; this is not a per-access-unit or wire-rate cap."""
+
+    vbv_ms: int = 100
+
+    def __post_init__(self) -> None:
+        if type(self.vbv_ms) is not int or not 1 <= self.vbv_ms <= 1000:
+            raise ValueError("vbv_ms must be an integer in 1..1000")
+
+    def buffer_kbits(self, target_kbps: int, fps: int) -> int:
+        if (type(target_kbps) is not int or not 20 <= target_kbps <= 20_000
+                or type(fps) is not int or not 1 <= fps <= 60):
+            raise ValueError("invalid VBV target or source rate")
+        # Round up to whole kbits, with at least one nominal source frame.
+        return max(1, (target_kbps * self.vbv_ms + 999) // 1000,
+                   (target_kbps + fps - 1) // fps)
 
 
 class RateReceiver:
@@ -262,7 +283,11 @@ class RateReceiver:
         }
 
 
-def _encoder(av, width: int, height: int, fps: int, gop: int, kbps: int):
+def _encoder(av, width: int, height: int, fps: int, gop: int, kbps: int, *,
+             burst: EncoderBurstConfig | None = None):
+    if burst is not None and not isinstance(burst, EncoderBurstConfig):
+        raise ValueError("invalid encoder burst configuration")
+    buffer_kbits = kbps if burst is None else burst.buffer_kbits(kbps, fps)
     e = av.CodecContext.create("libx264", "w")
     e.width = width
     e.height = height
@@ -277,7 +302,7 @@ def _encoder(av, width: int, height: int, fps: int, gop: int, kbps: int):
         "x264-params": (
             f"bframes=0:rc-lookahead=0:sync-lookahead=0:"
             f"keyint={gop}:min-keyint={gop}:scenecut=0:open-gop=0:"
-            f"vbv-maxrate={kbps}:vbv-bufsize={kbps}:repeat-headers=1:aud=1"
+            f"vbv-maxrate={kbps}:vbv-bufsize={buffer_kbits}:repeat-headers=1:aud=1"
         ),
     }
     e.open()
@@ -305,12 +330,15 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
                              rates: RateConfig, adapt: bool,
                              restart_seqs: tuple[int, ...] = (),
                              recovery: ControllerConfig | None = None,
-                             rate_policy: RateReceiver | None = None) -> tuple[
+                             rate_policy: RateReceiver | None = None,
+                             burst: EncoderBurstConfig | None = None,
+                             replay_schedule: tuple[tuple[int, int], ...] | None = None) -> tuple[
                                  list[VideoAccessUnit], LinkTrace, dict]:
     """Encode in source order, drain only already arrived packets, adapt rate.
 
-    The baseline and adaptive streams start with EXACTLY the same encoder
-    configuration. Rate switches require delayed receiver feedback.
+    With the same burst setting, baseline and adaptive streams start with
+    exactly the same encoder configuration. Adaptive rate switches require
+    delayed receiver feedback.
     restart_seqs is a fixed-high, offline ablation schedule only; it cannot
     be combined with live feedback and is not a deployable controller.
     Optional v28 recovery runs independently of rate selection. Its delayed
@@ -318,12 +346,28 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     change and any due IDR requests share one encoder restart.
     A fresh optional rate_policy receives encoded source observations before
     link admission. It cannot observe queue occupancy or admission decisions.
+    Optional burst changes only VBV buffer duration. A replay_schedule is an
+    offline sequence of (source_seq, target_kbps) restarts, including unchanged
+    targets, and cannot be combined with any live feedback or restart_seqs.
     """
     _validate_video(width, height, fps, frames, gop)
     if not isinstance(link, LinkConfig) or not isinstance(rates, RateConfig):
         raise ValueError("invalid simulator configuration")
     if type(adapt) is not bool:
         raise ValueError("adapt must be a boolean")
+    if burst is not None and not isinstance(burst, EncoderBurstConfig):
+        raise ValueError("invalid encoder burst configuration")
+    if replay_schedule is not None:
+        if (type(replay_schedule) is not tuple or len(replay_schedule) > 20
+                or adapt or recovery is not None or rate_policy is not None or restart_seqs):
+            raise ValueError("replay_schedule requires bounded offline restarts without live feedback")
+        previous_seq = 0
+        for step in replay_schedule:
+            if (type(step) is not tuple or len(step) != 2
+                    or type(step[0]) is not int or not previous_seq < step[0] < frames
+                    or type(step[1]) is not int or not 20 <= step[1] <= rates.high_kbps):
+                raise ValueError("replay_schedule must contain sorted unique source indices and bounded targets")
+            previous_seq = step[0]
     if rate_policy is not None and (
             not isinstance(rate_policy, RateReceiver) or not adapt
             or rate_policy.settings != rates or rate_policy.clock_ms != 0
@@ -351,8 +395,15 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     receiver = RateReceiver(rates) if rate_policy is None else rate_policy
     decoder_recovery = MultiGapFeedbackController(recovery) if recovery is not None else None
     restarts: list[dict] = []
+    replay_targets = dict(replay_schedule) if replay_schedule is not None else {}
+
+    def start_encoder(target_kbps: int):
+        if burst is None:
+            return _encoder(av, width, height, fps, gop, target_kbps)
+        return _encoder(av, width, height, fps, gop, target_kbps, burst=burst)
+
     kbps = rates.high_kbps
-    e = _encoder(av, width, height, fps, gop, kbps)
+    e = start_encoder(kbps)
     origin_seq = 0
     packets: list[VideoAccessUnit] = []
     for seq in range(frames):
@@ -367,10 +418,10 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
             receiver.advance(now)
             target = receiver.apply_due(seq, now, kbps)
         else:
-            target = kbps
+            target = replay_targets.get(seq, kbps)
         due_recovery = (decoder_recovery.requests_due_before(now)
                         if decoder_recovery is not None else [])
-        if target != kbps or due_recovery or seq in restart_seqs:
+        if target != kbps or due_recovery or seq in restart_seqs or seq in replay_targets:
             restarts.append({
                 "source_seq": seq,
                 "source_ms": round(now, 3),
@@ -381,7 +432,7 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
             })
             if e.encode(None):
                 raise RuntimeError("unexpected H.264 buffer during rate switch")
-            e = _encoder(av, width, height, fps, gop, target)
+            e = start_encoder(target)
             origin_seq = seq
             kbps = target
             if decoder_recovery is not None:
@@ -420,7 +471,13 @@ def stream_with_rate_control(*, width: int, height: int, fps: int,
     report = receiver.report()
     if decoder_recovery is not None:
         report["recovery"] = decoder_recovery.report()
+    if decoder_recovery is not None or replay_schedule is not None:
         report["encoder_restarts"] = restarts
+    if burst is not None:
+        report["encoder_burst"] = {"vbv_ms": burst.vbv_ms}
+    if replay_schedule is not None:
+        report["replay_schedule"] = [list(step) for step in replay_schedule]
+        report["replay_note"] = "offline target/restart schedule from another run; not a causal feedback policy"
     return packets, trace, report
 
 
