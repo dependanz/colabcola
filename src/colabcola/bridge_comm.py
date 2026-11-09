@@ -87,11 +87,18 @@ def bootstrap_error_summary(provider, session, remote: str, run_id: str,
 
 
 class KernelCommBridge:
-    def __init__(self, provider, session, run_id: str, fps: int):
+    def __init__(self, provider, session, run_id: str, fps: int,
+                 video_codec: str = "ppm", *, install_remote_pyav: bool = False):
+        if video_codec not in ("ppm", "h264"):
+            raise ValueError("invalid optional kernel video codec")
+        if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
+            raise ValueError("remote PyAV installation requires opt-in H.264")
         self.provider = provider
         self.session = session
         self.run_id = run_id
         self.fps = fps
+        self.video_codec = video_codec
+        self.install_remote_pyav = install_remote_pyav
         self.client = None
         self.wire = None
         self.comm_id = None
@@ -118,7 +125,10 @@ class KernelCommBridge:
         self.provider._execute(self.session, 
             f"from pathlib import Path\nPath({root!r}).mkdir(parents=True, exist_ok=True)")
         files = importlib.resources.files("colabcola")
-        for name in ("bridge_colab_runtime.py", "bridge_colab_comm_runtime.py"):
+        names = ["bridge_colab_runtime.py", "bridge_colab_comm_runtime.py"]
+        if self.video_codec == "h264":
+            names.append("bridge_video_colab_source.py")
+        for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
         kernel_id = self.provider._kernel(self.session)["id"]
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
@@ -170,17 +180,22 @@ class KernelCommBridge:
                 + " | ".join(reports)
             )
         try:
+            video_path = (root + "/bridge_video_colab_source.py"
+                          if self.video_codec == "h264" else None)
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
                     f"'BRIDGE_DIRECTORY':{root!r}, 'BRIDGE_FPS':{self.fps}, "
                     f"'BRIDGE_RUN_ID':{self.run_id!r},"
-                    f"'BRIDGE_RENDERER_PATH':{root + '/bridge_colab_runtime.py'!r}"
+                    f"'BRIDGE_RENDERER_PATH':{root + '/bridge_colab_runtime.py'!r},"
+                    f"'BRIDGE_VIDEO_SOURCE_PATH':{video_path!r},"
+                    f"'BRIDGE_VIDEO_PREFLIGHT':{self.video_codec == 'h264'!r},"
+                    f"'BRIDGE_INSTALL_REMOTE_PYAV':{self.install_remote_pyav!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.
             request_id = self.wire.execute(code, allow_stdin=False, store_history=False)
-            deadline = time.monotonic() + 65
+            deadline = time.monotonic() + (115 if self.install_remote_pyav else 65)
             while time.monotonic() < deadline:
                 if not self.wire.connection_ready.is_set():
                     raise LifecycleError("kernel websocket disconnected during bootstrap")
@@ -208,15 +223,32 @@ class KernelCommBridge:
                     if content.get("target_name") != TARGET:
                         continue
                     details = content.get("data", {})
-                    if (details.get("v") != 1 or details.get("kind") != "ready"
+                    if (not isinstance(details, dict) or details.get("v") != 1
+                            or details.get("kind") not in ("ready", "video_preflight_failed")
                             or details.get("run_id") != self.run_id
-                            or details.get("device") != "cuda" or "T4" not in details.get("gpu", "")
+                            or details.get("device") != "cuda"
+                            or not isinstance(details.get("gpu"), str)
+                            or "T4" not in details["gpu"]
                             or details.get("width") != 640 or details.get("height") != 360):
                         raise LifecycleError("kernel bridge CUDA handshake invalid")
                     comm_id = content.get("comm_id")
                     if not isinstance(comm_id, str) or not 1 <= len(comm_id) <= 128:
                         raise LifecycleError("kernel bridge communication id invalid")
                     self.comm_id = comm_id
+                    if details["kind"] == "video_preflight_failed":
+                        # Preserve the Comm ID for best-effort close before
+                        # the owned allocation is released by the caller.
+                        if self.video_codec != "h264":
+                            raise LifecycleError("unexpected video preflight reply")
+                        code = details.get("failure_code")
+                        if code not in (
+                                "source_path_missing", "pyav_unavailable", "numpy_unavailable",
+                                "libx264_unavailable", "video_initialization_failed",
+                                "pyav_install_failed", "pyav_install_timeout"):
+                            code = "unknown"
+                        raise LifecycleError("remote H.264 preflight failed: code=" + code)
+                    if self.video_codec == "h264" and details.get("video_codec") != "h264-annexb":
+                        raise LifecycleError("kernel bridge H.264 handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:

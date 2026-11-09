@@ -282,6 +282,21 @@ def run_colab(args) -> int:
     with selected(args.profile):
         provider = GoogleProvider()
         try:
+            video_codec = getattr(args, "video_codec", "ppm")
+            if video_codec not in ("ppm", "h264"):
+                raise LifecycleError("invalid bridge video codec")
+            install_remote_pyav = getattr(args, "install_remote_pyav", False)
+            if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
+                raise LifecycleError("remote PyAV installation requires opt-in H.264")
+            if video_codec == "h264":
+                if (getattr(args, "transport", "files") != "comm"
+                        or getattr(args, "inflight", 1) != 1
+                        or getattr(args, "benchmark_sweep", False)
+                        or getattr(args, "benchmark_credits", False)
+                        or getattr(args, "probe_link", False)):
+                    raise LifecycleError("H.264 requires single-credit Comm without benchmarks")
+                from .bridge_video_comm_session import make_host_decoder
+                make_host_decoder()  # local-only check BEFORE allocating a T4
             verify_preflight(provider)
             if args.preflight_only:
                 print("[colabcola] Bridge preflight passed; no runtime allocated", flush=True)
@@ -310,13 +325,31 @@ def run_colab(args) -> int:
                         # Opt-in persistent Jupyter kernel websocket.
                         # The proven Contents-API polling route remains the default.
                         from .bridge_comm import KernelCommBridge, stream_comm
-                        peer = KernelCommBridge(provider, session, state["run_id"], args.fps)
+                        if video_codec == "h264":
+                            video_kwargs = {"video_codec": "h264"}
+                            if install_remote_pyav:
+                                video_kwargs["install_remote_pyav"] = True
+                            peer = KernelCommBridge(
+                                provider, session, state["run_id"], args.fps,
+                                **video_kwargs)
+                        else:
+                            peer = KernelCommBridge(provider, session, state["run_id"], args.fps)
                         try:
                             details = peer.open()
-                            save(args.run_dir, state, "running", gpu_name=details["gpu"],
-                                 transport="comm")
+                            if video_codec == "h264":
+                                save(args.run_dir, state, "running", gpu_name=details["gpu"],
+                                     transport="comm", video_codec="h264")
+                            else:
+                                save(args.run_dir, state, "running", gpu_name=details["gpu"],
+                                     transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
-                            if getattr(args, "benchmark_credits", False):
+                            if video_codec == "h264":
+                                from .bridge_video_comm_session import stream_comm_h264
+                                def work(outgoing, frames, stopped):
+                                    stream_comm_h264(
+                                        peer, details["gpu"], outgoing, frames, stopped,
+                                        deadline, args.poll_hz)
+                            elif getattr(args, "benchmark_credits", False):
                                 from .bridge_credit_sweep import run_credit_sweep
                                 def work(outgoing, frames, stopped):
                                     run_credit_sweep(
@@ -336,7 +369,8 @@ def run_colab(args) -> int:
                                         probe_link=getattr(args, "probe_link", False),
                                         in_flight=getattr(args, "inflight", 1))
                             run_viewer("127.0.0.1", 0, "", width=640, height=360,
-                                       title="Colab Cola · T4 (kernel Comm)",
+                                       title=("Colab Cola · T4 H.264 (kernel Comm)" if video_codec == "h264"
+                                              else "Colab Cola · T4 (kernel Comm)"),
                                        worker=work,
                                        viewer_stats=getattr(args, "viewer_stats", False))
                         finally:

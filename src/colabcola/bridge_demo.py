@@ -395,6 +395,10 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--gpu", choices=("T4",), default="T4")
     remote.add_argument("--transport", choices=("files", "comm"), default="files",
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
+    remote.add_argument("--video-codec", choices=("ppm", "h264"), default="ppm",
+                        help="ppm=existing snapshots; h264=opt-in single-credit experimental Comm video")
+    remote.add_argument("--install-remote-pyav", action="store_true",
+                        help="explicitly permit pinned PyPI PyAV wheel install in the owned T4 kernel")
     remote.add_argument("--fps", type=int, default=6)
     remote.add_argument("--poll-hz", type=int, default=3)
     remote.add_argument("--inflight", type=int, default=None,
@@ -427,9 +431,15 @@ def main(argv: list[str] | None = None) -> int:
             # including local Tk configuration. Preserve single-credit
             # behavior for file polling, diagnostics and controlled sweeps.
             if args.inflight is None:
-                args.inflight = (2 if args.transport == "comm" and not (
-                    args.benchmark_sweep or args.benchmark_credits or args.probe_link)
-                    else 1)
+                args.inflight = (2 if args.transport == "comm" and args.video_codec == "ppm"
+                                   and not (args.benchmark_sweep or args.benchmark_credits
+                                            or args.probe_link) else 1)
+            if args.video_codec == "h264" and (
+                    args.transport != "comm" or args.inflight != 1
+                    or args.benchmark_sweep or args.benchmark_credits or args.probe_link):
+                parser.error("H.264 video requires --transport comm --inflight 1, without benchmarks/probe")
+            if args.install_remote_pyav and args.video_codec != "h264":
+                parser.error("--install-remote-pyav requires --video-codec h264")
             max_poll_hz = 12 if args.transport == "comm" else 6
             if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= max_poll_hz:
                 parser.error(

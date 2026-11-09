@@ -53,8 +53,12 @@ MAX_FRAME_BYTES = 2 * 1024 * 1024 + 20
 TARGET = "colabcola.bridge.v1"
 
 
-def start(directory: str, run_id: str, fps: int, renderer_path: str):
+def start(directory: str, run_id: str, fps: int, renderer_path: str,
+          video_source_path: str | None = None, preflight_video: bool = False,
+          install_remote_pyav: bool = False):
     global BOOTSTRAP_STAGE
+    if install_remote_pyav and (not preflight_video or video_source_path is None):
+        raise ValueError("remote PyAV installation requires video preflight")
     root = Path(directory)
     BOOTSTRAP_STAGE = "loading_renderer"
     renderer = runpy.run_path(renderer_path)
@@ -82,14 +86,53 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
         raise RuntimeError("remote bridge did not verify T4 CUDA compute")
 
     BOOTSTRAP_STAGE = "creating_comm"
-    comm = _create_kernel_comm(target_name=TARGET, data={
-        "v": 1, "kind": "ready", "run_id": run_id,
+    video_source = None
+    video_preflight_error = None
+    if preflight_video:
+        if video_source_path is None:
+            video_preflight_error = "source_path_missing"
+        else:
+            try:
+                # A video dependency failure should not prevent the owned
+                # Jupyter Comm from reporting a sanitized diagnostic.
+                source = runpy.run_path(video_source_path)
+                if install_remote_pyav:
+                    source["provision_remote_pyav"]()
+                video_source = source["RemoteH264PullSource"](
+                    root, run_id, fps=fps, width=640, height=360)
+            except Exception as exc:
+                # Match ONLY our own fixed messages. Never send arbitrary
+                # exception content, paths, tokens or tracebacks over Comm.
+                safe_source_errors = {
+                    ("remote PyAV unavailable",): "pyav_unavailable",
+                    ("remote NumPy unavailable",): "numpy_unavailable",
+                    ("remote libx264 encoder unavailable",): "libx264_unavailable",
+                    ("remote PyAV installation failed",): "pyav_install_failed",
+                    ("remote PyAV installation timed out",): "pyav_install_timeout",
+                }
+                video_preflight_error = (
+                    safe_source_errors.get(exc.args, "video_initialization_failed")
+                    if type(exc).__name__ == "RemoteVideoSourceError"
+                    and isinstance(exc.args, tuple) and all(isinstance(a, str) for a in exc.args)
+                    else "video_initialization_failed")
+    ready = {
+        "v": 1,
+        "kind": "video_preflight_failed" if video_preflight_error else "ready",
+        "run_id": run_id,
         "gpu": details["gpu"], "device": "cuda", "width": details["width"],
         "height": details["height"],
-    })
-    state = {"latest_input": 0, "latest_rate": 0, "last_frame": -1, "closed": False}
+    }
+    if video_preflight_error:
+        ready["failure_code"] = video_preflight_error
+    elif video_source_path is not None:
+        ready["video_codec"] = "h264-annexb"
+    comm = _create_kernel_comm(target_name=TARGET, data=ready)
+    state = {"latest_input": 0, "latest_rate": 0, "last_frame": -1,
+             "last_video_pull": 0, "closed": False}
+    video_failed = video_preflight_error is not None
 
     def on_message(message):
+        nonlocal video_source, video_failed
         event = message.get("content", {}).get("data", {})
         if (not isinstance(event, dict) or event.get("v") != 1
                 or event.get("run_id") != run_id or state["closed"]):
@@ -169,6 +212,29 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
                 comm.send(reply)
             except (OSError, ValueError):
                 return
+        elif kind == "video_pull" and video_source_path is not None:
+            # Only an explicitly bootstrapped video session permits these
+            # messages. Existing PPM Comm sessions never instantiate PyAV.
+            pull_seq = event.get("pull_seq")
+            if (type(pull_seq) is not int
+                    or not state["last_video_pull"] < pull_seq <= 100000000):
+                return
+            state["last_video_pull"] = pull_seq
+            try:
+                if video_failed:
+                    raise RuntimeError("video source already failed")
+                if video_source is None:
+                    source = runpy.run_path(video_source_path)
+                    video_source = source["RemoteH264PullSource"](
+                        root, run_id, fps=fps, width=640, height=360)
+                reply = video_source.pull(pull_seq)
+                comm.send(reply)
+            except Exception:
+                # No content/traceback: never leak kernel/provider secrets.
+                # The host's one-credit receiver fails closed on kind=error.
+                video_failed = True
+                comm.send({"v": 1, "kind": "error", "run_id": run_id,
+                           "pull_seq": pull_seq, "code": "video_source_unavailable"})
         elif kind == "close":
             state["closed"] = True
             renderer["atomic_bytes"](root / "stop", b"1")
@@ -182,7 +248,10 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str):
 
 if __name__ == "__main__":
     try:
-        start(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, BRIDGE_FPS, BRIDGE_RENDERER_PATH)
+        start(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, BRIDGE_FPS, BRIDGE_RENDERER_PATH,
+              video_source_path=globals().get("BRIDGE_VIDEO_SOURCE_PATH"),
+              preflight_video=globals().get("BRIDGE_VIDEO_PREFLIGHT", False) is True,
+              install_remote_pyav=globals().get("BRIDGE_INSTALL_REMOTE_PYAV", False) is True)
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise
