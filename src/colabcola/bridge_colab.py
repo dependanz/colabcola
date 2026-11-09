@@ -290,11 +290,11 @@ def run_colab(args) -> int:
                 raise LifecycleError("remote PyAV installation requires opt-in H.264")
             if video_codec == "h264":
                 if (getattr(args, "transport", "files") != "comm"
-                        or getattr(args, "inflight", 1) != 1
+                        or getattr(args, "inflight", 1) not in (1, 2)
                         or getattr(args, "benchmark_sweep", False)
                         or getattr(args, "benchmark_credits", False)
                         or getattr(args, "probe_link", False)):
-                    raise LifecycleError("H.264 requires single-credit Comm without benchmarks")
+                    raise LifecycleError("H.264 requires one- or two-credit Comm without benchmarks")
                 from .bridge_video_comm_session import make_host_decoder
                 make_host_decoder()  # local-only check BEFORE allocating a T4
             verify_preflight(provider)
@@ -344,11 +344,18 @@ def run_colab(args) -> int:
                                      transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
                             if video_codec == "h264":
-                                from .bridge_video_comm_session import stream_comm_h264
-                                def work(outgoing, frames, stopped):
-                                    stream_comm_h264(
-                                        peer, details["gpu"], outgoing, frames, stopped,
-                                        deadline, args.poll_hz)
+                                if args.inflight == 2:
+                                    from .bridge_video_comm_pipeline import stream_comm_h264_pipeline
+                                    def work(outgoing, frames, stopped):
+                                        stream_comm_h264_pipeline(
+                                            peer, details["gpu"], outgoing, frames, stopped,
+                                            deadline, args.poll_hz, credits=2)
+                                else:
+                                    from .bridge_video_comm_session import stream_comm_h264
+                                    def work(outgoing, frames, stopped):
+                                        stream_comm_h264(
+                                            peer, details["gpu"], outgoing, frames, stopped,
+                                            deadline, args.poll_hz)
                             elif getattr(args, "benchmark_credits", False):
                                 from .bridge_credit_sweep import run_credit_sweep
                                 def work(outgoing, frames, stopped):

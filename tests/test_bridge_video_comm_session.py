@@ -123,11 +123,14 @@ def test_cli_video_selection_requires_owned_comm_without_other_experiments(monke
     base = ["--profile", "example", "bridge", "colab", "--preflight-only"]
     assert main(base + ["--transport", "comm", "--video-codec", "h264"]) == 0
     assert calls[-1] == ("comm", "h264", 1)
+    assert main(base + ["--transport", "comm", "--video-codec", "h264",
+                        "--inflight", "2"]) == 0
+    assert calls[-1] == ("comm", "h264", 2)
     assert main(base + ["--transport", "comm"]) == 0
     assert calls[-1] == ("comm", "ppm", 2)
     for extra in (
         ["--video-codec", "h264"],
-        ["--transport", "comm", "--video-codec", "h264", "--inflight", "2"],
+        ["--transport", "comm", "--video-codec", "h264", "--inflight", "3"],
         ["--transport", "comm", "--video-codec", "h264", "--probe-link"],
         ["--transport", "comm", "--video-codec", "h264", "--benchmark-credits"],
         ["--transport", "comm", "--video-codec", "h264", "--benchmark-sweep"],
@@ -164,14 +167,18 @@ def test_run_colab_checks_local_decoder_before_preflight_or_allocation(monkeypat
     assert provider.closed
 
 
+@pytest.mark.parametrize("credits", [1, 2])
 @pytest.mark.parametrize("failure_stage", [None, "bootstrap", "viewer"])
 def test_managed_video_releases_only_owned_t4_on_success_or_failure(
-        monkeypatch, tmp_path, failure_stage):
+        monkeypatch, tmp_path, failure_stage, credits):
     """No real Google connection; exercise journal and release on every path."""
     from colabcola import bridge_colab
     from contextlib import nullcontext
     import colabcola.profiles
     from colabcola import bridge_video_comm_session as video
+    from colabcola import bridge_video_comm_pipeline as video_pipeline
+
+    selected_workers = []
 
     class Provider:
         instances = []
@@ -223,9 +230,17 @@ def test_managed_video_releases_only_owned_t4_on_success_or_failure(
             self.closed = True
     from colabcola import bridge_comm
     monkeypatch.setattr(bridge_comm, "KernelCommBridge", Peer)
-    monkeypatch.setattr(video, "stream_comm_h264",
-                        lambda peer, gpu, outgoing, frames, stopped, deadline, poll_hz:
-                        stopped.set())
+    def single_worker(peer, gpu, outgoing, frames, stopped, deadline, poll_hz):
+        selected_workers.append(1)
+        stopped.set()
+
+    def double_worker(peer, gpu, outgoing, frames, stopped, deadline, poll_hz, *, credits):
+        assert credits == 2
+        selected_workers.append(2)
+        stopped.set()
+
+    monkeypatch.setattr(video, "stream_comm_h264", single_worker)
+    monkeypatch.setattr(video_pipeline, "stream_comm_h264_pipeline", double_worker)
 
     def viewer(*args, **kwargs):
         if failure_stage == "viewer":
@@ -235,7 +250,7 @@ def test_managed_video_releases_only_owned_t4_on_success_or_failure(
 
     run_dir = tmp_path / ("video-" + str(failure_stage))
     opts = SimpleNamespace(
-        profile="example", video_codec="h264", transport="comm", inflight=1,
+        profile="example", video_codec="h264", transport="comm", inflight=credits,
         preflight_only=False, confirm_allocation=True, run_dir=run_dir,
         fps=6, poll_hz=6, max_seconds=120, benchmark_sweep=False,
         benchmark_credits=False, probe_link=False, viewer_stats=True)
@@ -250,6 +265,7 @@ def test_managed_video_releases_only_owned_t4_on_success_or_failure(
     assert provider.releases == ["owned-h264-t4"]
     assert provider.closed
     assert Peer.instances[-1].closed
+    assert selected_workers == ([] if failure_stage in ("bootstrap", "viewer") else [credits])
     import json
     journal = json.loads((run_dir / "state.json").read_text())
     assert journal["phase"] == "released"

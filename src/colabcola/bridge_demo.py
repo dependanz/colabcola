@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--transport", choices=("files", "comm"), default="files",
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
     remote.add_argument("--video-codec", choices=("ppm", "h264"), default="ppm",
-                        help="ppm=existing snapshots; h264=opt-in single-credit experimental Comm video")
+                        help="ppm=existing snapshots; h264=opt-in one- or two-credit experimental Comm video")
     remote.add_argument("--install-remote-pyav", action="store_true",
                         help="explicitly permit pinned PyPI PyAV wheel install in the owned T4 kernel")
     remote.add_argument("--fps", type=int, default=6)
@@ -435,9 +435,9 @@ def main(argv: list[str] | None = None) -> int:
                                    and not (args.benchmark_sweep or args.benchmark_credits
                                             or args.probe_link) else 1)
             if args.video_codec == "h264" and (
-                    args.transport != "comm" or args.inflight != 1
+                    args.transport != "comm" or args.inflight not in (1, 2)
                     or args.benchmark_sweep or args.benchmark_credits or args.probe_link):
-                parser.error("H.264 video requires --transport comm --inflight 1, without benchmarks/probe")
+                parser.error("H.264 video requires --transport comm --inflight 1 or 2, without benchmarks/probe")
             if args.install_remote_pyav and args.video_codec != "h264":
                 parser.error("--install-remote-pyav requires --video-codec h264")
             max_poll_hz = 12 if args.transport == "comm" else 6
