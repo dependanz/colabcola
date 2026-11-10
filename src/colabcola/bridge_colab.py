@@ -288,6 +288,17 @@ def run_colab(args) -> int:
             install_remote_pyav = getattr(args, "install_remote_pyav", False)
             if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
                 raise LifecycleError("remote PyAV installation requires opt-in H.264")
+            if getattr(args, "benchmark_h264_credits", False):
+                phase_seconds = getattr(args, "h264_credit_phase_seconds", 16)
+                if (video_codec != "h264" or getattr(args, "transport", "files") != "comm"
+                        or getattr(args, "inflight", 1) != 1
+                        or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (12, 12)
+                        or getattr(args, "benchmark_sweep", False)
+                        or getattr(args, "benchmark_credits", False)
+                        or getattr(args, "probe_link", False)
+                        or type(phase_seconds) is not int or not 6 <= phase_seconds <= 40
+                        or getattr(args, "max_seconds", 0) < 3 * phase_seconds + 100):
+                    raise LifecycleError("invalid H.264 credit sweep configuration")
             if video_codec == "h264":
                 if (getattr(args, "transport", "files") != "comm"
                         or getattr(args, "inflight", 1) not in (1, 2)
@@ -344,7 +355,14 @@ def run_colab(args) -> int:
                                      transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
                             if video_codec == "h264":
-                                if args.inflight == 2:
+                                if getattr(args, "benchmark_h264_credits", False):
+                                    from .bridge_video_credit_sweep import run_h264_credit_sweep
+                                    def work(outgoing, frames, stopped):
+                                        run_h264_credit_sweep(
+                                            peer, details["gpu"], outgoing, frames, stopped,
+                                            deadline, args.poll_hz,
+                                            phase_seconds=getattr(args, "h264_credit_phase_seconds", 16))
+                                elif args.inflight == 2:
                                     from .bridge_video_comm_pipeline import stream_comm_h264_pipeline
                                     def work(outgoing, frames, stopped):
                                         stream_comm_h264_pipeline(

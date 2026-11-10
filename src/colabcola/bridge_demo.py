@@ -413,6 +413,9 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--benchmark-sweep", action="store_true",
                         help="compare 6/6, 12/6, 6/12, 12/12, and repeated 6/6 in one Comm session")
     remote.add_argument("--benchmark-phase-seconds", type=int, default=12)
+    remote.add_argument("--benchmark-h264-credits", action="store_true",
+                        help="opt-in H.264 single-runtime 1/2/1 credit A/B/A sweep")
+    remote.add_argument("--h264-credit-phase-seconds", type=int, default=16)
     remote.add_argument("--max-seconds", type=int, default=600)
     remote.add_argument("--confirm-allocation", action="store_true")
     remote.add_argument("--preflight-only", action="store_true")
@@ -449,6 +452,18 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("colab --max-seconds must be within 120..1800")
             if not 1 <= args.inflight <= 4:
                 parser.error("--inflight must be in 1..4")
+            if args.h264_credit_phase_seconds != 16 and not args.benchmark_h264_credits:
+                parser.error("--h264-credit-phase-seconds requires --benchmark-h264-credits")
+            if args.benchmark_h264_credits:
+                if (args.transport != "comm" or args.video_codec != "h264"
+                        or args.inflight != 1 or (args.fps, args.poll_hz) != (12, 12)
+                        or args.benchmark_credits or args.benchmark_sweep or args.probe_link):
+                    parser.error("H.264 credit sweep requires Comm H.264, one startup credit, "
+                                 "12 FPS/Hz and no other benchmark")
+                if not 6 <= args.h264_credit_phase_seconds <= 40:
+                    parser.error("H.264 credit sweep phases must last 6..40 seconds")
+                if args.max_seconds < 3 * args.h264_credit_phase_seconds + 100:
+                    parser.error("H.264 credit sweep budget must cover phases and bootstrap")
             if args.benchmark_credits:
                 from .bridge_credit_sweep import MIN_PHASE_SECONDS, MAX_PHASE_SECONDS
                 if (args.transport != "comm" or (args.fps, args.poll_hz) != (12, 12)
