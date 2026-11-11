@@ -387,6 +387,17 @@ class GoogleProvider:
             intent = self._json_file(session, remote + "/kernel-request.json")
             record = receipt or intent
             if not record:
+                if (observed.get("attempt") == attempt["number"]
+                        and observed.get("state") in ("failed", "persistence_failed")):
+                    # An explicit terminal status from the exact owned attempt
+                    # is sufficient to stop it, even when both execution
+                    # artifacts are gone. Never invent a kernel exception,
+                    # replay the workload, or treat a *running* missing
+                    # receipt as evidence of death.
+                    observed["kernel_execution"] = {
+                        "mode": "kernel-v1", "request_state": "receipt_missing",
+                        "worker_execution_state": "unknown"}
+                    return observed
                 raise LifecycleError("owned workload execution receipt missing")
             identity = self._execution_identity(plan, attempt, record.get("kernel_id"))
             if (any(record.get(k) != v for k,v in identity.items())

@@ -180,6 +180,54 @@ class ProviderExecutionTests(unittest.TestCase):
         self.assertNotIn('worker_finished_at', details)
         self.assertNotIn('PRIVATE-', json.dumps(details))
 
+    def test_missing_receipt_and_intent_while_running_is_unknown_not_worker_death(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state':'running', 'attempt':1})})
+        self.p._json_file = mock.Mock(return_value=None)
+        with self.assertRaisesRegex(LifecycleError, 'receipt missing'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._kernel.assert_not_called()
+        self.p._workload_connection.assert_not_called()
+        self.p._execute.assert_not_called()
+
+    def test_terminal_failed_status_without_execution_artifacts_is_still_actionable(self):
+        for status in ('failed', 'persistence_failed'):
+            with self.subTest(status=status):
+                self.p._contents = mock.Mock(return_value={
+                    'format': 'text',
+                    'content': json.dumps({'state': status, 'attempt': 1})})
+                self.p._json_file = mock.Mock(return_value=None)
+                self.p._kernel.reset_mock()
+                result = self.p.observe('owned', self.plan, self.attempt, None)
+                self.assertEqual(result['state'], status)
+                self.assertEqual(result['kernel_execution']['request_state'],
+                                 'receipt_missing')
+                self.assertEqual(result['kernel_execution']['worker_execution_state'],
+                                 'unknown')
+                self.p._kernel.assert_not_called()
+                self.p._workload_connection.assert_not_called()
+                self.p._execute.assert_not_called()
+
+    def test_terminal_status_from_wrong_attempt_cannot_bypass_receipt_identity(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'failed', 'attempt': 2})})
+        self.p._json_file = mock.Mock(return_value=None)
+        with self.assertRaisesRegex(LifecycleError, 'receipt missing'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._kernel.assert_not_called()
+
+    def test_legacy_observation_has_no_kernel_receipt_dependency(self):
+        self.plan.pop('execution_mode')
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state':'failed', 'attempt':1})})
+        self.p._json_file = mock.Mock(side_effect=AssertionError(
+            'legacy must not read tracked-execution artifacts'))
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        self.assertEqual(result, {'state':'failed', 'attempt':1})
+        self.p._json_file.assert_not_called()
+        self.p._kernel.assert_not_called()
+        self.p._workload_connection.assert_not_called()
+
     def test_missing_owned_kernel_returns_observation_without_reexecuting(self):
         from colabcola.lifecycle_provider import OwnedKernelAbsent
         self.p._contents = mock.Mock(return_value={

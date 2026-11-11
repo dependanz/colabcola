@@ -639,3 +639,26 @@ strategy. Distinct device IDs and available bytes do not prove that a path
 can safely be mounted or that its data will survive provider interruption.
 Actual placement remains out of scope until evaluated on the intended
 Colab runtime.
+
+
+## Missing tracked-execution receipts (issue #18, closure review)
+
+A `kernel-v1` runtime whose `status.json` still reports `running` but
+whose owned `kernel-execution.json` **and** `kernel-request.json` are both
+missing is *not* treated as a dead worker: missing files alone cannot
+establish a kernel failure, a process-group exit, or permission to
+release/replace an owned runtime. The supervisor retains a sanitized
+connectivity diagnostic and respects the existing wall-time limit.
+It never submits the workload again merely because the receipt is missing.
+
+If both execution artifacts are missing **but** `status.json` explicitly
+reports `failed` or `persistence_failed` for the exact current attempt,
+that terminal status remains actionable: the supervisor journals
+`request_state=receipt_missing`, follows the existing failed-status
+cleanup path, and never fabricates `KeyboardInterrupt` or other kernel
+exception evidence. A mismatched attempt cannot use this fallback.
+
+Legacy plans without `kernel-v1` remain status-driven and do not depend
+on execution receipts. This rule is covered by offline provider and
+supervisor tests; it does not claim that the original provider's unknown
+termination cause has been established.

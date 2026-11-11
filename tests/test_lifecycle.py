@@ -238,6 +238,31 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(engine.state["last_failure"]["finished_at"], 900.25)
         self.assertFalse(self.provider.active)
 
+    def test_missing_receipt_with_terminal_status_fails_owned_attempt(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "failed", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "receipt_missing",
+                "worker_execution_state": "unknown"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["reason"], "runtime_failed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertFalse(self.provider.active)
+        self.assertEqual(len(self.provider.allocations), 1)
+        changes = [x for x in engine.state["events"]
+                   if x["event"] == "kernel_execution_changed"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kernel_execution"]["request_state"],
+                         "receipt_missing")
+        self.assertEqual(changes[0]["observed_at"], self.now)
+        self.assertFalse(any(x["event"] == "worker_failed"
+                             for x in engine.state["events"]))
+
     def test_failed_worker_receipt_releases_attempt(self):
         self.assert_owned_worker_receipt_failure(
             "failed", "busy", "worker_receipt_failed")

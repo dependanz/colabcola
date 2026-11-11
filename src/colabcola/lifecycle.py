@@ -377,7 +377,8 @@ class Supervisor:
             return
         fields = {
             "request_state": {"attached", "submitted", "submission_unknown",
-                              "busy", "completed", "failed", "kernel_absent"},
+                              "busy", "completed", "failed", "kernel_absent",
+                              "receipt_missing"},
             "worker_execution_state": {"submitted", "running", "finished", "failed"},
             "execution_state": {"starting", "busy", "idle", "absent"},
         }
