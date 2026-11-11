@@ -253,5 +253,108 @@ else:
                             pass
 
 
+    def test_real_kernel_restart_and_shutdown_preserve_unfinished_receipt(self):
+        """A dead kernel may leave a 'running' receipt; never replay the worker."""
+        from jupyter_client import KernelManager
+        from colabcola.lifecycle_provider import GoogleProvider
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lifecycle_worker.py").write_text(
+                "from pathlib import Path\nimport time\n"
+                "Path(__file__).with_name('entered').write_text('yes')\n"
+                "while True:time.sleep(.2)\n")
+            identity = {"run_id": "a" * 32, "job_id": "b" * 64,
+                        "attempt": 1, "kernel_id": "local"}
+            atomic(root / "kernel-request.json", identity)
+            atomic(root / "status.json", {
+                "state": "running", "attempt": 1, "heartbeat_at": time.time()})
+            km = KernelManager(transport="ipc",
+                               connection_file=str(root / "kernel.json"))
+            km.start_kernel(cwd=tmp)
+            first = km.blocking_client()
+            first.start_channels()
+            first.wait_for_ready(timeout=30)
+            second = None
+            try:
+                request = first.execute(workload_code(str(root), identity))
+                self.assertTrue(request)
+                limit = time.monotonic() + 10
+                while not (root / "entered").exists() and time.monotonic() < limit:
+                    time.sleep(.04)
+                self.assertTrue((root / "entered").exists())
+                old = json.loads((root / "kernel-execution.json").read_text())
+                self.assertEqual(old["state"], "running")
+
+                # Restarted process, same logical kernel identity; never call
+                # submit on the restored connection.
+                first.stop_channels()
+                km.restart_kernel(now=True)
+                second = km.blocking_client()
+                second.start_channels()
+                second.wait_for_ready(timeout=30)
+                second.connection_ready = mock.Mock()
+                second.connection_ready.is_set.return_value = True
+                attached = WorkloadExecution.__new__(WorkloadExecution)
+                attached.client = SimpleNamespace(
+                    _manager=SimpleNamespace(client=second),
+                    stop=lambda: second.stop_channels())
+                attached.kernel_id = "local"
+                attached.request_id = None
+                attached.reply_error_type = None
+                attached.state = "attached"
+
+                provider = GoogleProvider.__new__(GoogleProvider)
+                provider._session = lambda endpoint: SimpleNamespace(
+                    url="http://unused.invalid", token="fixture")
+                provider._contents = lambda session, method, location: {
+                    "format": "text",
+                    "content": (root / Path(location).name).read_text()}
+                provider._json_file = lambda session, location: json.loads(
+                    (root / Path(location).name).read_text())
+                provider._workload_connection = mock.Mock(return_value=attached)
+                provider._execute = mock.Mock(
+                    side_effect=AssertionError("no workload replay"))
+                plan = {
+                    "run_id": identity["run_id"], "job_id": identity["job_id"],
+                    "authorization_policy": "renewable-v1",
+                    "execution_mode": "kernel-v1",
+                }
+                attempt = {"number": 1}
+                with mock.patch("requests.get", return_value=SimpleNamespace(
+                        status_code=200,
+                        json=lambda: [{"id": "local", "execution_state": "idle"}])):
+                    resumed = provider.observe("owned", plan, attempt, None)
+                self.assertEqual(resumed["kernel_execution"]["request_state"], "attached")
+                self.assertEqual(resumed["kernel_execution"]["worker_execution_state"],
+                                 "running")
+                self.assertEqual(json.loads((root / "kernel-execution.json").read_text()),
+                                 old)
+                provider._execute.assert_not_called()
+
+                # An actual kernel shutdown leaves its receipt running, but
+                # the authenticated kernel listing is empty.
+                second.stop_channels()
+                km.shutdown_kernel(now=True)
+                with mock.patch("requests.get", return_value=SimpleNamespace(
+                        status_code=200, json=lambda: [])):
+                    absent = provider.observe("owned", plan, attempt, None)
+                self.assertEqual(absent["kernel_execution"]["request_state"],
+                                 "kernel_absent")
+                self.assertEqual(absent["kernel_execution"]["worker_execution_state"],
+                                 "running")
+                self.assertNotIn("worker_finished_at", absent["kernel_execution"])
+                self.assertEqual(json.loads((root / "kernel-execution.json").read_text()),
+                                 old)
+                self.assertEqual(provider._workload_connection.call_count, 1)
+                provider._execute.assert_not_called()
+            finally:
+                if second is not None:
+                    second.stop_channels()
+                first.stop_channels()
+                if km.has_kernel:
+                    km.shutdown_kernel(now=True)
+
+
 if __name__ == "__main__":
     unittest.main()
