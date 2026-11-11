@@ -172,6 +172,10 @@ class GoogleProvider:
     def lookup(self, endpoint):
         return next((item for item in self.assignments() if item.endpoint == endpoint), None)
 
+    # The assignment POST may outlast a normal provider GET. Never automatically
+    # retry this ambiguous POST; ownership reconciliation remains mandatory.
+    ASSIGNMENT_POST_TIMEOUT_SECONDS = 120.0
+
     def allocate(self, allocation_id, gpu):
         from ._vendor.colab_cli.client import Accelerator, Variant, resolve_assign_shape
         # Persist allocation_id BEFORE calling. Retrying uses the same notebook UUID;
@@ -179,7 +183,8 @@ class GoogleProvider:
         assignment = self.client.assign(uuid.UUID(allocation_id),
                                         variant=Variant.GPU if gpu != "NONE" else Variant.DEFAULT,
                                         accelerator=Accelerator(gpu),
-                                         shape=resolve_assign_shape(Accelerator(gpu), high_mem=self.high_mem))
+                                        shape=resolve_assign_shape(Accelerator(gpu), high_mem=self.high_mem),
+                                        post_timeout=self.ASSIGNMENT_POST_TIMEOUT_SECONDS)
         return assignment.endpoint
 
     def reconcile(self, allocation_id, gpu):

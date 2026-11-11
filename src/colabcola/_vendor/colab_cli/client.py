@@ -278,6 +278,8 @@ class Client:
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
         shape: Optional[Shape] = None,
+        *,
+        post_timeout: Optional[float] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
         assignment = self._get_assignment(notebook_hash, variant, accelerator, shape)
         if isinstance(assignment, Assignment):
@@ -287,8 +289,12 @@ class Client:
         backoff = max(0.0, float(os.getenv("COLAB_CLI_RETRY_BACKOFF", "10")))
         for attempt in range(retries + 1):
             try:
+                # Only explicitly opted-in clients override the POST timeout.
+                # Preserve legacy calls and the normal GET/preflight behavior.
+                post_options = {"post_timeout": post_timeout} if post_timeout is not None else {}
                 res = self._post_assignment(
-                    notebook_hash, assignment.token, variant, accelerator, shape
+                    notebook_hash, assignment.token, variant, accelerator, shape,
+                    **post_options,
                 )
                 break
             except (ColabRequestError, requests.exceptions.ReadTimeout) as e:
@@ -353,9 +359,13 @@ class Client:
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
         shape: Optional[Shape] = None,
+        *,
+        post_timeout: Optional[float] = None,
     ) -> PostAssignmentResponse:
         url = self._build_assign_url(notebook_hash, variant, accelerator, shape)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: xsrf_token}
+        request_options = {"timeout": post_timeout} if post_timeout is not None else {}
         return self._issue_request(
-            url, method="POST", headers=headers, schema=PostAssignmentResponse
+            url, method="POST", headers=headers, schema=PostAssignmentResponse,
+            **request_options,
         )
