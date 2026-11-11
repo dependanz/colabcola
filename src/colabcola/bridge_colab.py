@@ -91,6 +91,9 @@ def read_journal(directory: Path) -> dict:
         raise LifecycleError("bridge run has no regular state.json")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("backend") == "google-colab-external":
+            raise LifecycleError(
+                "external runtime is user-owned; bridge cleanup must not release it")
         if (data.get("schema") != 1 or data.get("backend") != "google-colab"
                 or data.get("gpu") != "T4" or not re.fullmatch(r"[0-9a-f]{32}", data.get("run_id", ""))
                 or not isinstance(data.get("allocation_id"), str)
@@ -323,6 +326,9 @@ def run_colab(args) -> int:
                     raise LifecycleError("H.264 requires one- or two-credit Comm without benchmarks")
                 from .bridge_video_comm_session import make_host_decoder
                 make_host_decoder()  # local-only check BEFORE allocating a T4
+            if getattr(args, "attach_existing", False):
+                from .bridge_colab_attach import run_attached_colab
+                return run_attached_colab(args, provider)
             verify_preflight(provider)
             if args.preflight_only:
                 print("[colabcola] Bridge preflight passed; no runtime allocated", flush=True)

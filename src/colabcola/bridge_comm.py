@@ -116,10 +116,21 @@ class KernelCommBridge:
                                     {"comm_id": self.comm_id, "data": data})
         self.wire.shell_channel.send(msg)
 
-    def open(self) -> dict[str, Any]:
+    def open(self, *, expected_kernel_id: str | None = None) -> dict[str, Any]:
         """Upload runtime code, attach to owned kernel, then submit bootstrap once."""
         from ._vendor import jupyter_kernel_client as jkc
 
+        # External mode checks the expected kernel BEFORE uploading or
+        # executing code. Ordinary owned-runtime behavior remains unchanged.
+        kernel_id = None
+        if expected_kernel_id is not None:
+            if (not isinstance(expected_kernel_id, str)
+                    or not 1 <= len(expected_kernel_id) <= 128):
+                raise LifecycleError("external kernel identity invalid")
+            kernel = self.provider._kernel(self.session, expected_kernel_id)
+            if kernel.get("id") != expected_kernel_id:
+                raise LifecycleError("external kernel changed before bootstrap")
+            kernel_id = expected_kernel_id
         remote = f"content/colabcola-bridge/{self.run_id}"
         root = "/" + remote
         self.provider._execute(self.session, 
@@ -130,7 +141,8 @@ class KernelCommBridge:
             names.append("bridge_video_colab_source.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
-        kernel_id = self.provider._kernel(self.session)["id"]
+        if kernel_id is None:
+            kernel_id = self.provider._kernel(self.session)["id"]
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
         # Only connection setup may be retried. Once an execute_request is
         # submitted, an uncertain response must NEVER trigger replay.

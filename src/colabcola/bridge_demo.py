@@ -392,6 +392,10 @@ def main(argv: list[str] | None = None) -> int:
     add_profile_argument(parser)
     remote = sub.add_parser("colab", help="allocate one managed T4 for an interactive GPU scene")
     remote.add_argument("--run-dir", type=Path)
+    remote.add_argument("--attach-existing", action="store_true",
+                        help="use one existing user-owned T4 without allocating or releasing it")
+    remote.add_argument("--confirm-attach", action="store_true",
+                        help="authorize bridge code upload and execution in the existing notebook kernel")
     remote.add_argument("--gpu", choices=("T4",), default="T4")
     remote.add_argument("--transport", choices=("files", "comm"), default="files",
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
@@ -431,6 +435,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
+            if args.attach_existing:
+                if (args.transport != "comm" or args.video_codec != "h264"
+                        or not args.benchmark_h264_capacity
+                        or (args.fps, args.poll_hz) != (30, 30)
+                        or args.inflight not in (None, 1)
+                        or args.confirm_allocation
+                        or (not args.preflight_only and not args.confirm_attach)):
+                    parser.error("external attach requires Comm H.264 30 FPS capacity sweep, "
+                                 "--confirm-attach (unless preflight-only), and NO allocation flag")
+            elif args.confirm_attach:
+                parser.error("--confirm-attach requires --attach-existing")
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
             # Two credits are live-verified for ordinary Comm streaming,
