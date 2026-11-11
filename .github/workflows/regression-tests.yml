@@ -1,0 +1,56 @@
+name: Regression tests
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - ci/portable-regression-tests
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Python 3.12 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            test_python: ./.ci-venv/bin/python
+          - os: windows-latest
+            test_python: ./.ci-venv/Scripts/python.exe
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create isolated Python environment
+        run: python -m venv .ci-venv
+      - name: Install Colab Cola and test dependencies
+        run: ${{ matrix.test_python }} -m pip install -e . pytest ipykernel
+      - name: Verify installed package environment
+        run: ${{ matrix.test_python }} -m pip check
+      - name: Use canonical temporary directory on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempPath = Join-Path $env:GITHUB_WORKSPACE '.ci-temp'
+          New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
+          "TEMP=$tempPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$tempPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Run full regression suite
+        run: ${{ matrix.test_python }} -m pytest -q -rs
