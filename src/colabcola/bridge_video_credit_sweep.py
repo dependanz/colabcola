@@ -22,6 +22,23 @@ from .lifecycle_io import LifecycleError
 PHASES = (("A", 1), ("B", 2), ("A_repeat", 1))
 HIGH_RATE_PHASES = tuple((f"C{credit}", credit) for credit in (1, 2, 3, 4, 8, 16, 32))
 POLL_WAIT_SECONDS = .03
+# High-rate capacity mode only: keep the receive-side wait shorter than a
+# 30/60 Hz frame period. The 12 Hz A/B/A worker retains its established wait.
+EXPERIMENTAL_POLL_WAIT_SECONDS = .004
+
+
+def receive_poll_timeout(*, experimental: bool, draining: bool,
+                         now: float, next_due: float) -> float:
+    """Bound a blocking IOPub receive so it cannot monopolize send pacing.
+
+    One worker owns the Comm; it never issues concurrent or repeated requests.
+    A short timeout does not declare a reply missing: the receive window owns
+    the existing per-request, eight-second fail-closed deadline.
+    """
+    if not experimental or draining:
+        return POLL_WAIT_SECONDS
+    return min(EXPERIMENTAL_POLL_WAIT_SECONDS,
+               max(.001, next_due - now))
 
 
 def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
@@ -62,6 +79,11 @@ def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
         "host_pull_submit_interval_p50_ms": (
             round(median(stats["submit_intervals_ms"]), 2)
             if stats["submit_intervals_ms"] else None),
+        "host_receive_poll_elapsed_p50_ms": (
+            round(median(stats["receive_poll_elapsed_ms"]), 2)
+            if stats["receive_poll_elapsed_ms"] else None),
+        "host_receive_poll_count": stats["receive_poll_count"],
+        "host_receive_polls_without_commit": stats["receive_polls_without_commit"],
     }
 
 
@@ -73,7 +95,8 @@ def _empty_phase() -> dict:
             "renderer_seqs": set(), "duplicate_renderer_replies": 0,
             "remote_diagnostics_missing": 0, "source_read_us": [],
             "encode_us": [], "submit_intervals_ms": [],
-            "last_submit_at": None}
+            "last_submit_at": None, "receive_poll_elapsed_ms": [],
+            "receive_poll_count": 0, "receive_polls_without_commit": 0}
 
 
 def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
@@ -173,7 +196,20 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                     next_due = submitted_at + 1 / poll_hz  # never catch up
 
                 if window.outstanding:
-                    committed = window.poll(POLL_WAIT_SECONDS)
+                    poll_started = time.monotonic()
+                    wait = receive_poll_timeout(
+                        experimental=experimental, draining=drain,
+                        now=poll_started, next_due=next_due)
+                    committed = window.poll(wait)
+                    poll_finished = time.monotonic()
+                    if scored_start <= poll_finished < phase_end:
+                        stats["receive_poll_count"] += 1
+                        if not committed:
+                            # May include a reply buffered out of order; this
+                            # is not necessarily a transport timeout.
+                            stats["receive_polls_without_commit"] += 1
+                        stats["receive_poll_elapsed_ms"].append(
+                            (poll_finished - poll_started) * 1000)
                 else:
                     committed = []
                     if drain:
