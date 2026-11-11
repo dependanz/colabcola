@@ -30,6 +30,36 @@ class T4AcceptanceRecipeTests(unittest.TestCase):
         self.assertEqual(command[command.index("--duration-seconds") + 1], "2400")
         self.assertNotIn("--cpu-smoke", command)
 
+    def test_recipe_packages_offline_with_exact_lifecycle_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp) / "t4-live.colajob"
+            command = [
+                sys.executable, "-m", "colabcola", "package",
+                "--colaml", str(RECIPE), "--non-interactive",
+                "--output", str(job),
+            ]
+            result = subprocess.run(
+                command, cwd=ROOT, text=True,
+                capture_output=True, timeout=45)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            packaged = json.loads(job.read_text())
+            config = json.loads(job.with_suffix(".run.json").read_text())
+            self.assertEqual(packaged["run"]["timeout_seconds"], 2520)
+            self.assertEqual(packaged["managed_recovery"]["checkpoint_pattern"],
+                             "outputs/checkpoints/state-*.json")
+            self.assertEqual(packaged["managed_recovery"]["log_patterns"],
+                             ["outputs/progress.ndjson"])
+            self.assertEqual(packaged["resources"]["accelerator"], "gpu")
+            self.assertEqual(packaged["python"]["runtime_requirements"], ["torch"])
+            self.assertEqual(packaged["outputs"][0]["pattern"],
+                             "outputs/acceptance.json")
+            self.assertEqual(config["gpu"], "T4")
+            self.assertEqual(config["max_attempts"], 1)
+            self.assertEqual(config["max_seconds"], 3300)
+            self.assertFalse(config["fault_after_checkpoint"])
+            self.assertTrue(job.with_suffix(".files").is_dir())
+            self.assertNotIn("access_token", json.dumps(packaged))
+
     def test_local_cpu_smoke_writes_verified_manifest_and_final(self):
         with tempfile.TemporaryDirectory() as temp:
             run = subprocess.run(
