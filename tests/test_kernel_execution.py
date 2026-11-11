@@ -180,6 +180,31 @@ class ProviderExecutionTests(unittest.TestCase):
         self.assertNotIn('worker_finished_at', details)
         self.assertNotIn('PRIVATE-', json.dumps(details))
 
+    def test_missing_owned_kernel_returns_observation_without_reexecuting(self):
+        from colabcola.lifecycle_provider import OwnedKernelAbsent
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'running'}, self.identity])
+        self.p._kernel.side_effect = OwnedKernelAbsent('owned workload kernel is absent')
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        evidence = result['kernel_execution']
+        self.assertEqual(evidence['request_state'], 'kernel_absent')
+        self.assertEqual(evidence['worker_execution_state'], 'running')
+        self.assertEqual(evidence['kernel_id'], 'kernel')
+        self.p._workload_connection.assert_not_called()
+        self.p._execute.assert_not_called()
+
+    def test_kernel_listing_failure_is_not_claimed_as_absence(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'running'}, self.identity])
+        self.p._kernel.side_effect = LifecycleError('runtime kernel listing HTTP 503')
+        with self.assertRaisesRegex(LifecycleError, '503'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._workload_connection.assert_not_called()
+
     def test_connection_cleanup_does_not_release_compute(self):
         self.p.client=mock.Mock();one=mock.Mock();two=mock.Mock();self.p._workloads={'a':one,'b':two}
         self.p.close();one.close.assert_called_once();two.close.assert_called_once();self.p.client.unassign.assert_not_called()

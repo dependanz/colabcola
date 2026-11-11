@@ -326,6 +326,69 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(any(row["event"] == "worker_failed"
                              for row in engine.state["events"]))
 
+    def test_kernel_absence_requires_repeated_observation_and_grace(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "kernel_absent",
+                "worker_execution_state": "running"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(engine.state["kernel_absence"]["observations"], 1)
+        self.assertEqual(self.provider.releases, [])
+        self.now += 10
+        self.reload().advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(self.provider.releases, [])
+        self.now += 20
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "failed")
+        self.assertEqual(restarted.state["reason"], "worker_failed_attempt_budget_exhausted")
+        self.assertEqual(restarted.state["last_failure"]["signal"], "kernel_absent_confirmed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "kernel_absent_observed"]), 1)
+
+    def test_same_kernel_reappears_before_grace_without_release(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "kernel_absent",
+                "worker_execution_state": "running"}})
+        engine.advance()
+        self.assertIn("kernel_absence", engine.state)
+        self.now += 15
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": self.now,
+            "kernel_execution": {
+                "kernel_id": "kernel", "request_state": "attached",
+                "worker_execution_state": "running"}}
+        resumed = self.reload()
+        resumed.advance()
+        self.assertEqual(resumed.state["phase"], "monitoring")
+        self.assertNotIn("kernel_absence", resumed.state)
+        self.assertEqual(self.provider.releases, [])
+        resumed.advance()
+        self.assertEqual(len([e for e in resumed.state["events"]
+                              if e["event"] == "kernel_absence_cleared"]), 1)
+
+    def test_kernel_listing_failure_must_not_release_runtime(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe = mock.Mock(
+            side_effect=LifecycleError("runtime kernel listing HTTP 503"))
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertNotIn("kernel_absence", engine.state)
+        self.assertEqual(self.provider.releases, [])
+
     def test_heartbeat_stall_warns_once_and_never_releases(self):
         engine = self.running()
         self.provider.active.add("unrelated")

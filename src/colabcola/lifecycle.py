@@ -371,6 +371,27 @@ class Supervisor:
         else:
             self.save()
 
+    def _observe_kernel_absence(self, attempt, observed):
+        """Require repeated exact-kernel absence before owned-runtime release."""
+        now = observed["observed_at"]
+        previous = self.state.get("kernel_absence")
+        if previous is None or previous.get("attempt") != attempt["number"]:
+            self.save("kernel_absent_observed", event_details={
+                "attempt": attempt["number"], "observed_at": now},
+                kernel_absence={"attempt": attempt["number"],
+                                "first_seen_at": now, "observations": 1})
+            return
+        previous["observations"] += 1
+        interval = self.plan.get("poll_seconds", 5)
+        if type(interval) not in (int, float) or not math.isfinite(interval) or interval <= 0:
+            interval = 5
+        grace = max(30.0, 3.0 * interval)
+        if previous["observations"] >= 2 and now - previous["first_seen_at"] >= grace:
+            self.state.pop("kernel_absence", None)
+            self._worker_failed(attempt, observed, "kernel_absent_confirmed")
+        else:
+            self.save()
+
     def new_attempt(self):
         if len(self.state["attempts"]) >= self.plan["max_attempts"]:
             cause = (self.state.get("last_failure") or {}).get("cause")
@@ -389,6 +410,7 @@ class Supervisor:
                    "deadline": self.state["deadline"], "resume": checkpoint}
         self.state["attempts"].append(attempt)
         self.state.pop("worker_stall", None)  # Alerts belong to one attempt.
+        self.state.pop("kernel_absence", None)
         self.save("allocation_intent", phase="allocating")
 
     def tick(self):
@@ -540,7 +562,13 @@ class Supervisor:
         elif (observed.get("state") == "starting"
               and self.clock() - attempt.get("bootstrapped_at", attempt["allocated_at"]) > 180):
             self.finish("failed", "worker_start_timeout")
+        elif (isinstance(observed.get("kernel_execution"), dict)
+              and observed["kernel_execution"].get("request_state") == "kernel_absent"):
+            self._observe_kernel_absence(attempt, observed)
         else:
+            if self.state.pop("kernel_absence", None) is not None:
+                self.save("kernel_absence_cleared", event_details={
+                    "attempt": attempt["number"], "observed_at": observed["observed_at"]})
             self._observe_worker_heartbeat(attempt, observed)
 
     def advance(self):

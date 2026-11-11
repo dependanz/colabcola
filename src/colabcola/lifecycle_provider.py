@@ -16,6 +16,10 @@ SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email",
 UPSTREAM_COMMIT = "79cd126383e72b1e911f20b7030e4247f7861704"
 
 
+class OwnedKernelAbsent(LifecycleError):
+    """An authenticated kernel listing has no entry for the owned kernel."""
+
+
 class AuthorizationScopeError(LifecycleError):
     """Fresh Google consent omitted permissions; existing authorization is unchanged."""
     def __init__(self):
@@ -290,7 +294,7 @@ class GoogleProvider:
         kernels = response.json()
         kernel = next((k for k in kernels if kernel_id is None or k["id"] == kernel_id), None)
         if kernel is None:
-            raise LifecycleError("owned workload kernel is absent;no replacement allowed")
+            raise OwnedKernelAbsent("owned workload kernel is absent;no replacement allowed")
         return kernel
 
     def _execution_identity(self, plan, attempt, kernel_id):
@@ -388,15 +392,25 @@ class GoogleProvider:
             if (any(record.get(k) != v for k,v in identity.items())
                     or intent is None or any(intent.get(k) != v for k,v in identity.items())):
                 raise LifecycleError("workload execution identity mismatch")
-            kernel = self._kernel(session, record["kernel_id"])
-            connection = self._workload_connection(endpoint, session, kernel["id"])
             try:
-                evidence = connection.poll()
-            except LifecycleError:
-                connection.close()
-                self._workloads.pop(endpoint, None)
+                kernel = self._kernel(session, record["kernel_id"])
+            except OwnedKernelAbsent:
+                kernel = None
+            if kernel is None:
+                # Listing says the exact owned kernel is absent. Preserve this
+                # observation without treating a single lookup as permission
+                # to release/replace the runtime.
+                evidence = {"mode": "kernel-v1", "kernel_id": record["kernel_id"],
+                            "request_state": "kernel_absent"}
+            else:
                 connection = self._workload_connection(endpoint, session, kernel["id"])
-                evidence = connection.poll()  # Reattach only;never send execute again.
+                try:
+                    evidence = connection.poll()
+                except LifecycleError:
+                    connection.close()
+                    self._workloads.pop(endpoint, None)
+                    connection = self._workload_connection(endpoint, session, kernel["id"])
+                    evidence = connection.poll()  # Reattach only;never send execute again.
             # The in-kernel worker already wrote these fields to its owned
             # receipt. Keep bounded diagnostics after checking run identity;
             # arbitrary error messages and traceback text remain excluded.
@@ -410,7 +424,8 @@ class GoogleProvider:
                 if (type(finished_at) in (int, float)
                         and 0 < finished_at < 253402300800):
                     receipt_diagnostics["worker_finished_at"] = finished_at
-            observed["kernel_execution"] = {**evidence,"execution_state":kernel.get("execution_state"),
+            observed["kernel_execution"] = {**evidence,
+                "execution_state": kernel.get("execution_state") if kernel is not None else "absent",
                 "worker_execution_state":(receipt or {}).get("state", "submitted"),
                 **receipt_diagnostics}
         return observed
