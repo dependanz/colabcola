@@ -541,3 +541,37 @@ The result retains `result_directory` and `completed_artifact_directory` and add
 
 A null intermediate directory is normal when intermediate commits were not configured;
 it does not indicate missing final results. Corrupt saved artifacts fail verification.
+
+
+## Worker heartbeat and host telemetry (issue #18, development)
+
+A tracked `kernel-v1` worker reports `kernel_execution` failure evidence with
+sanitized exception class and receipt completion time. Confirmed failed
+execution transitions through a durable owned-runtime release barrier before
+a bounded retry can allocate anything. A failed final commit is not assumed
+from a stale heartbeat.
+
+For every current-attempt `running` worker with a valid heartbeat, the supervisor
+checks its age against `max(120 seconds, 10 * poll_seconds)`, where the default
+poll interval is 5 seconds. A stale heartbeat records a single `worker_stalled`
+event with `heartbeat_age`, `last_heartbeat`, `observed_at`, and the threshold.
+The warning persists across supervisor restart. Once a fresh heartbeat is
+observed, a `worker_stall_cleared` event closes that warning episode.
+**A stalled heartbeat by itself never releases compute or starts a replacement.**
+Unknown, invalid, and future-dated heartbeat values are not interpreted as
+evidence of worker failure.
+
+Worker log commits include `runtime/host-telemetry.json` with bounded readings
+of Linux `/proc/meminfo` (MemTotal, MemAvailable, Cached, Dirty, Writeback);
+cgroup v1/v2 memory limits, usage and available event counters; host and
+available cgroup memory/I/O pressure; and free bytes on job/control filesystems.
+`runtime/execution-tail.log` is capped at 64 KiB. The initial
+`hardware.json` includes `host_memory.mem_total_bytes` and
+`host_memory.cgroup_memory_limit_bytes`. Unavailable metrics are null or
+empty, not invented zeros. Telemetry carries no token values or remote URLs;
+the execution log tail is ordinary workload log material and may contain
+content emitted by the workload, so protect recovered logs accordingly.
+
+These changes have offline Windows/Linux CI coverage. The specific real-Jupyter
+interrupt/restart acceptance tests, large-input page-cache control, and long
+real-Colab workload are still separate release gates for issue #18.
