@@ -26,7 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            test_python: ./.ci-venv/bin/python
+          - os: windows-latest
+            test_python: ./.ci-venv/Scripts/python.exe
     steps:
       - name: Check out tested revision
         uses: actions/checkout@v4
@@ -34,9 +38,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Create isolated Python environment
+        run: python -m venv .ci-venv
       - name: Install Colab Cola and test dependencies
-        run: python -m pip install -e . pytest ipykernel
+        run: ${{ matrix.test_python }} -m pip install -e . pytest ipykernel
       - name: Verify installed package environment
-        run: python -m pip check
+        run: ${{ matrix.test_python }} -m pip check
       - name: Run full regression suite
-        run: python -m pytest -q -rs
+        run: ${{ matrix.test_python }} -m pytest -q -rs
