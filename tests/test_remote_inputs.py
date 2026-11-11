@@ -480,7 +480,7 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         source = runtime_source._REMOTE_INPUTS_SOURCE
         patched = source.replace(
             '"/mnt/local-scratch", "/mnt/data", "/scratch"',
-            repr(str(candidate)))
+            repr(str(candidate)) + ','))
         self.assertNotEqual(source, patched)
 
         with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
@@ -521,7 +521,7 @@ class RemoteInputRuntimeTests(unittest.TestCase):
             self.skipTest("directory symlinks unavailable: " + type(exc).__name__)
         source = runtime_source._REMOTE_INPUTS_SOURCE
         patched = source.replace(
-            '"/mnt/local-scratch", "/mnt/data", "/scratch"', repr(str(link)))
+            '"/mnt/local-scratch", "/mnt/data", "/scratch"', repr(str(link)) + ','))
         self.assertNotEqual(source, patched)
         with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
             result, job_root, error = self.run_notebook(
