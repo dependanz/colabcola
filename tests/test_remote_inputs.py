@@ -342,6 +342,60 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         self.assertEqual((entry["attempts"], entry["http_status"]), (2, 206))
         self.assertEqual(calls[:2], [(URL_A, 0, 200), (URL_A, half, 206)])
 
+    def test_ignored_range_restarts_entire_file_and_preserves_sha(self) -> None:
+        calls = []
+        attempts = 0
+
+        def opener(request, timeout=None):
+            nonlocal attempts
+            calls.append(request.full_url)
+            if request.full_url == URL_A:
+                attempts += 1
+                return _FakeResponse(DATA_A, 200,
+                                     fail_after=len(DATA_A) // 2 if attempts == 1 else None)
+            return _FakeResponse(DATA_B, 200)
+
+        result, job_root, error = self.run_notebook(
+            self.mapping(), self.root / "content-range-200", opener)
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
+        self.assertEqual((job_root / "weights/sub/b.bin").read_bytes(), DATA_B)
+        self.assertEqual(calls, [URL_A, URL_A, URL_B])
+        self.assertFalse(list(job_root.rglob("*.partial")))
+
+    def test_ignored_range_restart_fails_closed_when_full_file_wont_fit(self) -> None:
+        calls = []
+        attempts = 0
+        total = len(DATA_A) + len(DATA_B)
+
+        def opener(request, timeout=None):
+            nonlocal attempts
+            calls.append(request.full_url)
+            if request.full_url == URL_A:
+                attempts += 1
+                return _FakeResponse(DATA_A, 200,
+                                     fail_after=len(DATA_A) // 2 if attempts == 1 else None)
+            return _FakeResponse(DATA_B, 200)
+
+        def usage(_path):
+            # Space is ample before the second HTTP response arrives. Once
+            # the server refuses Range, a whole-file restart no longer fits.
+            free = (2 ** 42 if attempts < 2
+                    else 1024 ** 3 + total - len(DATA_A) // 2 + 1)
+            return types.SimpleNamespace(total=2 ** 43, used=0, free=free)
+
+        with mock.patch("shutil.disk_usage", side_effect=usage):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-range-200-short", opener)
+        self.assertIsNotNone(error)
+        self.assertEqual(result["terminal_state"], "preflight_failed")
+        self.assertEqual(result["failure"]["stage"], "remote_inputs")
+        self.assertIn("insufficient free disk", result["failure"]["message"])
+        self.assertEqual(calls, [URL_A, URL_A])
+        self.assertFalse((job_root / "weights/a.bin").exists())
+        self.assertFalse(list(job_root.rglob("*.partial")))
+
     def test_hash_mismatch_is_a_remote_input_failure_with_no_file_left_behind(self) -> None:
         mapping = self.mapping()
         mapping["remote_inputs"][1]["sha256"] = sha(b"not the file")
