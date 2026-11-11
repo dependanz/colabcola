@@ -1315,6 +1315,39 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                     "advice_calls": 0, "advice_errors": 0,
                     "advice_supported": hasattr(os, "posix_fadvise")}
 
+    def _colabcola_scratch_assessment(total_bytes, candidates=(
+            "/mnt/local-scratch", "/mnt/data", "/scratch")):
+        """Read-only capacity comparison; never relocate, symlink or mount data."""
+        import stat
+        required = total_bytes + 1024 ** 3
+        record = {"schema": 1, "mode": "diagnostic_only",
+                  "required_bytes_including_margin": required,
+                  "job_free_bytes": None, "candidates": []}
+        try:
+            job_device = os.stat(COLABCOLA_JOB_ROOT).st_dev
+            record["job_free_bytes"] = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
+        except OSError:
+            job_device = None
+        for name in candidates:
+            candidate = pathlib.Path(name)
+            # Only fixed absolute candidates. Never resolve symlinks, write,
+            # create directories or change the workload's visible paths.
+            if not candidate.is_absolute():
+                continue
+            try:
+                metadata = os.lstat(candidate)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    continue
+                free = shutil.disk_usage(candidate).free
+                record["candidates"].append({
+                    "path": name, "free_bytes": free,
+                    "different_device": (
+                        metadata.st_dev != job_device if job_device is not None else None),
+                    "capacity_sufficient": free >= required})
+            except OSError:
+                continue
+        return record
+
     def _colabcola_remote_space(remaining):
         free = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
         if free < remaining + 1024 ** 3:
@@ -1379,6 +1412,11 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
         remote_verified_bytes = 0
         remote_entries = COLABCOLA_MANIFEST["remote_inputs"]
         remote_total_bytes = sum(int(entry["bytes"]) for entry in remote_entries)
+        remote_storage = _colabcola_scratch_assessment(remote_total_bytes)
+        _COLABCOLA_TRANSPORT_FACTS["remote_input_storage_evaluation"] = remote_storage
+        COLABCOLA_RESULT_ROOT.mkdir(parents=True, exist_ok=True)
+        (COLABCOLA_RESULT_ROOT / "storage-assessment.json").write_text(
+            json.dumps(remote_storage, sort_keys=True) + "\n", encoding="utf-8")
         _colabcola_remote_space(remote_total_bytes)
         remote_facts = []
         for remote_index, remote_entry in enumerate(remote_entries, 1):
