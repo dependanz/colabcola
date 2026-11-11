@@ -73,9 +73,17 @@ def validated_remote_video_diagnostics(payload: object) -> dict | None:
                    or not 0 <= value <= 10_000_000
                    for value in (read_us, encode_us))):
         return None
-    return {"renderer_seq": seq, "source_read_us": float(read_us),
-            "encode_us": float(encode_us),
-            "producer_window": validated_producer_window(payload.get("producer_window"))}
+    result = {"renderer_seq": seq, "source_read_us": float(read_us),
+              "encode_us": float(encode_us),
+              "producer_window": validated_producer_window(payload.get("producer_window"))}
+    for field, maximum in (("renderer_frames_skipped", 100_000_000),
+                           ("renderer_buffer_lag", 2)):
+        if field in payload:
+            value = payload[field]
+            if type(value) is not int or not 0 <= value <= maximum:
+                return None
+            result[field] = value
+    return result
 
 
 class KernelH264PullWindow:

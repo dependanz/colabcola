@@ -396,6 +396,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="use one existing user-owned T4 without allocating or releasing it")
     remote.add_argument("--confirm-attach", action="store_true",
                         help="authorize bridge code upload and execution in the existing notebook kernel")
+    remote.add_argument("--sequence-buffered", action="store_true",
+                        help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
     remote.add_argument("--gpu", choices=("T4",), default="T4")
     remote.add_argument("--transport", choices=("files", "comm"), default="files",
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
@@ -444,8 +446,8 @@ def main(argv: list[str] | None = None) -> int:
                         or (not args.preflight_only and not args.confirm_attach)):
                     parser.error("external attach requires Comm H.264 30 FPS capacity sweep, "
                                  "--confirm-attach (unless preflight-only), and NO allocation flag")
-            elif args.confirm_attach:
-                parser.error("--confirm-attach requires --attach-existing")
+            elif args.confirm_attach or args.sequence_buffered:
+                parser.error("--confirm-attach and --sequence-buffered require --attach-existing")
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
             # Two credits are live-verified for ordinary Comm streaming,

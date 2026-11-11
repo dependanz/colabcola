@@ -157,6 +157,56 @@ def read_latest_rgb(path: Path, *, width: int = WIDTH, height: int = HEIGHT):
     return renderer_seq, input_ack, ppm[len(prefix):]
 
 
+RING_SLOTS = 8  # bounded publication history; never scans arbitrary files
+MAX_BUFFER_LAG_FRAMES = 2  # preserve near-real-time interaction freshness
+
+
+def read_next_buffered_rgb(directory: Path, *, after_seq: int | None,
+                           width: int = WIDTH, height: int = HEIGHT):
+    """Read one distinct, sequence-increasing snapshot from an eight-slot ring.
+
+    Scan only fixed slot headers; validate the selected payload with the same
+    bounded CCB1/zlib decoder as legacy. A concurrent overwrite may invalidate
+    a candidate, in which case it is skipped rather than replayed. No file
+    polling waits or unbounded accumulation is introduced.
+    """
+    candidates = []
+    for slot in range(RING_SLOTS):
+        path = directory / f"frame-ring-{slot:02d}.bin"
+        try:
+            with path.open("rb") as source:
+                head = source.read(CCB1.size)
+        except (OSError, ValueError):
+            continue
+        if len(head) != CCB1.size:
+            continue
+        magic, seq, ack, w, h = CCB1.unpack(head)
+        if (magic == b"CCB1" and (w, h) == (width, height)
+                and seq % RING_SLOTS == slot and
+                (after_seq is None or seq > after_seq)):
+            candidates.append((seq, path))
+    if not candidates:
+        return None
+    newest = max(seq for seq, _ in candidates)
+    # A queue can improve delivered FPS while silently adding latency.
+    # Retain only two older frames for jitter absorption; explicitly count
+    # stale frames skipped in favor of current interaction response.
+    candidates = [(seq, path) for seq, path in candidates
+                  if seq >= newest - MAX_BUFFER_LAG_FRAMES]
+    candidates.sort(key=lambda item: item[0], reverse=after_seq is None)
+    for seq, path in candidates:
+        try:
+            result = read_latest_rgb(path, width=width, height=height)
+        except RemoteVideoSourceError:
+            continue
+        if result[0] != seq:
+            continue
+        skipped = (max(0, seq - after_seq - 1)
+                   if after_seq is not None else 0)
+        return (*result, skipped, newest - seq)
+    return None
+
+
 def read_producer_window(path: Path, run_id: str) -> dict | None:
     """Best-effort snapshot of INDEPENDENT CUDA producer measurements.
 
@@ -203,14 +253,16 @@ def read_producer_window(path: Path, run_id: str) -> dict | None:
 class RemoteH264PullSource:
     """Single ordered source per owned Comm; request IDs must increase.
 
-    Encoded sequence is independent of source renderer_seq. Each successful
-    video_pull encodes the latest RGB snapshot even if the same renderer
-    snapshot was previously read. This keeps one access unit per pull and
-    prevents gaps caused solely by renderer/pull cadence mismatch.
+    Legacy mode encodes the latest RGB snapshot once per pull. Opt-in
+    sequence-buffered mode consumes distinct renderer sequence numbers from
+    a fixed eight-slot publication ring. It returns correlated video_no_new
+    replies without encoding when no fresh snapshot exists, and bounds lag
+    to two producer frames so improved throughput does not mask stale input.
     """
 
     def __init__(self, directory: str | Path, run_id: str, *, fps: int,
-                 width: int = WIDTH, height: int = HEIGHT, encoder_factory=None):
+                 width: int = WIDTH, height: int = HEIGHT, encoder_factory=None,
+                 sequence_buffered: bool = False):
         if (not isinstance(run_id, str) or len(run_id) != 32
                 or type(fps) is not int or not 1 <= fps <= 60
                 or (width, height) != (WIDTH, HEIGHT)):
@@ -219,6 +271,10 @@ class RemoteH264PullSource:
         self.run_id = run_id
         self.fps = fps
         self.width, self.height = width, height
+        if type(sequence_buffered) is not bool:
+            raise RemoteVideoSourceError("invalid sequence-buffered selector")
+        self.sequence_buffered = sequence_buffered
+        self.last_renderer_seq = None
         self.encoder = (encoder_factory or _make_encoder)(width, height, fps)
         self.coded_seq = 0
         self.last_pull = 0
@@ -237,8 +293,23 @@ class RemoteH264PullSource:
         self.last_pull = pull_seq
         try:
             read_started_ns = time.perf_counter_ns()
-            renderer_seq, ack, pixels = read_latest_rgb(
-                self.directory / "frame.bin", width=self.width, height=self.height)
+            if self.sequence_buffered:
+                candidate = read_next_buffered_rgb(
+                    self.directory, after_seq=self.last_renderer_seq,
+                    width=self.width, height=self.height)
+                if candidate is None:
+                    # A positive, correlated response releases the host credit.
+                    # No encoder call or video sequence increment occurs; the
+                    # stateful H.264 stream remains contiguous across empties.
+                    return {"v": 1, "kind": "video_no_new",
+                            "run_id": self.run_id, "pull_seq": pull_seq,
+                            "input_ack": self.last_ack}
+                renderer_seq, ack, pixels, skipped_frames, buffer_lag = candidate
+            else:
+                renderer_seq, ack, pixels = read_latest_rgb(
+                    self.directory / "frame.bin", width=self.width, height=self.height)
+                skipped_frames = 0
+                buffer_lag = 0
             source_read_us = (time.perf_counter_ns() - read_started_ns) / 1000
             # The one-second producer sidecar may be missing at startup.
             # Its status is independent of the snapshot used by this pull.
@@ -262,6 +333,9 @@ class RemoteH264PullSource:
                 "v": 1, "kind": "video_access_unit", "codec": "h264-annexb",
                 "run_id": self.run_id, "pull_seq": pull_seq, "input_ack": ack,
                 "renderer_seq": renderer_seq,
+                **({"renderer_frames_skipped": skipped_frames,
+                    "renderer_buffer_lag": buffer_lag}
+                   if self.sequence_buffered else {}),
                 # Independent remote CLOCK DURATIONS; never subtract these
                 # timestamps from host monotonic/perf-counter readings.
                 "source_read_us": round(source_read_us, 2),
@@ -272,6 +346,8 @@ class RemoteH264PullSource:
                 reply["producer_window"] = producer_window
             self.coded_seq += 1
             self.last_ack = ack
+            if self.sequence_buffered:
+                self.last_renderer_seq = renderer_seq
             return reply
         except Exception:
             self.failed = True

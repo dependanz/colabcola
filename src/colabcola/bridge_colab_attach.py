@@ -105,14 +105,18 @@ def run_attached_colab(args, provider) -> int:
             provider, session, state["run_id"], args.fps,
             video_codec="h264",
             install_remote_pyav=getattr(args, "install_remote_pyav", False),
+            sequence_buffered=getattr(args, "sequence_buffered", False),
         )
+        # Used exclusively to label benchmark ownership. Never a release token.
+        peer.external_attachment = True
         opened = False
         try:
             # The expected kernel is reverified before remote file upload.
             details = peer.open(expected_kernel_id=kernel_id)
             opened = True
             save(args.run_dir, state, "running", gpu_name=details["gpu"],
-                 transport="comm", video_codec="h264")
+                 transport="comm", video_codec="h264",
+                 sequence_buffered=getattr(args, "sequence_buffered", False))
 
             def work(outgoing, frames, stopped):
                 run_h264_capacity_sweep(

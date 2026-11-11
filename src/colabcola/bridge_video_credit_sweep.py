@@ -97,6 +97,14 @@ def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
             round(len(stats["renderer_seqs"]) / measured_s, 3)
             if stats["source_read_us"] else None),
         "duplicate_renderer_replies": stats["duplicate_renderer_replies"],
+        "no_new_renderer_frame_replies": stats["no_new_replies"],
+        "renderer_frames_skipped_total": stats["renderer_frames_skipped_total"],
+        "renderer_buffer_lag_p50_frames": (
+            round(median(stats["renderer_buffer_lag_frames"]), 3)
+            if stats["renderer_buffer_lag_frames"] else None),
+        "renderer_buffer_lag_max_frames": (
+            max(stats["renderer_buffer_lag_frames"])
+            if stats["renderer_buffer_lag_frames"] else None),
         "remote_diagnostics_missing": stats["remote_diagnostics_missing"],
         "producer_windows_observed": len(windows),
         "producer_window_metrics_missing_replies": stats["producer_missing_replies"],
@@ -130,6 +138,8 @@ def _empty_phase() -> dict:
             "base64_chars": 0, "rtts": [], "decode_us": [],
             "acks_ms": [], "fresh_gaps_ms": [],
             "renderer_seqs": set(), "duplicate_renderer_replies": 0,
+            "no_new_replies": 0, "renderer_frames_skipped_total": 0,
+            "renderer_buffer_lag_frames": [],
             "remote_diagnostics_missing": 0, "source_read_us": [],
             "encode_us": [], "submit_intervals_ms": [],
             "last_submit_at": None, "receive_poll_elapsed_ms": [],
@@ -285,8 +295,12 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                 for (unit, ack, sizes, rtt), diagnostics in zip(committed, diagnostic_batch):
                     observed = phase_clock()
                     scored = scored_start <= observed < phase_end
+                    no_new = (isinstance(diagnostics, dict)
+                              and diagnostics.get("no_new") is True)
                     if scored:
                         stats["replies"] += 1
+                        if no_new:
+                            stats["no_new_replies"] += 1
                         raw, framed, base64_count = sizes
                         stats["h264_bytes"] += raw
                         stats["ccv1_bytes"] += framed
@@ -294,8 +308,13 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                         stats["rtts"].append(rtt)
                         if diagnostics is None:
                             stats["remote_diagnostics_missing"] += 1
-                        else:
+                        elif not no_new:
                             renderer_seq = diagnostics["renderer_seq"]
+                            stats["renderer_frames_skipped_total"] += (
+                                diagnostics.get("renderer_frames_skipped", 0))
+                            if "renderer_buffer_lag" in diagnostics:
+                                stats["renderer_buffer_lag_frames"].append(
+                                    diagnostics["renderer_buffer_lag"])
                             if renderer_seq in stats["renderer_seqs"]:
                                 stats["duplicate_renderer_replies"] += 1
                             else:
@@ -304,8 +323,9 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                             stats["encode_us"].append(diagnostics["encode_us"])
                         # Do not count a repeated producer window once per
                         # H.264 pull; this telemetry is independent of pull FPS.
-                        _record_producer_window(stats, diagnostics)
-                        if unit is None:
+                        if not no_new:
+                            _record_producer_window(stats, diagnostics)
+                        if unit is None and not no_new:
                             stats["suppressed"] += 1
 
                     if ack > last_ack:
@@ -367,7 +387,12 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
             next_due = phase_clock()  # new phase; no catch-up burst
 
         report = {"schema": 1,
-                  "mode": ("single-owned-comm-h264-capacity" if experimental
+                  "mode": (("external-sequence-buffered-h264-capacity"
+                            if getattr(peer, "sequence_buffered", False)
+                            else "external-comm-h264-capacity")
+                           if getattr(peer, "external_attachment", False)
+                           and experimental else
+                           "single-owned-comm-h264-capacity" if experimental
                            else "single-owned-comm-h264-credit-aba"),
                   "requested_poll_hz": poll_hz,
                   "host_phase_clock": ("perf_counter_ns" if experimental
@@ -378,7 +403,10 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                   "maximum_window_outstanding": window.maximum_outstanding,
                   "continuous_decoder_and_sequence_gate": True,
                   "all_phase_boundaries_drained": True,
-                  "scope": "one owned Jupyter Comm; host request/receive/decode and Tk configuration, not network bytes or input-to-photon latency"}
+                  "scope": ("one user-owned Colab runtime with one bridge Comm; "
+                            if getattr(peer, "external_attachment", False)
+                            else "one bridge-owned Colab runtime with one Comm; ")
+                           + "host request/receive/decode and Tk configuration, not network bytes or input-to-photon latency"}
         print("[colabcola] H.264 sweep result " + json.dumps(report, sort_keys=True), flush=True)
         return report
     except Exception as exc:

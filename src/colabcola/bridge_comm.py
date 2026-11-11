@@ -88,7 +88,8 @@ def bootstrap_error_summary(provider, session, remote: str, run_id: str,
 
 class KernelCommBridge:
     def __init__(self, provider, session, run_id: str, fps: int,
-                 video_codec: str = "ppm", *, install_remote_pyav: bool = False):
+                 video_codec: str = "ppm", *, install_remote_pyav: bool = False,
+                 sequence_buffered: bool = False):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -98,7 +99,10 @@ class KernelCommBridge:
         self.run_id = run_id
         self.fps = fps
         self.video_codec = video_codec
+        if type(sequence_buffered) is not bool or (sequence_buffered and video_codec != "h264"):
+            raise ValueError("sequence buffer requires H.264")
         self.install_remote_pyav = install_remote_pyav
+        self.sequence_buffered = sequence_buffered
         self.client = None
         self.wire = None
         self.comm_id = None
@@ -202,7 +206,8 @@ class KernelCommBridge:
                     f"'BRIDGE_RENDERER_PATH':{root + '/bridge_colab_runtime.py'!r},"
                     f"'BRIDGE_VIDEO_SOURCE_PATH':{video_path!r},"
                     f"'BRIDGE_VIDEO_PREFLIGHT':{self.video_codec == 'h264'!r},"
-                    f"'BRIDGE_INSTALL_REMOTE_PYAV':{self.install_remote_pyav!r}"
+                    f"'BRIDGE_INSTALL_REMOTE_PYAV':{self.install_remote_pyav!r},"
+                    f"'BRIDGE_SEQUENCE_BUFFERED':{self.sequence_buffered!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.

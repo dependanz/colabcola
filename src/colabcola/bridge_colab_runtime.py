@@ -20,6 +20,7 @@ WIDTH = 640
 HEIGHT = 360
 MAGIC = b"CCB1"
 HEADER = struct.Struct("!4sIIII")
+RING_SLOTS = 8  # must match bridge_video_colab_source.RING_SLOTS
 
 
 def atomic_bytes(path: Path, content: bytes) -> None:
@@ -54,13 +55,15 @@ def make_producer_window(*, run_id: str, last_seq: int, window_seq: int,
     }
 
 
-def start(directory: str, fps: int, run_id: str):
+def start(directory: str, fps: int, run_id: str, *, sequence_buffered: bool = False):
     import torch
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     if not 1 <= fps <= 60:
         raise ValueError("fps outside accepted range")
+    if type(sequence_buffered) is not bool:
+        raise ValueError("invalid sequence-buffered selector")
 
     def worker():
         try:
@@ -146,6 +149,11 @@ def start(directory: str, fps: int, run_id: str):
                     raise RuntimeError("frame exceeds bridge transport bound")
                 packed = HEADER.pack(MAGIC, seq, applied_seq, WIDTH, HEIGHT) + compressed
                 publish_start = time.monotonic()
+                # Opt-in fixed-size, monotonically numbered producer history.
+                # Atomic replacement prevents torn reads; fixed slots cap
+                # disk usage without an ever-growing frame queue.
+                if sequence_buffered:
+                    atomic_bytes(directory / f"frame-ring-{seq % RING_SLOTS:02d}.bin", packed)
                 atomic_bytes(directory / "frame.bin", packed)
                 publish_ms = (time.monotonic() - publish_start) * 1000
                 render_samples.append(render_copy_ms)
