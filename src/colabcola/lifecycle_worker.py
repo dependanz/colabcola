@@ -295,6 +295,19 @@ class CompletedArtifacts:
         return snapshot
 
 
+def _stop_execution_child(process):
+    """Kill only the worker-owned execution session, including descendants."""
+    if process is None:
+        return
+    try:
+        # The child was created with start_new_session=True; its PID is its PGID.
+        # Kill even if the leader exited, to prevent unsupervised descendants.
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
 def run(config_path):
     import fcntl  # Runtime is Linux; the supervisor core has its own portable locking.
     config_path = Path(config_path)
@@ -315,7 +328,24 @@ def run(config_path):
     atomic(root / "status.json", status)
     process = None
     watchdog = None
+    previous_handlers = {}
+    received_signal = None
+
+    def record_termination_signal(signum, _frame):
+        nonlocal received_signal
+        # Python's signal handler has no portable sender-PID information.
+        received_signal = {"name": signal.Signals(signum).name, "at": time.time()}
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt()
+        raise SystemExit(128 + signum)
+
     try:
+        # Signals are delivered to Python's main thread. A worker invoked from
+        # another thread cannot install handlers and receives no Python signals.
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, record_termination_signal)
         acquire_inputs(config, store, root)
         verified_inputs(root, config["files"])
         reason = stop_reason(config, root, time.time())
@@ -444,15 +474,36 @@ def run(config_path):
             status["heartbeat_at"] = time.time()
             atomic(root / "status.json", status)
             time.sleep(2 if finished else config.get("poll_seconds", 5))
-    except Exception as exc:
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        atomic(root / "status.json", {**status, "state": "failed", "reason": type(exc).__name__})
+    except BaseException as exc:
+        # Includes KeyboardInterrupt and SystemExit, not just Exception.
+        # Stop the owned session before publishing a failed status or re-raising.
+        _stop_execution_child(process)
+        failure_status = {**status, "state": "failed",
+                          "reason": type(exc).__name__}
+        if received_signal is not None:
+            failure_status["termination_signal"] = received_signal
+        try:
+            atomic(root / "status.json", failure_status)
+        except Exception:
+            # Preserve the original BaseException for the tracked kernel receipt.
+            if isinstance(exc, Exception):
+                raise
+        if not isinstance(exc, Exception):
+            raise
     finally:
-        if watchdog:
-            watchdog.stop()
-        lock.close()
+        try:
+            # Also cover normal return paths and failures during status writing.
+            _stop_execution_child(process)
+        finally:
+            try:
+                if watchdog:
+                    watchdog.stop()
+            finally:
+                try:
+                    for signum, handler in previous_handlers.items():
+                        signal.signal(signum, handler)
+                finally:
+                    lock.close()
 
 
 if __name__ == "__main__":
