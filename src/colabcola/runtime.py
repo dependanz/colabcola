@@ -1311,6 +1311,34 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
     class _ColabcolaRemoteDiskError(RuntimeError):
         pass
 
+    remote_cache = {"window_bytes": 64 * 1024 ** 2, "sync_calls": 0,
+                    "advice_calls": 0, "advice_errors": 0,
+                    "advice_supported": hasattr(os, "posix_fadvise")}
+
+    def _colabcola_remote_space(remaining):
+        free = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
+        if free < remaining + 1024 ** 3:
+            raise _ColabcolaRemoteDiskError(
+                "insufficient free disk for remote inputs: need " + str(remaining)
+                + " bytes plus a 1 GiB margin, have " + str(free))
+
+    def _colabcola_remote_advise(fd, start, end):
+        if end <= start or not remote_cache["advice_supported"]:
+            return
+        try:
+            os.posix_fadvise(fd, start, end - start, os.POSIX_FADV_DONTNEED)
+            remote_cache["advice_calls"] += 1
+        except OSError:
+            remote_cache["advice_errors"] += 1
+
+    def _colabcola_remote_sync(stream, start):
+        stream.flush()
+        (os.fdatasync if hasattr(os, "fdatasync") else os.fsync)(stream.fileno())
+        remote_cache["sync_calls"] += 1
+        end = stream.tell()
+        _colabcola_remote_advise(stream.fileno(), start, end)
+        return end
+
     _COLABCOLA_REMOTE_RETRYABLE = (
         urllib.error.URLError,
         http.client.HTTPException,
@@ -1351,14 +1379,7 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
         remote_verified_bytes = 0
         remote_entries = COLABCOLA_MANIFEST["remote_inputs"]
         remote_total_bytes = sum(int(entry["bytes"]) for entry in remote_entries)
-        remote_free_bytes = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
-        if remote_free_bytes < remote_total_bytes + 1024 ** 3:
-            raise _ColabcolaRemoteDiskError(
-                "insufficient free disk for remote inputs: need "
-                + str(remote_total_bytes)
-                + " bytes plus a 1 GiB margin, have "
-                + str(remote_free_bytes)
-            )
+        _colabcola_remote_space(remote_total_bytes)
         remote_facts = []
         for remote_index, remote_entry in enumerate(remote_entries, 1):
             remote_url = str(remote_entry["url"])
@@ -1395,12 +1416,17 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                     if remote_have > remote_expected:
                         remote_partial.unlink()
                         remote_have = 0
+                    # Re-evaluate free bytes before every file/Range retry.
+                    _colabcola_remote_space(
+                        remote_total_bytes - remote_verified_bytes - remote_have)
                     _colabcola_remote_progress("connecting", force=True)
                     remote_digest = hashlib.sha256()
                     if remote_have:
                         with remote_partial.open("rb") as remote_existing:
                             while remote_block := remote_existing.read(8 * 1024 * 1024):
                                 remote_digest.update(remote_block)
+                            _colabcola_remote_advise(
+                                remote_existing.fileno(), 0, remote_have)
                     remote_request = urllib.request.Request(
                         remote_url,
                         headers={"User-Agent": "colabcola/" + COLABCOLA_COMPILER_VERSION},
@@ -1423,16 +1449,26 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                                 + remote_entry["target"]
                             )
                         with remote_partial.open(remote_mode) as remote_output:
-                            while remote_block := remote_response.read(8 * 1024 * 1024):
-                                remote_have += len(remote_block)
-                                if remote_have > remote_expected:
-                                    raise RuntimeError(
-                                        "remote input exceeds its declared byte count: "
-                                        + remote_entry["target"]
-                                    )
-                                remote_digest.update(remote_block)
-                                remote_output.write(remote_block)
-                                _colabcola_remote_progress("downloading")
+                            synced_to = remote_have
+                            try:
+                                while remote_block := remote_response.read(8 * 1024 * 1024):
+                                    remote_have += len(remote_block)
+                                    if remote_have > remote_expected:
+                                        raise RuntimeError(
+                                            "remote input exceeds its declared byte count: "
+                                            + remote_entry["target"]
+                                        )
+                                    remote_digest.update(remote_block)
+                                    remote_output.write(remote_block)
+                                    if remote_have - synced_to >= remote_cache["window_bytes"]:
+                                        synced_to = _colabcola_remote_sync(remote_output, synced_to)
+                                        _colabcola_remote_space(
+                                            remote_total_bytes - remote_verified_bytes - remote_have)
+                                    _colabcola_remote_progress("downloading")
+                            finally:
+                                # Includes partial downloads that will be resumed via HTTP Range.
+                                if remote_output.tell() > synced_to:
+                                    _colabcola_remote_sync(remote_output, synced_to)
                     if remote_have != remote_expected:
                         raise http.client.IncompleteRead(b"", remote_expected - remote_have)
                     if remote_digest.hexdigest() != remote_expected_sha256:
@@ -1477,6 +1513,7 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
             "bytes": remote_total_bytes,
             "count": len(remote_entries),
             "entries": remote_facts,
+            "cache_control": remote_cache,
             "seconds": time.monotonic() - remote_started_monotonic,
         }
     except _ColabcolaRemoteDiskError as exc:
