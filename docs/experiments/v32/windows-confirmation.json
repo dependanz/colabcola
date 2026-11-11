@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "kind": "user-provided-windows-v32-test-receipt",
+  "reference_commit": "55684329a62899e77a81015542788a9eef92c5f1",
+  "source": "Current user message: inline PowerShell transcript, no attached JSON files",
+  "checkout": {
+    "observed_fast_forward": "b76beb1..5568432",
+    "branch": "feature/interactive-bridge-prototype",
+    "working_directory": "C:\\dev\\colabcola-bridge-prototype"
+  },
+  "interpreter": "C:\\dev\\colabcola-bridge-prototype\\.venv\\Scripts\\python.exe",
+  "tests": {
+    "passed": 139,
+    "elapsed_seconds": 4.92,
+    "files": [
+      "test_bridge_video_controller.py",
+      "test_bridge_video_rate.py",
+      "test_bridge_video_watchdog.py",
+      "test_bridge_video_recovery.py",
+      "test_bridge_video_load.py",
+      "test_bridge_video_load_control.py",
+      "test_bridge_video_burst.py",
+      "test_bridge_video_burst_compare.py",
+      "test_bridge_video_sender.py",
+      "test_bridge_video_pacing.py",
+      "test_bridge_video_sender_service.py",
+      "test_bridge_video_service.py"
+    ]
+  },
+  "experiment_commands_observed": [
+    "observable-congestion",
+    "persistent-collapse"
+  ],
+  "redirected_output_files": [
+    "v32-observable.json",
+    "v32-persistent.json"
+  ],
+  "experiment_json_contents_provided": false,
+  "experiment_json_comparison_performed": false,
+  "scope": "Confirms displayed checkout, explicit interpreter and focused test result. Both experiment commands redirect stdout to files. Their JSON contents, exit codes and quantitative Windows results are not present in this transcript."
+}

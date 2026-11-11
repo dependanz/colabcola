@@ -2930,6 +2930,248 @@ controls; this experiment studies only a local service-budget idea.
 All clocks remain virtual with ideal reverse feedback. No Colab allocation,
 physical network or display-latency measurement is part of v32.
 
+## v33: packet pacing and bounded reassembly on a frozen source
+
+**Result:** packet pacing reduces short-window dispatch bursts, but neither
+packet-paced policy improves the declared 80 ms presentation metric over
+immediate atomic batches in these six profiles. The clean control isolates
+the cost: all 36 frames still decode, while fixed packet pacing meets 24
+80 ms deadlines and queue-service packet pacing meets 27, versus 36 with
+immediate dispatch. Packetization is now implemented and measured; the
+current pacer is not established as the preferred responsiveness policy.
+
+The preceding Windows transcript confirms checkout `5568432`, the explicit
+`.venv` interpreter and **139 tests passed in 4.92 seconds**. Its two v32
+commands redirect stdout to `v32-observable.json` and `v32-persistent.json`.
+Those file contents and exit codes were not supplied, so their numerical
+results have not been compared. The exact scope is recorded in
+[`v32/windows-confirmation.json`](experiments/v32/windows-confirmation.json).
+
+### What changed and what is held fixed
+
+The premeasurement [`v33/design.json`](experiments/v33/design.json) declares
+six arms, six profiles, resolved defaults, limits and metrics. A real H.264
+source is generated once per profile by the v30 tight immediate causal
+reference. Every encoded byte, original capture timestamp, target decision
+and complete IDR/restart schedule is then frozen for all six replays.
+The five historical source fingerprints and pilot controller objects match
+the corresponding v32 immediate arms. The extra erasure profile uses the
+same clean source, with no loss fed back into its encoder.
+
+Each original 30-byte CCV1 header plus H.264 access unit is divided into
+custom **CCP1 datagrams of at most 1,200 bytes**, including a **16-byte**
+header carrying frame ID, fragment index/count and original framed length.
+Bodies therefore carry at most 1,184 bytes. This is an experimental framing
+format, not RFC 6184 FU-A, RTP, UDP or SRTP. UDP/IP and encryption overhead
+are not included. The
+[WebRTC pacing design](https://webrtc.googlesource.com/src/+/refs/heads/main/modules/pacing/g3doc/index.md)
+and [RFC 6184](https://www.rfc-editor.org/rfc/rfc6184.html) are architectural
+references, not interoperability claims.
+
+| Arm | Dispatch and admission unit | Service allowance |
+| --- | --- | --- |
+| `batch_immediate` | All of one frame's datagrams atomically | Immediate |
+| `batch_fixed` | Same atomic frame batch | Fixed |
+| `batch_service` | Same atomic frame batch | Queue-work service |
+| `packet_burst` | Individual datagrams, all ready at capture | Immediate |
+| `packet_fixed` | Individual datagrams | Fixed |
+| `packet_service` | Individual datagrams | Queue-work service |
+
+**All six arms pay every identical fragment-header byte.** An atomic batch
+is a simulated group of those datagrams, not a large UDP packet. Fixed
+batch versus fixed packet service measures granularity under the same
+configured allowance. Queue-service batch versus packet service also
+changes how often service is refreshed, because a refresh follows each
+respective dispatch mutation.
+
+The independent allowance retains v32's initial 650 kbps encoder ceiling
+plus nominal AU framing: **657.2 kbps**, a **1,314.4 kbps** cap and a 50 ms
+rolling work horizon. Fragment headers are fully charged to pending work,
+debt and the link, but intentionally do not increase this inherited base.
+No sender reads link capacity, admission outcomes, loss or in-flight work.
+Rejected fragments do not abort later scheduled fragments of the frame.
+Only local expiry/overflow and dependency rules may discard unsent data.
+
+All replay arms use a shared **16 KiB admitted in-flight byte budget**,
+including serialization and propagation. Erased admitted bytes retain that
+credit until their arrival event. `--pilot-max-inflight` applies only to
+the historical source generator. Its frame-slot trace is source provenance,
+not a same-link baseline: v33 results must not be compared directly with
+v32 counts as if only packetization changed. Jitter is now paired by source
+frame identity, independently of admission, and shared by its fragments.
+
+The sender still permits three frames with unsent data and 100 ms of
+original capture age. A local drop removes only the unsent suffix and
+unsent predicted descendants up to a verified IDR. The receiver stores at
+most 64 KiB of fragment bodies and 120 partial frame states, without
+allocating the advertised complete-frame length in advance. It validates
+complete reconstructed headers/clocks and passes only exact AUs to the
+real H.264 decoder. Terminal markers prevent resurrection. Completion
+exactly at the receiver age deadline is accepted; sender expiry retains
+its separately documented expiry-first tie rule.
+
+### Results across all six declared profiles
+
+Cells show **actually decoded / on time with 80 ms buffering**. The full
+original source horizon remains the denominator even when no data arrives.
+
+| Profile | Batch immediate | Batch fixed | Batch service | Packet burst | Packet fixed | Packet service |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Clean, 36 frames | **36 / 36** | 36 / 34 | **36 / 36** | **36 / 36** | 36 / 24 | 36 / 27 |
+| Observable congestion, 120 frames | **107 / 87** | 117 / 81 | 117 / 86 | 107 / 81 | 109 / 75 | 108 / 77 |
+| Persistent 90 kbps collapse, 120 frames | **32 / 23** | 32 / 18 | **32 / 23** | 32 / 19 | 32 / 15 | 32 / 16 |
+| Historical +/-8 ms jitter, 90 frames | **53 / 51** | 53 / 46 | **53 / 51** | **53 / 51** | 63 / 44 | 63 / 45 |
+| Historical zero jitter, 90 frames | **53 / 51** | 53 / 46 | **53 / 51** | **53 / 51** | 57 / 44 | 57 / 46 |
+| First fragment of frame 5 erased, 36 frames | **17 / 17** | 17 / 15 | **17 / 17** | **17 / 17** | 17 / 7 | 17 / 9 |
+
+**Clean smoothing versus completion cost.** Every arm sends the same
+94,950 original framed bytes plus 1,584 bytes of fragment headers:
+**96,534 bytes in 99 datagrams**. There are no losses, receiver expiries or
+local discards. Batch immediate and packet burst have identical frame
+completion times. The following peaks count attempted wire bytes in
+half-open virtual dispatch windows; they are not physical-link rates or
+hard instantaneous rate guarantees.
+
+| Window | Immediate batch/burst | Fixed packet pacing | Queue-service packet pacing |
+| --- | ---: | ---: | ---: |
+| 5 ms | 10,849.600 kbps | 2,563.200 kbps | 2,563.200 kbps |
+| 20 ms | 2,712.400 kbps | 1,136.400 kbps | 1,440.000 kbps |
+| 100 ms | 918.480 kbps | 749.280 kbps | 800.880 kbps |
+| 300 ms | 727.013 kbps | 683.280 kbps | 697.733 kbps |
+
+Fixed packet pacing reduces the 5 ms peak by 76.4%, but its first IDR
+completes at **113.037 ms**, versus **40 ms** with immediate dispatch.
+Queue service improves first-IDR completion to **100.523 ms**, still after
+the 80 ms deadline. The longest unfresh intervals are 200 ms fixed and
+166.67 ms queue service, versus zero immediate. Increasing the presentation
+buffer to 160 ms admits all 36 frames in both packet-paced arms, at the cost
+of that larger configured presentation delay. Source quality is identical.
+
+**Congestion and partial admission.** In the observable profile, immediate
+batches reject 6,720 wire bytes and decode 107 frames, while queue-service
+batches reject 6,696 and decode 117. Their 80 ms deadline counts are 87 and
+86 respectively: more decoding does not imply better timely presentation.
+Packet burst admits 148,376 bytes versus batch immediate's 144,488, but
+3,928 received bytes belong to incomplete frames. Its decode count stays
+107 and its deadline count falls to 81. Earlier packet credit release and
+partial admission alter later queueing; the finite byte-bound model does
+not guarantee equivalence between burst and atomic batches.
+
+In the historical jitter profile, packet service decodes **63** frames
+versus batch immediate's **53**, starting its recovered run at frozen IDR
+46 instead of 56. It nevertheless meets only **45** deadlines versus **51**.
+Zero jitter yields isolated additional decoded frames 46-49 before both
+recover at 56, with the same quality and deadline distinction. Frame-correlated
+jitter is paired across arms; these are different delivery outcomes for an
+unchanged source, not new encoder recovery actions.
+
+**Missing-fragment control.** Frame 5 has two datagrams. Exactly **1,200
+wire bytes** are erased after admission, while the other **945 bytes**
+arrive and are unusable. Its observed incomplete assembly expires at
+516.667 ms under the 350 ms receiver age bound. All arms reassemble 35
+frames but decode only **17**, in runs **0-4 and 24-35**. Decoding resumes
+at the already frozen periodic IDR 24. There is no partial NAL decoding,
+concealment, retransmission or new packet-loss feedback recovery.
+
+### Accounting, bounds and verification
+
+The harness asserts the following disjoint wire-byte partitions:
+
+- Generated = local discard + attempted.
+- Attempted = admission rejected + admitted.
+- Admitted = erased + received.
+- Received = reassembled + unusable received.
+
+Reassembled frames can still be undecodable because an earlier reference
+is missing, or too late for presentation. Never-observed frames are
+reported as evaluator-known missing rather than receiver-detected timeouts.
+Per-frame outcomes, IDR outcomes, exact fragment identities, dispatch and
+arrival histories, service decisions and finite tail records are retained.
+
+All 36 retained arm/profile combinations have **zero local sender drops,
+zero receiver memory-budget evictions and zero service-cap binding**.
+Receiver age expiry and byte admission do activate in the impaired profiles.
+The peak stored receiver body size is 6,685 bytes; maximum selected queue
+service is 1,084.96 kbps. Clean and partial-erasure packet-paced arms each
+dispatch one final packet after the last source capture, with no new source
+or repair actions. Local expiry, overflow, memory eviction, exact ties,
+cap pressure and unavailable-tail behavior are covered by focused tests.
+The common decoded quality cohorts contain 36 clean, 106 observable,
+32 persistent, 53 in each historical profile and 17 erasure frames; matched
+RGB distortion is identical across all six arms in each cohort.
+
+**296 focused tests passed in 4.03 seconds**, including 157 new datagram,
+transport and integration cases. Both CI platforms run the new suites.
+An explicit Linux CI gate reruns all six declared commands and asserts
+**complete parsed JSON equality** against each retained report, including
+metadata, before reporting its canonical hash. Exact-head CI status is
+recorded in the PR. All six local reports had empty stderr with codec
+warnings enabled. No parameters were adjusted after seeing the outcomes.
+
+Complete data, resolved defaults and source/codec hashes are retained in
+[`v33/design.json`](experiments/v33/design.json),
+[`v33/environment.json`](experiments/v33/environment.json),
+[`v33/clean.json`](experiments/v33/clean.json),
+[`v33/observable-congestion.json`](experiments/v33/observable-congestion.json),
+[`v33/persistent-collapse.json`](experiments/v33/persistent-collapse.json),
+[`v33/historical.json`](experiments/v33/historical.json),
+[`v33/zero-jitter.json`](experiments/v33/zero-jitter.json) and
+[`v33/partial-erasure.json`](experiments/v33/partial-erasure.json).
+
+### Windows reproduction
+
+```powershell
+Set-Location C:\dev\colabcola-bridge-prototype
+git pull --ff-only origin feature/interactive-bridge-prototype
+$colabPython = 'C:\dev\colabcola-bridge-prototype\.venv\Scripts\python.exe'
+
+& $colabPython -m pytest -q `
+  tests/test_bridge_video_datagram.py `
+  tests/test_bridge_video_packet_transport.py `
+  tests/test_bridge_video_packetization.py
+
+# Clean smoothing/completion tradeoff; keep 40, 80 and 160 ms presentation buffers.
+& $colabPython -m colabcola.bridge_video_packetization `
+  --frames 36 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
+  --max-age-ms 0 --pilot-max-inflight 16 --buffers-ms "40,80,160" |
+  Set-Content -Encoding utf8 .\v33-clean.json
+
+# Observable congestion using the same source-pilot profile as v32.
+& $colabPython -m colabcola.bridge_video_packetization `
+  --frames 120 --jitter-ms 0 --bandwidth-steps "0:1200,600:300,2200:1200" `
+  --pilot-max-inflight 32 --max-age-ms 1000 --buffers-ms "40,80,160,240,350" |
+  Set-Content -Encoding utf8 .\v33-observable.json
+
+# One missing fragment, with the clean source and a finite receiver deadline.
+& $colabPython -m colabcola.bridge_video_packetization `
+  --frames 36 --jitter-ms 0 --bandwidth-steps= --bandwidth-kbps 0 `
+  --max-age-ms 0 --pilot-max-inflight 16 --buffers-ms "40,80,160" `
+  --reassembly-max-age-ms 350 --erase-first-seqs "5" |
+  Set-Content -Encoding utf8 .\v33-partial-erasure.json
+
+# Read a compact comparison; the complete event histories stay in the JSON file.
+$v33 = Get-Content -Raw .\v33-clean.json | ConvertFrom-Json
+$v33.arms.PSObject.Properties | ForEach-Object {
+    $a = $_.Value
+    $p = $a.playout | Where-Object { $_.buffer_ms -eq 80 }
+    [pscustomobject]@{
+        Arm = $_.Name
+        Decoded = $a.actually_decoded_frames
+        OnTime80 = $p.on_time_frames
+        UnusableReceivedBytes = $a.accounting.unusable_received_wire_bytes
+    }
+} | Format-Table -AutoSize
+```
+
+**Next distinct research question:** connect packet-level delivery and
+reassembly observations to a causal source controller, with an explicit
+budget for frame completion. The frozen-source experiment now measures
+packet granularity and exposes the smoothing/latency tradeoff, but cannot
+show whether actual bitrate/IDR adaptation would resolve it. That next
+comparison should retain the v33 frozen controls and predeclare its policy
+before measuring. All v33 clocks remain virtual; there is no physical
+network/display measurement or Colab allocation.
+
 ## Architecture boundary
 
 The initial protocol is a bounded, versioned length-prefixed JSON stream.

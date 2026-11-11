@@ -1,0 +1,258 @@
+{
+  "schema": 1,
+  "milestone": "v33",
+  "base_commit": "55684329a62899e77a81015542788a9eef92c5f1",
+  "declared_at_utc": "2026-11-08T03:16:29.727391+00:00",
+  "selection": "Six arms, six profiles, policy, limits and metrics declared before any v33 codec scenario execution. No parameter sweep or post-result policy tuning planned.",
+  "source": {
+    "generator": "v30 tight immediate causal load-aware reference, generated once per profile",
+    "encoder_burst_vbv_ms": 100,
+    "rate_silence_timeout_ms": 150,
+    "rate_max_switches": 12,
+    "recovery_feedback_ms": 35,
+    "recovery_retry_ms": 150,
+    "recovery_max_requests": 8,
+    "replay": "Freeze every encoded byte, original timestamp, target decision and IDR/restart for all six transport arms. No transport replay feedback or new local repair enters the source.",
+    "pilot_link": "Existing whole-access-unit LinkConfig; max_inflight is a source-pilot setting only. Its trace is provenance, not a same-link baseline for the new byte-bounded replay."
+  },
+  "datagram": {
+    "magic": "CCP1",
+    "header_format": "!4sIHHI",
+    "header_bytes": 16,
+    "fields": [
+      "magic",
+      "frame_seq",
+      "fragment_index",
+      "fragment_count",
+      "original_framed_bytes"
+    ],
+    "max_datagram_bytes": 1200,
+    "body_bytes": 1184,
+    "config_range_bytes": [
+      256,
+      9000
+    ],
+    "source_payload": "Exact original 30-byte CCV1 header plus H.264 access unit, divided into consecutive bodies. All arms charge every identical datagram header.",
+    "standards": "Custom virtual experiment, not RTP, RFC 6184 FU-A, UDP, SRTP or a deployable protocol."
+  },
+  "arms": {
+    "batch_immediate": [
+      "batch",
+      "none"
+    ],
+    "batch_fixed": [
+      "batch",
+      "fixed"
+    ],
+    "batch_service": [
+      "batch",
+      "queue"
+    ],
+    "packet_burst": [
+      "packet",
+      "none"
+    ],
+    "packet_fixed": [
+      "packet",
+      "fixed"
+    ],
+    "packet_service": [
+      "packet",
+      "queue"
+    ]
+  },
+  "sender": {
+    "max_pending_frames": 3,
+    "max_age_ms": 100,
+    "local_discard": "Drop only unsent suffix of affected frame and unsent dependent frames until next verified IDR. Already dispatched fragments remain immutable. Suppress future predicted frames if no retained IDR. No new encoder repairs.",
+    "service_base": "initial encoder target + 30 * 8 * fps / 1000 kbps (657.2 at 650 kbps and 30 FPS)",
+    "service_cap_factor": 2,
+    "drain_ms": 50,
+    "queue_service": "min(cap, max(base, (debt_bits + 8 * remaining_queued_datagram_wire_bytes) / drain_ms))",
+    "fixed_service": "base",
+    "charge": "Every dispatch attempt incurs all datagram wire bits, even on downstream rejection. No idle credit or refunds.",
+    "updates": "Settle prior-rate elapsed debt, then refresh only after complete frame enqueue/dependency handling, complete expiry removal or dispatch pop plus full charge. No refresh at observation/report endpoints.",
+    "expiry": "Expiry wins readiness ties within 1e-9 ms, using actual expiry timestamp. Original capture age retained.",
+    "tail": "Finite local drainage or expiry after last capture, with no source or feedback actions.",
+    "service_overhead": "The inherited base intentionally includes nominal AU framing only. Every extra fragment header is fully charged in queue work, dispatch debt and link accounting, without increasing the fixed service allowance.",
+    "downstream_rejection": "Downstream fragment rejection or erasure never aborts later attempts. Only local queue expiry/dependency/overflow rules discard unsent data."
+  },
+  "link": {
+    "max_inflight_bytes": 16384,
+    "admission": "Atomic per dispatch group; batch contains all datagrams of one frame. Every admitted byte occupies the budget until arrival, including erased bytes. No frame-slot bound in replays.",
+    "serialization": "Same piecewise bandwidth model for exact wire bits; FIFO arrival times.",
+    "jitter": "One deterministic jitter draw per source frame, independent of admission and identical in every arm. Every fragment of a frame shares that draw.",
+    "loss": "Primary five profiles have no random packet loss. Sixth profile erases first fragment of frame 5 after admission; remaining fragments and all admitted wire bytes still count. Legacy whole-frame drop_seqs rejected."
+  },
+  "receiver": {
+    "max_buffer_bytes": 65536,
+    "max_pending_frames": 120,
+    "age": "Default profile max_age_ms; zero disables. Partial-erasure profile overrides receiver age to 350 ms while retaining clean source pilot.",
+    "clock": "Known fixed FPS and origin derive source age from seq. Inner reconstructed seq, PTS and capture timestamp must agree.",
+    "completion": "Only complete parsed exact access units reach real H.264; no partial NAL decode or concealment.",
+    "deadline": "Completion exactly at receiver age limit accepted; expiry occurs strictly after the limit. Sender expiry tie policy is separate.",
+    "memory": "Store received bodies, never allocate declared total upfront. Deterministic oldest partial eviction; terminal markers prevent resurrection. Duplicate/conflict handling explicit.",
+    "missing": "Frames with no received fragments are evaluator-known missing; they are not claimed as receiver-detected timeouts. Finish all incomplete states at finite timestamps."
+  },
+  "primary_metric": "On-time decoded frames at 80 ms buffering, with the full original source horizon in every arm.",
+  "secondary_metrics": [
+    "Actually decoded frames, dependency skips and recovery runs",
+    "Longest interval of unfresh presentation",
+    "Generated, local-discarded, attempted, admission-rejected, admitted, erased and delivered datagram bytes",
+    "Received work in complete versus unusable or incomplete frames",
+    "Attempted dispatch peaks in half-open 5, 20, 100 and 300 ms windows",
+    "Per-frame last-fragment dispatch age and reassembly completion age",
+    "Queue delay, finite tail, IDR outcomes, memory peaks and service cap binding",
+    "Matched RGB PSNR only on source IDs decoded by all six arms; source bytes identical"
+  ],
+  "attribution": {
+    "batch_immediate_vs_packet_burst": "Admission and delivery granularity with identical wire bytes and no sender pacing. Unconstrained link should preserve full-frame completion times.",
+    "batch_fixed_vs_packet_fixed": "Dispatch granularity under identical configured fixed service and local frame bounds.",
+    "packet_fixed_vs_packet_service": "Entire queue-work service policy under packet pacing.",
+    "batch_service_vs_packet_service": "Granularity plus service-refresh cadence; refreshes after each respective dispatch mutation, so not a pure constant-rate granularity ablation.",
+    "limits": "Frozen-source transport replay, not a new end-to-end causal controller or real-network measurement. Extra erasure has no new packet-loss feedback recovery. Configured service allowances are not known available bandwidth."
+  },
+  "profiles": {
+    "historical.json": [
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "observable-congestion.json": [
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:300,2200:1200",
+      "--pilot-max-inflight",
+      "32",
+      "--max-age-ms",
+      "1000",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "persistent-collapse.json": [
+      "--frames",
+      "120",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps",
+      "0:1200,600:90",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "clean.json": [
+      "--frames",
+      "36",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--pilot-max-inflight",
+      "16",
+      "--buffers-ms",
+      "40,80,160"
+    ],
+    "partial-erasure.json": [
+      "--frames",
+      "36",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--pilot-max-inflight",
+      "16",
+      "--buffers-ms",
+      "40,80,160",
+      "--reassembly-max-age-ms",
+      "350",
+      "--erase-first-seqs",
+      "5"
+    ]
+  },
+  "references": [
+    "https://webrtc.googlesource.com/src/+/refs/heads/main/modules/pacing/g3doc/index.md",
+    "https://www.rfc-editor.org/rfc/rfc6184.html"
+  ],
+  "resolved_defaults": {
+    "source": {
+      "width": 128,
+      "height": 72,
+      "fps": 30,
+      "frames": 90,
+      "gop": 24
+    },
+    "pilot_link": {
+      "delay_ms": 40,
+      "jitter_ms": 8,
+      "bandwidth_kbps": 0,
+      "bandwidth_steps": [
+        [
+          0,
+          1200
+        ],
+        [
+          600,
+          90
+        ],
+        [
+          1750,
+          1200
+        ]
+      ],
+      "loss_percent": 0.0,
+      "max_inflight": 10,
+      "max_age_ms": 350,
+      "seed": 7,
+      "drop_seqs": []
+    },
+    "rates": {
+      "high_kbps": 650,
+      "low_kbps": 95,
+      "congested_age_ms": 110.0,
+      "recovered_age_ms": 65.0,
+      "recovery_samples": 8,
+      "congestion_samples": 3,
+      "control_delay_ms": 35.0,
+      "min_switch_ms": 350.0,
+      "max_switches": 12,
+      "silence_timeout_ms": 150
+    },
+    "load": {
+      "min_kbps": 20,
+      "source_window_ms": 300.0,
+      "receiver_window_ms": 300.0,
+      "min_delivery_span_ms": 200.0,
+      "feedback_freshness_ms": 400.0,
+      "safety_fraction": 0.8,
+      "decrease_factor": 0.5,
+      "increase_factor": 1.25
+    },
+    "recovery": {
+      "feedback_ms": 35,
+      "retry_ms": 150,
+      "max_requests": 8
+    },
+    "burst": {
+      "vbv_ms": 100
+    },
+    "buffers_ms": [
+      80,
+      160,
+      240,
+      350
+    ]
+  }
+}
