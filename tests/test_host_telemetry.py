@@ -94,11 +94,15 @@ class HostTelemetryTests(unittest.TestCase):
         result = self.control / "results"
         result.mkdir()
         (result / "stdout.log").write_bytes(b"work")
+        (result / "storage-assessment.json").write_text(
+            '{"schema":1,"mode":"diagnostic_only"}\n', encoding="utf-8")
         (self.control / "execution.log").write_bytes(b"x" * 100000 + b"last")
         with mock.patch("colabcola.lifecycle_worker.collect_host_telemetry",
                         return_value={"schema": 1, "observed_at": 42}):
             logs = log_members(result, self.job, [], control_root=self.control)
         self.assertEqual(logs["runtime/stdout.log"], b"work")
+        self.assertEqual(json.loads(logs["runtime/storage-assessment.json"]),
+                         {"schema": 1, "mode": "diagnostic_only"})
         self.assertEqual(json.loads(logs["runtime/host-telemetry.json"]),
                          {"schema": 1, "observed_at": 42})
         self.assertEqual(len(logs["runtime/execution-tail.log"]), 65536)
