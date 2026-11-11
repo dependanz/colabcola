@@ -142,7 +142,13 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
     last_ack = 0
     input_sent_at: dict[int, float] = {}
     next_pull = 1
-    next_due = time.monotonic()
+    # Windows time.monotonic() can have ~15.625 ms resolution on Python 3.12.
+    # Use a single HOST-ONLY high-resolution timebase for experimental pacing
+    # and phase statistics. The externally supplied owner deadline and the
+    # receiver's eight-second per-request timers remain on time.monotonic().
+    phase_clock = ((lambda: time.perf_counter_ns() / 1_000_000_000)
+                   if experimental else time.monotonic)
+    next_due = phase_clock()
     last_fresh_global = next_due
     results = []
     print("[colabcola] H.264 single-runtime " +
@@ -151,7 +157,7 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
 
     try:
         for phase_name, credit_cap in phases:
-            phase_start = time.monotonic()
+            phase_start = phase_clock()
             phase_end = phase_start + phase_seconds
             scored_start = phase_start + warmup_seconds
             stats = _empty_phase()
@@ -160,8 +166,8 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
             offer_update(frames, ("status", f"H.264 sweep {phase_name}: {credit_cap} credit(s)"))
 
             while not stopped.is_set():
-                now = time.monotonic()
-                if now >= deadline:
+                now = phase_clock()
+                if time.monotonic() >= deadline:
                     raise LifecycleError("H.264 credit sweep time budget reached")
 
                 # The viewer's input sequence never resets at phase boundaries.
@@ -173,19 +179,19 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                         break
                 if latest is not None:
                     input_seq += 1
-                    input_sent_at[input_seq] = time.monotonic()
+                    input_sent_at[input_seq] = phase_clock()
                     peer.send_input(input_seq, latest)
                     # Bound retained input metadata even if ACKs stall.
                     if len(input_sent_at) > 128:
                         for seq in sorted(input_sent_at)[:-128]:
                             del input_sent_at[seq]
 
-                now = time.monotonic()
+                now = phase_clock()
                 if now >= phase_end:
                     drain = True
                 if not drain and now >= next_due and window.outstanding < credit_cap:
                     window.submit(next_pull)
-                    submitted_at = time.monotonic()
+                    submitted_at = phase_clock()
                     if scored_start <= submitted_at < phase_end:
                         previous_submit = stats["last_submit_at"]
                         if previous_submit is not None:
@@ -196,25 +202,38 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                     next_due = submitted_at + 1 / poll_hz  # never catch up
 
                 if window.outstanding:
-                    poll_started = time.monotonic()
-                    wait = receive_poll_timeout(
-                        experimental=experimental, draining=drain,
-                        now=poll_started, next_due=next_due)
-                    committed = window.poll(wait)
-                    poll_finished = time.monotonic()
+                    poll_started = phase_clock()
+                    if experimental and not drain:
+                        # Never enter Windows' coarse timed Queue.get wait:
+                        # timeout=0 returns an available IOPub message now.
+                        # Sleep below, using the finer host clock, to yield CPU.
+                        committed = window.poll(0.0)
+                    else:
+                        wait = receive_poll_timeout(
+                            experimental=experimental, draining=drain,
+                            now=poll_started, next_due=next_due)
+                        committed = window.poll(wait)
+                    poll_finished = phase_clock()
                     if scored_start <= poll_finished < phase_end:
                         stats["receive_poll_count"] += 1
                         if not committed:
-                            # May include a reply buffered out of order; this
-                            # is not necessarily a transport timeout.
+                            # May include an out-of-order buffered reply.
                             stats["receive_polls_without_commit"] += 1
                         stats["receive_poll_elapsed_ms"].append(
                             (poll_finished - poll_started) * 1000)
+                    if experimental and not drain and not committed:
+                        # A tiny time.sleep is observed to yield far more
+                        # precisely than Queue.get(timeout=small) on Windows.
+                        # Always advance even when the credit window is full.
+                        time.sleep(.001)
                 else:
                     committed = []
                     if drain:
                         break  # all pending and out-of-order replies settled
-                    time.sleep(min(.02, max(.001, min(next_due, phase_end) - time.monotonic())))
+                    if experimental:
+                        time.sleep(min(.002, max(.001, min(next_due, phase_end) - phase_clock())))
+                    else:
+                        time.sleep(min(.02, max(.001, min(next_due, phase_end) - phase_clock())))
 
                 # Optional, ordered side channel: a legacy/fake window has no
                 # diagnostics, while the production window aligns 1:1 to commits.
@@ -224,7 +243,7 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                 if len(diagnostic_batch) != len(committed):
                     raise LifecycleError("H.264 diagnostic/commit alignment invalid")
                 for (unit, ack, sizes, rtt), diagnostics in zip(committed, diagnostic_batch):
-                    observed = time.monotonic()
+                    observed = phase_clock()
                     scored = scored_start <= observed < phase_end
                     if scored:
                         stats["replies"] += 1
@@ -270,7 +289,7 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                             if len(pixels) != WIDTH * HEIGHT * 3:
                                 raise LifecycleError("credit sweep decoded RGB size invalid")
                             offer_update(frames, ("frame", header + pixels))
-                            last_fresh_global = time.monotonic()
+                            last_fresh_global = phase_clock()
                             if scored and scored_start <= last_fresh_global < phase_end:
                                 stats["decoded"] += 1
                                 stats["fresh_gaps_ms"].append(
@@ -284,8 +303,8 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                     except Exception:
                         raise LifecycleError("credit sweep host H.264 decode failed") from None
 
-                now = time.monotonic()
-                window.check_timeouts(now=now)
+                now = phase_clock()
+                window.check_timeouts(now=time.monotonic())
                 if now - last_fresh_global > MAX_NO_FRESH_SECONDS:
                     raise LifecycleError("credit sweep H.264 frame freshness watchdog fired")
                 if scored_start <= now < phase_end:
@@ -302,12 +321,15 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                 end_gap_ms=end_gap)
             results.append(result)
             print("[colabcola] H.264 sweep phase " + json.dumps(result, sort_keys=True), flush=True)
-            next_due = time.monotonic()  # new phase; no catch-up burst
+            next_due = phase_clock()  # new phase; no catch-up burst
 
         report = {"schema": 1,
                   "mode": ("single-owned-comm-h264-capacity" if experimental
                            else "single-owned-comm-h264-credit-aba"),
                   "requested_poll_hz": poll_hz,
+                  "host_phase_clock": ("perf_counter_ns" if experimental
+                                       else "monotonic"),
+                  "nonblocking_iopub_poll": bool(experimental),
                   "phases": results,
                   "request_count": next_pull - 1,
                   "maximum_window_outstanding": window.maximum_outstanding,

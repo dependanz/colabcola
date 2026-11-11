@@ -140,8 +140,11 @@ class KernelH264PullWindow:
         return result
 
     def poll(self, seconds: float = .03) -> list[tuple]:
+        # A zero timeout is an immediate, nonblocking IOPub queue read. Windows
+        # Queue.get(timeout=.001) can actually wait ~15.6 ms, which defeats
+        # 30/60 Hz pacing. Only the opt-in capacity sweep uses zero here.
         if (type(seconds) not in (float, int) or isinstance(seconds, bool)
-                or not .001 <= seconds <= .5):
+                or not (seconds == 0 or .001 <= seconds <= .5)):
             raise ValueError('video pipeline poll timeout outside bounds')
         self.last_committed_diagnostics = []
         self.check_timeouts()
