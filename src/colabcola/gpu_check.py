@@ -30,49 +30,40 @@ def _colabcola_gpu_check(requested, resources, gpus, cuda_available):
     return report
 
 
+
 def _colabcola_boot_memory(proc_root="/proc", cgroup_root="/sys/fs/cgroup"):
-    """Boot-time host memory snapshot; missing Linux metrics remain null."""
-    import pathlib
-    proc_root, cgroup_root = pathlib.Path(proc_root), pathlib.Path(cgroup_root)
+    """Boot-time host/cgroup limit, if the corresponding Linux files exist."""
+    from pathlib import Path, PurePosixPath
+    proc, cg = Path(proc_root), Path(cgroup_root)
     report = {"mem_total_bytes": None, "cgroup_memory_limit_bytes": None}
     try:
-        for line in (proc_root / "meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                parts = line.partition(":")[2].split()
-                if len(parts) == 2 and parts[1] == "kB":
-                    report["mem_total_bytes"] = int(parts[0]) * 1024
-                break
+        lines = (proc / "meminfo").read_text().splitlines()
+        row = next((x.split() for x in lines if x.startswith("MemTotal:")), [])
+        if len(row) == 3 and row[2] == "kB":
+            report["mem_total_bytes"] = int(row[1]) * 1024
     except (OSError, ValueError):
         pass
     try:
-        cgroup_value = ""
-        if (cgroup_root / "cgroup.controllers").is_file():
-            cgroup_value = (cgroup_root / "memory.max").read_text().strip()
-            for line in (proc_root / "self/cgroup").read_text().splitlines():
-                parts = line.split(":", 2)
-                if len(parts) == 3 and parts[:2] == ["0", ""]:
-                    relative = pathlib.PurePosixPath(parts[2])
-                    if parts[2].startswith("/") and ".." not in relative.parts:
-                        scoped = cgroup_root.joinpath(*relative.parts[1:], "memory.max")
-                        if scoped.is_file():
-                            cgroup_value = scoped.read_text().strip()
-                    break
-        elif (cgroup_root / "memory").is_dir():
-            base = cgroup_root / "memory"
-            cgroup_value = (base / "memory.limit_in_bytes").read_text().strip()
-            for line in (proc_root / "self/cgroup").read_text().splitlines():
-                parts = line.split(":", 2)
-                if len(parts) == 3 and "memory" in parts[1].split(","):
-                    relative = pathlib.PurePosixPath(parts[2])
-                    if parts[2].startswith("/") and ".." not in relative.parts:
-                        scoped = base.joinpath(*relative.parts[1:], "memory.limit_in_bytes")
-                        if scoped.is_file():
-                            cgroup_value = scoped.read_text().strip()
-                    break
-        if cgroup_value and cgroup_value != "max":
-            amount = int(cgroup_value)
-            if amount >= 0:
-                report["cgroup_memory_limit_bytes"] = amount
+        v2 = (cg / "cgroup.controllers").is_file()
+        base = cg if v2 else cg / "memory"
+        filename = "memory.max" if v2 else "memory.limit_in_bytes"
+        selected = base / filename
+        for line in (proc / "self/cgroup").read_text().splitlines():
+            fields = line.split(":", 2)
+            if len(fields) != 3:
+                continue
+            if ((fields[0] == "0" and fields[1] == "") if v2
+                    else "memory" in fields[1].split(",")):
+                relative = PurePosixPath(fields[2])
+                if fields[2].startswith("/") and ".." not in relative.parts:
+                    candidate = base.joinpath(*relative.parts[1:], filename)
+                    if candidate.is_file():
+                        selected = candidate
+                break
+        if selected.is_file():
+            raw = selected.read_text().strip()
+            if raw != "max":
+                report["cgroup_memory_limit_bytes"] = int(raw)
     except (OSError, ValueError):
         pass
     return report
