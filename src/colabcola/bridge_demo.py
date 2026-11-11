@@ -398,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="authorize bridge code upload and execution in the existing notebook kernel")
     remote.add_argument("--sequence-buffered", action="store_true",
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
+    remote.add_argument("--push-video", action="store_true",
+                        help="v34 opt-in: sender-driven four-credit H.264 Comm")
     remote.add_argument("--renderer-lag-frames", type=int, choices=(0, 1, 2),
                         default=2,
                         help="v33w opt-in buffered-mode frame freshness bound (default 2)")
@@ -442,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
                 return cleanup_colab(args)
             if args.attach_existing:
                 if (args.transport != "comm" or args.video_codec != "h264"
-                        or not args.benchmark_h264_capacity
+                        or not (args.benchmark_h264_capacity or args.push_video)
                         or (args.fps, args.poll_hz) != (30, 30)
                         or args.inflight not in (None, 1)
                         or args.confirm_allocation
@@ -451,8 +453,14 @@ def main(argv: list[str] | None = None) -> int:
                                  "--confirm-attach (unless preflight-only), and NO allocation flag")
                 if args.renderer_lag_frames != 2 and not args.sequence_buffered:
                     parser.error("--renderer-lag-frames 0/1 requires --sequence-buffered")
-            elif args.confirm_attach or args.sequence_buffered or args.renderer_lag_frames != 2:
-                parser.error("attach/sequence-buffered/renderer-lag flags require --attach-existing")
+                if args.push_video and (not args.sequence_buffered
+                        or args.benchmark_h264_capacity or args.benchmark_h264_credits
+                        or args.benchmark_credits or args.benchmark_sweep
+                        or args.probe_link):
+                    parser.error("push-video requires external sequence-buffered Comm without pull benchmarks")
+            elif (args.confirm_attach or args.sequence_buffered or args.push_video
+                  or args.renderer_lag_frames != 2):
+                parser.error("attach/sequence-buffered/push-video flags require --attach-existing")
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
             # Two credits are live-verified for ordinary Comm streaming,
@@ -468,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("H.264 video requires --transport comm --inflight 1 or 2, without benchmarks/probe")
             if args.install_remote_pyav and args.video_codec != "h264":
                 parser.error("--install-remote-pyav requires --video-codec h264")
-            max_rate = 60 if args.benchmark_h264_capacity else 12
+            max_rate = 60 if args.benchmark_h264_capacity else 30 if args.push_video else 12
             max_poll_hz = max_rate if args.transport == "comm" else 6
             if not 1 <= args.fps <= max_rate or not 1 <= args.poll_hz <= max_poll_hz:
                 parser.error(

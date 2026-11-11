@@ -90,7 +90,8 @@ class KernelCommBridge:
     def __init__(self, provider, session, run_id: str, fps: int,
                  video_codec: str = "ppm", *, install_remote_pyav: bool = False,
                  sequence_buffered: bool = False,
-                 max_buffer_lag_frames: int = 2):
+                 max_buffer_lag_frames: int = 2,
+                 video_push: bool = False):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -108,6 +109,10 @@ class KernelCommBridge:
                 or (not sequence_buffered and max_buffer_lag_frames != 2)):
             raise ValueError("renderer lag requires buffered H.264 mode")
         self.sequence_buffered = sequence_buffered
+        if (type(video_push) is not bool
+                or (video_push and not sequence_buffered)):
+            raise ValueError("push requires buffered H.264")
+        self.video_push = video_push
         self.max_buffer_lag_frames = max_buffer_lag_frames
         self.client = None
         self.wire = None
@@ -149,6 +154,8 @@ class KernelCommBridge:
         names = ["bridge_colab_runtime.py", "bridge_colab_comm_runtime.py"]
         if self.video_codec == "h264":
             names.append("bridge_video_colab_source.py")
+        if self.video_push:
+            names.append("bridge_video_push_runtime.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
         if kernel_id is None:
@@ -204,6 +211,8 @@ class KernelCommBridge:
         try:
             video_path = (root + "/bridge_video_colab_source.py"
                           if self.video_codec == "h264" else None)
+            push_path = (root + "/bridge_video_push_runtime.py"
+                         if self.video_push else None)
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
@@ -214,7 +223,9 @@ class KernelCommBridge:
                     f"'BRIDGE_VIDEO_PREFLIGHT':{self.video_codec == 'h264'!r},"
                     f"'BRIDGE_INSTALL_REMOTE_PYAV':{self.install_remote_pyav!r},"
                     f"'BRIDGE_SEQUENCE_BUFFERED':{self.sequence_buffered!r},"
-                    f"'BRIDGE_MAX_BUFFER_LAG_FRAMES':{self.max_buffer_lag_frames!r}"
+                    f"'BRIDGE_MAX_BUFFER_LAG_FRAMES':{self.max_buffer_lag_frames!r},"
+                    f"'BRIDGE_VIDEO_PUSH':{self.video_push!r},"
+                    f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.
@@ -273,6 +284,8 @@ class KernelCommBridge:
                         raise LifecycleError("remote H.264 preflight failed: code=" + code)
                     if self.video_codec == "h264" and details.get("video_codec") != "h264-annexb":
                         raise LifecycleError("kernel bridge H.264 handshake invalid")
+                    if self.video_push and details.get("video_mode") != "credit-push":
+                        raise LifecycleError("kernel push video handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:

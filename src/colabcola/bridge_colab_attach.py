@@ -63,11 +63,17 @@ def single_kernel_id(provider, session) -> str:
 def validate_attach_options(args) -> None:
     if (getattr(args, "transport", None) != "comm"
             or getattr(args, "video_codec", None) != "h264"
-            or not getattr(args, "benchmark_h264_capacity", False)
+            or not (getattr(args, "benchmark_h264_capacity", False)
+                    or getattr(args, "push_video", False))
             or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (30, 30)
             or getattr(args, "inflight", None) != 1
             or getattr(args, "confirm_allocation", False)):
         raise LifecycleError("external attach requires opt-in 30 FPS H.264 Comm capacity mode")
+    if getattr(args, "push_video", False) and (
+            not getattr(args, "sequence_buffered", False)
+            or getattr(args, "benchmark_h264_capacity", False)
+            or getattr(args, "benchmark_h264_credits", False)):
+        raise LifecycleError("push video requires external buffered H.264 without pull benchmarks")
     if not getattr(args, "preflight_only", False) and not getattr(args, "confirm_attach", False):
         raise LifecycleError("external attach requires --confirm-attach")
 
@@ -107,6 +113,7 @@ def run_attached_colab(args, provider) -> int:
             install_remote_pyav=getattr(args, "install_remote_pyav", False),
             sequence_buffered=getattr(args, "sequence_buffered", False),
             max_buffer_lag_frames=getattr(args, "renderer_lag_frames", 2),
+            video_push=getattr(args, "push_video", False),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
@@ -118,19 +125,31 @@ def run_attached_colab(args, provider) -> int:
             save(args.run_dir, state, "running", gpu_name=details["gpu"],
                  transport="comm", video_codec="h264",
                  sequence_buffered=getattr(args, "sequence_buffered", False),
-                 renderer_lag_frames=getattr(args, "renderer_lag_frames", 2))
+                 renderer_lag_frames=getattr(args, "renderer_lag_frames", 2),
+                 video_push=getattr(args, "push_video", False))
 
-            def work(outgoing, frames, stopped):
-                run_h264_capacity_sweep(
-                    peer, details["gpu"], outgoing, frames, stopped,
-                    deadline, args.poll_hz,
-                    phase_seconds=getattr(args, "h264_capacity_phase_seconds", 10),
-                )
+            push = getattr(args, "push_video", False)
+            if push:
+                from .bridge_video_push_session import run_push_comm_h264
+                def work(outgoing, frames, stopped):
+                    run_push_comm_h264(
+                        peer, details["gpu"], outgoing, frames, stopped,
+                        deadline)
+            else:
+                def work(outgoing, frames, stopped):
+                    run_h264_capacity_sweep(
+                        peer, details["gpu"], outgoing, frames, stopped,
+                        deadline, args.poll_hz,
+                        phase_seconds=getattr(args, "h264_capacity_phase_seconds", 10),
+                    )
 
             run_viewer(
                 "127.0.0.1", 0, "", width=640, height=360,
-                title="Colab Cola · existing T4 H.264 (kernel Comm)",
+                title=("Colab Cola · T4 sender-driven H.264" if push
+                       else "Colab Cola · existing T4 H.264 (kernel Comm)"),
                 worker=work, viewer_stats=getattr(args, "viewer_stats", False),
+                timestamp_local_input=push,
+                poll_interval_ms=10 if push else 30,
             )
         finally:
             try:

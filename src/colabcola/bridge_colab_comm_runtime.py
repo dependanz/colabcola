@@ -57,8 +57,13 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
           video_source_path: str | None = None, preflight_video: bool = False,
           install_remote_pyav: bool = False,
           sequence_buffered: bool = False,
-          max_buffer_lag_frames: int = 2):
+          max_buffer_lag_frames: int = 2,
+          video_push: bool = False, video_push_source_path: str | None = None):
     global BOOTSTRAP_STAGE
+    if (type(video_push) is not bool
+            or (video_push and (not sequence_buffered or not preflight_video
+                                or video_push_source_path is None))):
+        raise ValueError("push video requires sequence-buffered H.264")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int
@@ -140,10 +145,20 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         ready["failure_code"] = video_preflight_error
     elif video_source_path is not None:
         ready["video_codec"] = "h264-annexb"
+        if video_push:
+            ready["video_mode"] = "credit-push"
     comm = _create_kernel_comm(target_name=TARGET, data=ready)
     state = {"latest_input": 0, "latest_rate": 0, "last_frame": -1,
              "last_video_pull": 0, "closed": False}
     video_failed = video_preflight_error is not None
+    push_sender = None
+    if video_push and not video_failed:
+        try:
+            push_impl = runpy.run_path(video_push_source_path)
+            push_sender = push_impl["CreditPushSender"](
+                comm=comm, source=video_source, directory=root, run_id=run_id)
+        except Exception:
+            video_failed = True
 
     def on_message(message):
         nonlocal video_source, video_failed
@@ -226,7 +241,19 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                 comm.send(reply)
             except (OSError, ValueError):
                 return
-        elif kind == "video_pull" and video_source_path is not None:
+        elif kind == "video_credit" and video_push:
+            if push_sender is None or video_failed:
+                comm.send({"v": 1, "kind": "error", "run_id": run_id,
+                           "code": "push_video_unavailable"})
+                return
+            try:
+                # Credit grants must be strict and bounded. A video sender
+                # never issues a request-response pull or resets the codec.
+                push_sender.grant(event.get("count"))
+            except (ValueError, TypeError):
+                comm.send({"v": 1, "kind": "error", "run_id": run_id,
+                           "code": "push_credit_invalid"})
+        elif kind == "video_pull" and video_source_path is not None and not video_push:
             # Only an explicitly bootstrapped video session permits these
             # messages. Existing PPM Comm sessions never instantiate PyAV.
             pull_seq = event.get("pull_seq")
@@ -254,12 +281,16 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                            "pull_seq": pull_seq, "code": "video_source_unavailable"})
         elif kind == "close":
             state["closed"] = True
+            if push_sender is not None:
+                push_sender.close()
             renderer["atomic_bytes"](root / "stop", b"1")
             comm.close()
 
     BOOTSTRAP_STAGE = "registering_handler"
     comm.on_msg(on_message)
     BOOTSTRAP_STAGE = "ready"
+    if push_sender is not None:
+        push_sender.start()
     return comm
 
 
@@ -270,7 +301,9 @@ if __name__ == "__main__":
               preflight_video=globals().get("BRIDGE_VIDEO_PREFLIGHT", False) is True,
               install_remote_pyav=globals().get("BRIDGE_INSTALL_REMOTE_PYAV", False) is True,
               sequence_buffered=globals().get("BRIDGE_SEQUENCE_BUFFERED", False) is True,
-              max_buffer_lag_frames=globals().get("BRIDGE_MAX_BUFFER_LAG_FRAMES", 2))
+              max_buffer_lag_frames=globals().get("BRIDGE_MAX_BUFFER_LAG_FRAMES", 2),
+              video_push=globals().get("BRIDGE_VIDEO_PUSH", False) is True,
+              video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"))
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise
