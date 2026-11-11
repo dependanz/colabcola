@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import base64
 import hmac
+import json
 import math
 import os
 import queue
@@ -339,7 +340,9 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                     label.image = image
                     configured_ns = time.perf_counter_ns()
                     if gui_meter is not None:
-                        gui_meter.presented((time.perf_counter() - image_started) * 1000)
+                        gui_meter.presented(
+                            (time.perf_counter() - image_started) * 1000,
+                            configured_ns=configured_ns)
                         if timing is not None:
                             gui_meter.configured_timed_frame(timing, configured_ns)
                     if status.get() == "Connecting...":
@@ -379,6 +382,15 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     root.mainloop()
     stopped.set()
     thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
+    if gui_meter is not None:
+        # The full-session result pools actual GUI observations, not
+        # reporting-window medians. Never interrupt cleanup on log errors.
+        summary = json.dumps(gui_meter.session_summary(time.monotonic()),
+                             sort_keys=True, allow_nan=False)
+        try:
+            print("[colabcola] v35 GUI session " + summary, flush=True)
+        except (OSError, UnicodeError):
+            pass
     if failures:
         raise failures[0]
 
@@ -408,8 +420,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
     remote.add_argument("--push-video", action="store_true",
                         help="v34 opt-in: sender-driven bounded H.264 Comm")
-    remote.add_argument("--push-credits", type=int, choices=(4, 6, 8),
-                        default=4, help="v34C opt-in push window, 4 (default), 6, or 8")
+    remote.add_argument("--push-credits", type=int,
+                        choices=(4, 6, 8, 10, 12), default=4,
+                        help="push credit window; 30Hz: 4/6/8, opt-in 60Hz: 8/10/12")
     remote.add_argument("--renderer-lag-frames", type=int, choices=(0, 1, 2),
                         default=2,
                         help="v33w opt-in buffered-mode frame freshness bound (default 2)")
@@ -455,12 +468,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.attach_existing:
                 if (args.transport != "comm" or args.video_codec != "h264"
                         or not (args.benchmark_h264_capacity or args.push_video)
-                        or (args.fps, args.poll_hz) != (30, 30)
+                        or not ((args.push_video and
+                                 (args.fps, args.poll_hz) in ((30, 30), (60, 60)))
+                                or (args.benchmark_h264_capacity and
+                                    (args.fps, args.poll_hz) == (30, 30)))
                         or args.inflight not in (None, 1)
                         or args.confirm_allocation
                         or (not args.preflight_only and not args.confirm_attach)):
-                    parser.error("external attach requires Comm H.264 30 FPS capacity sweep, "
-                                 "--confirm-attach (unless preflight-only), and NO allocation flag")
+                    parser.error("external attach requires approved 30Hz pull sweep "
+                                 "or 30/60Hz push, explicit confirmation, and no allocation")
                 if args.renderer_lag_frames != 2 and not args.sequence_buffered:
                     parser.error("--renderer-lag-frames 0/1 requires --sequence-buffered")
                 if args.push_video and (not args.sequence_buffered
@@ -469,7 +485,11 @@ def main(argv: list[str] | None = None) -> int:
                         or args.probe_link):
                     parser.error("push-video requires external sequence-buffered Comm without pull benchmarks")
                 if args.push_credits != 4 and not args.push_video:
-                    parser.error("--push-credits 6/8 requires --push-video")
+                    parser.error("--push-credits >4 requires --push-video")
+                if args.push_video and (
+                        (args.fps == 30 and args.push_credits not in (4, 6, 8))
+                        or (args.fps == 60 and args.push_credits not in (8, 10, 12))):
+                    parser.error("30Hz push needs 4/6/8 credits; 60Hz push needs 8/10/12")
             elif (args.confirm_attach or args.sequence_buffered or args.push_video
                   or args.renderer_lag_frames != 2 or args.push_credits != 4):
                 parser.error("attach/sequence-buffered/push-video flags require --attach-existing")
@@ -488,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("H.264 video requires --transport comm --inflight 1 or 2, without benchmarks/probe")
             if args.install_remote_pyav and args.video_codec != "h264":
                 parser.error("--install-remote-pyav requires --video-codec h264")
-            max_rate = 60 if args.benchmark_h264_capacity else 30 if args.push_video else 12
+            max_rate = 60 if (args.benchmark_h264_capacity or args.push_video) else 12
             max_poll_hz = max_rate if args.transport == "comm" else 6
             if not 1 <= args.fps <= max_rate or not 1 <= args.poll_hz <= max_poll_hz:
                 parser.error(

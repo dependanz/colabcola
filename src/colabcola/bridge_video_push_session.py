@@ -12,7 +12,7 @@ from statistics import median
 import time
 
 from .bridge_colab import offer_update
-from .bridge_viewer_stats import LocalFrameTiming
+from .bridge_viewer_stats import LocalFrameTiming, pooled_percentiles
 from .bridge_video_comm_pipeline import validated_remote_video_diagnostics
 from .bridge_video_comm_protocol import (
     MAX_PULL_SEQ, VideoCommProtocolError, VideoSequenceGate,
@@ -22,7 +22,7 @@ from .bridge_video_comm_session import WIDTH, HEIGHT, make_host_decoder
 from .lifecycle_io import LifecycleError
 
 PUSH_CREDITS = 4
-PUSH_CREDIT_CHOICES = (4, 6, 8)
+PUSH_CREDIT_CHOICES = (4, 6, 8, 10, 12)
 PUSH_RECEIVE_WATCHDOG_S = 12.0
 MAX_INPUT_PENDING = 128
 
@@ -86,6 +86,11 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
         raise ValueError("invalid sender-driven credit configuration")
     if getattr(peer, "push_credits", credits) != credits:
         raise LifecycleError("push credit configuration mismatch")
+    target_fps = getattr(peer, "fps", 30)
+    if (type(target_fps) is not int or target_fps not in (30, 60)
+            or (target_fps == 30 and credits not in (4, 6, 8))
+            or (target_fps == 60 and credits not in (8, 10, 12))):
+        raise LifecycleError("invalid push FPS/credit pairing")
     if (getattr(peer, "video_push", False) is not True
             or getattr(peer, "video_codec", None) != "h264"
             or peer.wire is None or not peer.wire.connection_ready.is_set()):
@@ -234,6 +239,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             "last_renderer_seq": last_renderer_seq,
             "renderer_frames_skipped_total": renderer_skipped,
             "configured_credits": credits,
+            "target_fps": target_fps,
             "producer_windows_observed": len(producer_windows),
             "producer_renderer_fps_p50": (
                 round(median(w["renderer_fps"] for w in producer_windows.values()), 3)
@@ -247,13 +253,13 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             "host_receive_interval_max_ms": (
                 round(max(receive_interval_ms), 2)
                 if receive_interval_ms else None),
+            **{f"host_receive_interval_{key}_ms": value
+               for key, value in pooled_percentiles(receive_interval_ms).items()},
             "input_to_decoded_observations": input_observations,
-            "input_callback_to_receive_p50_ms": (
-                round(median(first_receive_input_ms), 2)
-                if first_receive_input_ms else None),
-            "input_callback_to_decode_p50_ms": (
-                round(median(first_decode_input_ms), 2)
-                if first_decode_input_ms else None),
+            **{f"input_callback_to_receive_{key}_ms": value
+               for key, value in pooled_percentiles(first_receive_input_ms).items()},
+            **{f"input_callback_to_decode_{key}_ms": value
+               for key, value in pooled_percentiles(first_decode_input_ms).items()},
             "renderer_buffer_lag_p50_frames": (
                 median(renderer_lags) if renderer_lags else None),
             "timing_scope": "host callback to host frame receive; Tk configuration reported separately; no physical scanout claim",

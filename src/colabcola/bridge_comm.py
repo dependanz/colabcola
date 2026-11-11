@@ -112,9 +112,13 @@ class KernelCommBridge:
         if (type(video_push) is not bool
                 or (video_push and not sequence_buffered)):
             raise ValueError("push requires buffered H.264")
-        if (type(push_credits) is not int or push_credits not in (4, 6, 8)
-                or (not video_push and push_credits != 4)):
-            raise ValueError("push credit window only applies to external push")
+        if (type(push_credits) is not int or push_credits not in (4, 6, 8, 10, 12)
+                or (not video_push and push_credits != 4)
+                or (video_push and
+                    ((fps == 30 and push_credits not in (4, 6, 8))
+                     or (fps == 60 and push_credits not in (8, 10, 12))
+                     or fps not in (30, 60)))):
+            raise ValueError("push credit window requires matching 30/60 FPS mode")
         self.video_push = video_push
         self.push_credits = push_credits
         self.max_buffer_lag_frames = max_buffer_lag_frames

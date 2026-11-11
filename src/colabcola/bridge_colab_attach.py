@@ -65,19 +65,29 @@ def validate_attach_options(args) -> None:
             or getattr(args, "video_codec", None) != "h264"
             or not (getattr(args, "benchmark_h264_capacity", False)
                     or getattr(args, "push_video", False))
-            or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (30, 30)
+            or not (
+                (getattr(args, "push_video", False) and
+                 (getattr(args, "fps", None), getattr(args, "poll_hz", None))
+                 in ((30, 30), (60, 60)))
+                or (getattr(args, "benchmark_h264_capacity", False) and
+                    (getattr(args, "fps", None), getattr(args, "poll_hz", None))
+                    == (30, 30)))
             or getattr(args, "inflight", None) != 1
             or getattr(args, "confirm_allocation", False)):
-        raise LifecycleError("external attach requires opt-in 30 FPS H.264 Comm capacity mode")
+        raise LifecycleError("external attach requires 30Hz pull sweep or 30/60Hz push H.264 Comm")
     if getattr(args, "push_video", False) and (
             not getattr(args, "sequence_buffered", False)
             or getattr(args, "benchmark_h264_capacity", False)
             or getattr(args, "benchmark_h264_credits", False)):
         raise LifecycleError("push video requires external buffered H.264 without pull benchmarks")
     credits = getattr(args, "push_credits", 4)
-    if (type(credits) is not int or credits not in (4, 6, 8)
-            or (not getattr(args, "push_video", False) and credits != 4)):
-        raise LifecycleError("invalid external push credit window")
+    fps = getattr(args, "fps", None)
+    if (type(credits) is not int or credits not in (4, 6, 8, 10, 12)
+            or (not getattr(args, "push_video", False) and credits != 4)
+            or (getattr(args, "push_video", False) and
+                ((fps == 30 and credits not in (4, 6, 8))
+                 or (fps == 60 and credits not in (8, 10, 12))))):
+        raise LifecycleError("invalid external push FPS/credit window")
     if not getattr(args, "preflight_only", False) and not getattr(args, "confirm_attach", False):
         raise LifecycleError("external attach requires --confirm-attach")
 
@@ -131,6 +141,7 @@ def run_attached_colab(args, provider) -> int:
                  transport="comm", video_codec="h264",
                  sequence_buffered=getattr(args, "sequence_buffered", False),
                  renderer_lag_frames=getattr(args, "renderer_lag_frames", 2),
+                 target_fps=args.fps,
                  video_push=getattr(args, "push_video", False),
                  push_credits=getattr(args, "push_credits", 4))
 
@@ -155,7 +166,8 @@ def run_attached_colab(args, provider) -> int:
                        else "Colab Cola · existing T4 H.264 (kernel Comm)"),
                 worker=work, viewer_stats=getattr(args, "viewer_stats", False),
                 timestamp_local_input=push,
-                poll_interval_ms=10 if push else 30,
+                poll_interval_ms=(5 if push and args.fps == 60
+                                  else 10 if push else 30),
             )
         finally:
             try:

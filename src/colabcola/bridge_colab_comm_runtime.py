@@ -65,9 +65,13 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             or (video_push and (not sequence_buffered or not preflight_video
                                 or video_push_source_path is None))):
         raise ValueError("push video requires sequence-buffered H.264")
-    if (type(push_credits) is not int or push_credits not in (4, 6, 8)
-            or (not video_push and push_credits != 4)):
-        raise ValueError("invalid sender credit configuration")
+    if (type(push_credits) is not int or push_credits not in (4, 6, 8, 10, 12)
+            or (not video_push and push_credits != 4)
+            or (video_push and
+                ((fps == 30 and push_credits not in (4, 6, 8))
+                 or (fps == 60 and push_credits not in (8, 10, 12))
+                 or fps not in (30, 60)))):
+        raise ValueError("invalid sender FPS/credit pairing")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int

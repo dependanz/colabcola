@@ -12,7 +12,7 @@ import time
 
 DEFAULT_PUSH_CREDITS = 4
 # Experimental bounds; larger windows may increase queued-video age.
-PUSH_CREDIT_CHOICES = (4, 6, 8)
+PUSH_CREDIT_CHOICES = (4, 6, 8, 10, 12)
 MAX_PUSH_CREDITS = DEFAULT_PUSH_CREDITS  # backward-compatible default
 _FRAME_HEADER = struct.Struct("!4sIIII")
 
