@@ -1,0 +1,42 @@
+name: Regression tests
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - ci/portable-regression-tests
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Python 3.12 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Colab Cola and test dependencies
+        run: python -m pip install -e . pytest ipykernel
+      - name: Verify installed package environment
+        run: python -m pip check
+      - name: Run full regression suite
+        run: python -m pytest -q -rs
