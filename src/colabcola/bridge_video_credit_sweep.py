@@ -407,6 +407,9 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                             if getattr(peer, "external_attachment", False)
                             else "one bridge-owned Colab runtime with one Comm; ")
                            + "host request/receive/decode and Tk configuration, not network bytes or input-to-photon latency"}
+        if getattr(peer, "sequence_buffered", False):
+            report["configured_renderer_lag_frames"] = getattr(
+                peer, "max_buffer_lag_frames", 2)
         print("[colabcola] H.264 sweep result " + json.dumps(report, sort_keys=True), flush=True)
         return report
     except Exception as exc:

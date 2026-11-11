@@ -398,6 +398,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="authorize bridge code upload and execution in the existing notebook kernel")
     remote.add_argument("--sequence-buffered", action="store_true",
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
+    remote.add_argument("--renderer-lag-frames", type=int, choices=(0, 1, 2),
+                        default=2,
+                        help="v33w opt-in buffered-mode frame freshness bound (default 2)")
     remote.add_argument("--gpu", choices=("T4",), default="T4")
     remote.add_argument("--transport", choices=("files", "comm"), default="files",
                         help="files=proven authenticated polling, comm=experimental persistent Jupyter websocket")
@@ -446,8 +449,10 @@ def main(argv: list[str] | None = None) -> int:
                         or (not args.preflight_only and not args.confirm_attach)):
                     parser.error("external attach requires Comm H.264 30 FPS capacity sweep, "
                                  "--confirm-attach (unless preflight-only), and NO allocation flag")
-            elif args.confirm_attach or args.sequence_buffered:
-                parser.error("--confirm-attach and --sequence-buffered require --attach-existing")
+                if args.renderer_lag_frames != 2 and not args.sequence_buffered:
+                    parser.error("--renderer-lag-frames 0/1 requires --sequence-buffered")
+            elif args.confirm_attach or args.sequence_buffered or args.renderer_lag_frames != 2:
+                parser.error("attach/sequence-buffered/renderer-lag flags require --attach-existing")
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")
             # Two credits are live-verified for ordinary Comm streaming,

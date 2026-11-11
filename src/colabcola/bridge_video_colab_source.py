@@ -162,7 +162,8 @@ MAX_BUFFER_LAG_FRAMES = 2  # preserve near-real-time interaction freshness
 
 
 def read_next_buffered_rgb(directory: Path, *, after_seq: int | None,
-                           width: int = WIDTH, height: int = HEIGHT):
+                           width: int = WIDTH, height: int = HEIGHT,
+                           max_lag_frames: int = MAX_BUFFER_LAG_FRAMES):
     """Read one distinct, sequence-increasing snapshot from an eight-slot ring.
 
     Scan only fixed slot headers; validate the selected payload with the same
@@ -170,6 +171,8 @@ def read_next_buffered_rgb(directory: Path, *, after_seq: int | None,
     a candidate, in which case it is skipped rather than replayed. No file
     polling waits or unbounded accumulation is introduced.
     """
+    if type(max_lag_frames) is not int or not 0 <= max_lag_frames <= 2:
+        raise RemoteVideoSourceError("invalid renderer lag bound")
     candidates = []
     for slot in range(RING_SLOTS):
         path = directory / f"frame-ring-{slot:02d}.bin"
@@ -189,10 +192,10 @@ def read_next_buffered_rgb(directory: Path, *, after_seq: int | None,
         return None
     newest = max(seq for seq, _ in candidates)
     # A queue can improve delivered FPS while silently adding latency.
-    # Retain only two older frames for jitter absorption; explicitly count
-    # stale frames skipped in favor of current interaction response.
+    # A controlled freshness experiment chooses 0, 1, or 2 older frames.
+    # Stale frames outside that cap are skipped before encoding.
     candidates = [(seq, path) for seq, path in candidates
-                  if seq >= newest - MAX_BUFFER_LAG_FRAMES]
+                  if seq >= newest - max_lag_frames]
     candidates.sort(key=lambda item: item[0], reverse=after_seq is None)
     for seq, path in candidates:
         try:
@@ -262,7 +265,8 @@ class RemoteH264PullSource:
 
     def __init__(self, directory: str | Path, run_id: str, *, fps: int,
                  width: int = WIDTH, height: int = HEIGHT, encoder_factory=None,
-                 sequence_buffered: bool = False):
+                 sequence_buffered: bool = False,
+                 max_buffer_lag_frames: int = MAX_BUFFER_LAG_FRAMES):
         if (not isinstance(run_id, str) or len(run_id) != 32
                 or type(fps) is not int or not 1 <= fps <= 60
                 or (width, height) != (WIDTH, HEIGHT)):
@@ -273,6 +277,12 @@ class RemoteH264PullSource:
         self.width, self.height = width, height
         if type(sequence_buffered) is not bool:
             raise RemoteVideoSourceError("invalid sequence-buffered selector")
+        if (type(max_buffer_lag_frames) is not int
+                or not 0 <= max_buffer_lag_frames <= 2
+                or (not sequence_buffered and
+                    max_buffer_lag_frames != MAX_BUFFER_LAG_FRAMES)):
+            raise RemoteVideoSourceError("invalid renderer lag mode")
+        self.max_buffer_lag_frames = max_buffer_lag_frames
         self.sequence_buffered = sequence_buffered
         self.last_renderer_seq = None
         self.encoder = (encoder_factory or _make_encoder)(width, height, fps)
@@ -296,7 +306,8 @@ class RemoteH264PullSource:
             if self.sequence_buffered:
                 candidate = read_next_buffered_rgb(
                     self.directory, after_seq=self.last_renderer_seq,
-                    width=self.width, height=self.height)
+                    width=self.width, height=self.height,
+                    max_lag_frames=self.max_buffer_lag_frames)
                 if candidate is None:
                     # A positive, correlated response releases the host credit.
                     # No encoder call or video sequence increment occurs; the

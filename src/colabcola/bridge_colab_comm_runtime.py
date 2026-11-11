@@ -56,10 +56,15 @@ TARGET = "colabcola.bridge.v1"
 def start(directory: str, run_id: str, fps: int, renderer_path: str,
           video_source_path: str | None = None, preflight_video: bool = False,
           install_remote_pyav: bool = False,
-          sequence_buffered: bool = False):
+          sequence_buffered: bool = False,
+          max_buffer_lag_frames: int = 2):
     global BOOTSTRAP_STAGE
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
+    if (type(max_buffer_lag_frames) is not int
+            or not 0 <= max_buffer_lag_frames <= 2
+            or (not sequence_buffered and max_buffer_lag_frames != 2)):
+        raise ValueError("invalid renderer lag mode")
     if install_remote_pyav and (not preflight_video or video_source_path is None):
         raise ValueError("remote PyAV installation requires video preflight")
     root = Path(directory)
@@ -106,7 +111,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                     source["provision_remote_pyav"]()
                 video_source = source["RemoteH264PullSource"](
                     root, run_id, fps=fps, width=640, height=360,
-                    **({"sequence_buffered": True} if sequence_buffered else {}))
+                    **({"sequence_buffered": True,
+                         "max_buffer_lag_frames": max_buffer_lag_frames}
+                        if sequence_buffered else {}))
             except Exception as exc:
                 # Match ONLY our own fixed messages. Never send arbitrary
                 # exception content, paths, tokens or tracebacks over Comm.
@@ -234,7 +241,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                     source = runpy.run_path(video_source_path)
                     video_source = source["RemoteH264PullSource"](
                         root, run_id, fps=fps, width=640, height=360,
-                    **({"sequence_buffered": True} if sequence_buffered else {}))
+                    **({"sequence_buffered": True,
+                         "max_buffer_lag_frames": max_buffer_lag_frames}
+                        if sequence_buffered else {}))
                 reply = video_source.pull(pull_seq)
                 comm.send(reply)
             except Exception:
@@ -260,7 +269,8 @@ if __name__ == "__main__":
               video_source_path=globals().get("BRIDGE_VIDEO_SOURCE_PATH"),
               preflight_video=globals().get("BRIDGE_VIDEO_PREFLIGHT", False) is True,
               install_remote_pyav=globals().get("BRIDGE_INSTALL_REMOTE_PYAV", False) is True,
-              sequence_buffered=globals().get("BRIDGE_SEQUENCE_BUFFERED", False) is True)
+              sequence_buffered=globals().get("BRIDGE_SEQUENCE_BUFFERED", False) is True,
+              max_buffer_lag_frames=globals().get("BRIDGE_MAX_BUFFER_LAG_FRAMES", 2))
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise
