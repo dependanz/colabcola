@@ -49,6 +49,9 @@ class T4AcceptanceRecipeTests(unittest.TestCase):
                              "outputs/checkpoints/state-*.json")
             self.assertEqual(packaged["managed_recovery"]["log_patterns"],
                              ["outputs/progress.ndjson"])
+            self.assertEqual(json.loads(
+                (job.with_suffix(".files") / "_colabcola" / "commands.json").read_text()
+            )["resume_arg"], "--resume-manifest")
             self.assertEqual(packaged["resources"]["accelerator"], "gpu")
             self.assertEqual(packaged["python"]["runtime_requirements"], ["torch"])
             self.assertEqual(packaged["outputs"][0]["pattern"],
@@ -83,6 +86,33 @@ class T4AcceptanceRecipeTests(unittest.TestCase):
                 data = manifest_path.with_name(m["file"]).read_bytes()
                 self.assertEqual(len(data), m["bytes"])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), m["sha256"])
+
+    def test_cpu_smoke_can_resume_verified_checkpoint_in_fresh_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = Path(root) / "first"
+            second = Path(root) / "second"
+            first.mkdir()
+            second.mkdir()
+            command = [sys.executable, str(PROBE), "--cpu-smoke",
+                       "--pulse-seconds", "0.5", "--progress-seconds", "0.5",
+                       "--checkpoint-seconds", "1"]
+            a = subprocess.run(command + ["--duration-seconds", "2"],
+                               cwd=first, capture_output=True, text=True, timeout=15)
+            self.assertEqual(a.returncode, 0, a.stderr)
+            manifests = sorted((first / "outputs/checkpoints").glob("*.json"))
+            self.assertTrue(manifests)
+            latest = manifests[-1]
+            b = subprocess.run(command + ["--duration-seconds", "4",
+                                           "--resume-manifest", str(latest)],
+                               cwd=second, capture_output=True, text=True, timeout=15)
+            self.assertEqual(b.returncode, 0, b.stderr)
+            result = json.loads((second / "outputs/acceptance.json").read_text())
+            self.assertEqual(result["mode"], "cpu-smoke")
+            self.assertEqual(result["resumed_from_step"],
+                             json.loads(latest.read_text())["step"])
+            self.assertGreaterEqual(result["elapsed_seconds"], 4)
+            self.assertLess(result["segment_elapsed_seconds"], 4)
+            self.assertGreater(result["checkpoint_count"], result["resumed_from_step"])
 
     def test_cpu_smoke_cannot_be_used_for_long_run(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -10,6 +10,8 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
+import re
 import os
 from pathlib import Path
 import time
@@ -72,12 +74,36 @@ def _checkpoint(directory: Path, number: int, elapsed: float, pulses: int):
             (json.dumps(manifest, sort_keys=True) + "\n").encode("utf-8"))
 
 
+def _load_resume(manifest_path, duration):
+    manifest_path = Path(manifest_path)
+    record = json.loads(manifest_path.read_text(encoding="utf-8"))
+    name = record.get("file")
+    if (not isinstance(name, str) or re.fullmatch(r"state-[0-9]{4}.bin", name) is None
+            or record.get("schema") != 1 or type(record.get("step")) is not int
+            or record["step"] <= 0 or type(record.get("bytes")) is not int):
+        raise RuntimeError("invalid resume manifest")
+    data = (manifest_path.parent / name).read_bytes()
+    if (len(data) != record["bytes"]
+            or hashlib.sha256(data).hexdigest() != record.get("sha256")):
+        raise RuntimeError("resume payload hash/length mismatch")
+    value = json.loads(data)
+    elapsed = value.get("elapsed_seconds")
+    pulses = value.get("gpu_pulses")
+    if (value.get("schema") != 1 or value.get("step") != record["step"]
+            or type(elapsed) not in (float, int) or not math.isfinite(elapsed)
+            or not 0 <= elapsed < duration
+            or type(pulses) is not int or pulses < 0):
+        raise RuntimeError("resume payload contents invalid")
+    return float(elapsed), pulses, record["step"]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration-seconds", type=float, required=True)
     parser.add_argument("--pulse-seconds", type=float, default=10.0)
     parser.add_argument("--progress-seconds", type=float, default=30.0)
     parser.add_argument("--checkpoint-seconds", type=float, default=300.0)
+    parser.add_argument("--resume-manifest")
     parser.add_argument("--cpu-smoke", action="store_true")
     args = parser.parse_args(argv)
     if (not 1 <= args.duration_seconds <= 3600
@@ -90,6 +116,9 @@ def main(argv=None):
     if not args.cpu_smoke and args.duration_seconds < 2400:
         parser.error("live acceptance requires at least 2400 seconds")
 
+    base_elapsed, prior_pulses, prior_checkpoints = (
+        _load_resume(args.resume_manifest, args.duration_seconds)
+        if args.resume_manifest else (0.0, 0, 0))
     output = Path("outputs")
     if output.exists():
         raise RuntimeError("refusing to reuse an existing output directory")
@@ -98,12 +127,12 @@ def main(argv=None):
 
     start_wall = _utc()
     started = time.monotonic()
-    pulses = reports = checkpoints = 0
-    next_pulse = next_report = 0.0
-    next_checkpoint = args.checkpoint_seconds
+    pulses, reports, checkpoints = prior_pulses, 0, prior_checkpoints
+    next_pulse = next_report = base_elapsed
+    next_checkpoint = base_elapsed + args.checkpoint_seconds
     progress = output / "progress.ndjson"
     while True:
-        elapsed = time.monotonic() - started
+        elapsed = base_elapsed + time.monotonic() - started
         if elapsed >= args.duration_seconds:
             break
         if elapsed >= next_pulse:
@@ -127,7 +156,8 @@ def main(argv=None):
             next_checkpoint = elapsed + args.checkpoint_seconds
         time.sleep(0.20)
 
-    elapsed = time.monotonic() - started
+    segment_seconds = time.monotonic() - started
+    elapsed = base_elapsed + segment_seconds
     if elapsed < args.duration_seconds:
         raise RuntimeError("acceptance clock ended early")
     # A final immutable state snapshot is useful even when the exact interval
@@ -136,9 +166,12 @@ def main(argv=None):
     _checkpoint(output / "checkpoints", checkpoints, elapsed, pulses)
     summary = {
         "schema": 1, "probe": "colabcola-t4-lifecycle-40min",
-        "mode": "cpu-smoke" if args.cpu_smoke else "t4-live",
+        "mode": ("cpu-smoke" if args.cpu_smoke else
+                 "t4-recovery" if args.resume_manifest else "t4-live"),
         "requested_seconds": args.duration_seconds,
         "elapsed_seconds": elapsed,
+        "segment_elapsed_seconds": segment_seconds,
+        "resumed_from_step": prior_checkpoints if args.resume_manifest else None,
         "started_at": start_wall, "finished_at": _utc(),
         "cuda_device": name, "gpu_pulses": pulses,
         "progress_observations": reports, "checkpoint_count": checkpoints,

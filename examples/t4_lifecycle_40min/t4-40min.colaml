@@ -20,6 +20,7 @@ minimum_gpu_memory_gib = 14
 [outputs]
 include = ["outputs/acceptance.json"]
 checkpoints = ["outputs/checkpoints/state-*.json"]
+resume_arg = "--resume-manifest"
 logs = ["outputs/progress.ndjson"]
 maximum_bytes = 1048576
 
