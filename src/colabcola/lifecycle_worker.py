@@ -350,7 +350,8 @@ def _execution_log_tail(control_root, limit=65536):
 
 def log_members(result_root, job_root, patterns, *, control_root=None):
     logs = {}
-    for name in ("stdout.log", "stderr.log", "environment.log", "transfer.log"):
+    for name in ("stdout.log", "stderr.log", "environment.log", "transfer.log",
+                 "storage-assessment.json"):
         if (result_root / name).is_file():
             logs["runtime/" + name] = read_regular(result_root, name, 8 * 1024 * 1024)
     for pattern in patterns:
