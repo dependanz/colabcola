@@ -1438,6 +1438,12 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                         if remote_have and remote_status == 206:
                             remote_mode = "ab"
                         elif remote_status == 200:
+                            if remote_have:
+                                # The server ignored Range. Drop the incomplete
+                                # file and re-admit the entire declared length.
+                                remote_partial.unlink()
+                                _colabcola_remote_space(
+                                    remote_total_bytes - remote_verified_bytes)
                             remote_have = 0
                             remote_digest = hashlib.sha256()
                             remote_mode = "wb"
