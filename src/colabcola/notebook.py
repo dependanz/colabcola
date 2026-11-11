@@ -141,7 +141,10 @@ def _notebook_document(bundle: Bundle, chunks: tuple[str, ...]) -> dict[str, obj
         cells.append(_payload_cell(chunk, index=index, total=len(chunks), raw_size=raw_size))
     cells.extend(
         _code_cell(source, group=group)
-        for group, source in runtime_cell_sources(isolated=bool(manifest["python"].get("isolation")))
+        for group, source in runtime_cell_sources(
+            isolated=bool(manifest["python"].get("isolation")),
+            remote_inputs=bool(manifest.get("remote_inputs")),
+        )
     )
 
     return {

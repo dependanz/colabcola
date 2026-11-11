@@ -1538,24 +1538,24 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST["python"].get("isola
 '''
 
 
-def runtime_cell_sources(*, isolated=False) -> tuple[tuple[str, str], ...]:
-    """Return ordered group labels and stable code-cell source strings."""
-
+def runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+    """Preserve cell groups while omitting unused remote-input code."""
+    remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
-        ("extraction", (_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else _REMOTE_INPUTS_SOURCE)).strip()),
-        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + _REMOTE_INPUTS_SOURCE if isolated else "")).strip()),
+        ("extraction", (_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
+        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + remote if isolated else "")).strip()),
         ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _EXECUTION_SOURCE).strip()),
     )
 
 
-def drive_runtime_cell_sources(*, isolated=False) -> tuple[tuple[str, str], ...]:
-    """Return the Drive controller's ordered runtime cell groups."""
-
+def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+    """Preserve controller cell groups while omitting unused download code."""
+    remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
         ("acquisition", _DRIVE_ACQUISITION_SOURCE.strip()),
-        ("extraction", (_DRIVE_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else _REMOTE_INPUTS_SOURCE)).strip()),
-        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + _REMOTE_INPUTS_SOURCE if isolated else "")).strip()),
+        ("extraction", (_DRIVE_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
+        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + remote if isolated else "")).strip()),
         ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _EXECUTION_SOURCE).strip()),
     )

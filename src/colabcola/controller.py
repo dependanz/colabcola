@@ -185,7 +185,10 @@ def _controller_document(
     ]
     cells.extend(
         _code_cell(source, group=group)
-        for group, source in drive_runtime_cell_sources(isolated=bool(manifest["python"].get("isolation")))
+        for group, source in drive_runtime_cell_sources(
+            isolated=bool(manifest["python"].get("isolation")),
+            remote_inputs=bool(manifest.get("remote_inputs")),
+        )
     )
     return {
         "cells": cells,
