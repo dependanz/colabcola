@@ -17,6 +17,8 @@ import time
 import uuid
 import zlib
 
+from requests.exceptions import ReadTimeout
+
 from .bridge_demo import run_viewer
 from .bridge_telemetry import BridgeTransferMeter
 from .lifecycle_io import LifecycleError, atomic
@@ -340,7 +342,21 @@ def run_colab(args) -> int:
                 deadline = time.monotonic() + args.max_seconds
                 try:
                     print("[colabcola] Allocating managed Tesla T4...", flush=True)
-                    endpoint = provider.allocate(state["allocation_id"], "T4")
+                    try:
+                        endpoint = provider.allocate(state["allocation_id"], "T4")
+                    except ReadTimeout:
+                        # An allocation POST may have succeeded without a response.
+                        # Do not retry or expose provider URLs, credentials, or tokens.
+                        save(args.run_dir, state, "allocating",
+                             allocation_failure="provider_read_timeout",
+                             allocation_failure_stage="assignment",
+                             allocation_failed_at=time.time())
+                        print("[colabcola] Provider assignment timed out; outcome unknown. "
+                              "Reconciliation and owned cleanup follow; no retry attempted.",
+                              flush=True)
+                        raise LifecycleError(
+                            "Colab assignment response timed out; allocation outcome uncertain"
+                        ) from None
                     save(args.run_dir, state, "allocated", endpoint=endpoint)
                     print("[colabcola] T4 allocated; starting remote CUDA renderer", flush=True)
                     session = wait_for_session(provider, endpoint, min(deadline, time.monotonic() + 90))
