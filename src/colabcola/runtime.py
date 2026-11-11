@@ -206,6 +206,7 @@ try:
         _COLABCOLA_RUNTIME_FACTS["gpus"], _COLABCOLA_RUNTIME_FACTS["cuda_available"])
     hardware.update(job_id=COLABCOLA_JOB_ID, run_id=globals().get("COLABCOLA_RUN_ID"),
                     attempt=globals().get("COLABCOLA_ATTEMPT"), allocation_id=globals().get("COLABCOLA_ALLOCATION_ID"))
+    hardware["host_memory"] = _colabcola_boot_memory()
     _COLABCOLA_RUNTIME_FACTS["resource_check"] = hardware
     temporary = COLABCOLA_RESULT_ROOT / "hardware.json.tmp"
     temporary.write_text(json.dumps(hardware, sort_keys=True) + "\n", encoding="utf-8")
@@ -1310,6 +1311,67 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
     class _ColabcolaRemoteDiskError(RuntimeError):
         pass
 
+    remote_cache = {"window_bytes": 64 * 1024 ** 2, "sync_calls": 0,
+                    "advice_calls": 0, "advice_errors": 0,
+                    "advice_supported": hasattr(os, "posix_fadvise")}
+
+    def _colabcola_scratch_assessment(total_bytes, candidates=(
+            "/mnt/local-scratch", "/mnt/data", "/scratch")):
+        """Read-only capacity comparison; never relocate, symlink or mount data."""
+        import stat
+        required = total_bytes + 1024 ** 3
+        record = {"schema": 1, "mode": "diagnostic_only",
+                  "required_bytes_including_margin": required,
+                  "job_free_bytes": None, "candidates": []}
+        try:
+            job_device = os.stat(COLABCOLA_JOB_ROOT).st_dev
+            record["job_free_bytes"] = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
+        except OSError:
+            job_device = None
+        for name in candidates:
+            candidate = pathlib.Path(name)
+            # Only fixed absolute candidates. Never resolve symlinks, write,
+            # create directories or change the workload's visible paths.
+            if not candidate.is_absolute():
+                continue
+            try:
+                metadata = os.lstat(candidate)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    continue
+                free = shutil.disk_usage(candidate).free
+                record["candidates"].append({
+                    "path": name, "free_bytes": free,
+                    "different_device": (
+                        metadata.st_dev != job_device if job_device is not None else None),
+                    "capacity_sufficient": free >= required})
+            except OSError:
+                continue
+        return record
+
+    def _colabcola_remote_space(remaining):
+        free = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
+        if free < remaining + 1024 ** 3:
+            raise _ColabcolaRemoteDiskError(
+                "insufficient free disk for remote inputs: need " + str(remaining)
+                + " bytes plus a 1 GiB margin, have " + str(free))
+
+    def _colabcola_remote_advise(fd, start, end):
+        if end <= start or not remote_cache["advice_supported"]:
+            return
+        try:
+            os.posix_fadvise(fd, start, end - start, os.POSIX_FADV_DONTNEED)
+            remote_cache["advice_calls"] += 1
+        except OSError:
+            remote_cache["advice_errors"] += 1
+
+    def _colabcola_remote_sync(stream, start):
+        stream.flush()
+        (os.fdatasync if hasattr(os, "fdatasync") else os.fsync)(stream.fileno())
+        remote_cache["sync_calls"] += 1
+        end = stream.tell()
+        _colabcola_remote_advise(stream.fileno(), start, end)
+        return end
+
     _COLABCOLA_REMOTE_RETRYABLE = (
         urllib.error.URLError,
         http.client.HTTPException,
@@ -1350,14 +1412,12 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
         remote_verified_bytes = 0
         remote_entries = COLABCOLA_MANIFEST["remote_inputs"]
         remote_total_bytes = sum(int(entry["bytes"]) for entry in remote_entries)
-        remote_free_bytes = shutil.disk_usage(COLABCOLA_JOB_ROOT).free
-        if remote_free_bytes < remote_total_bytes + 1024 ** 3:
-            raise _ColabcolaRemoteDiskError(
-                "insufficient free disk for remote inputs: need "
-                + str(remote_total_bytes)
-                + " bytes plus a 1 GiB margin, have "
-                + str(remote_free_bytes)
-            )
+        remote_storage = _colabcola_scratch_assessment(remote_total_bytes)
+        _COLABCOLA_TRANSPORT_FACTS["remote_input_storage_evaluation"] = remote_storage
+        COLABCOLA_RESULT_ROOT.mkdir(parents=True, exist_ok=True)
+        (COLABCOLA_RESULT_ROOT / "storage-assessment.json").write_text(
+            json.dumps(remote_storage, sort_keys=True) + "\n", encoding="utf-8")
+        _colabcola_remote_space(remote_total_bytes)
         remote_facts = []
         for remote_index, remote_entry in enumerate(remote_entries, 1):
             remote_url = str(remote_entry["url"])
@@ -1394,12 +1454,17 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                     if remote_have > remote_expected:
                         remote_partial.unlink()
                         remote_have = 0
+                    # Re-evaluate free bytes before every file/Range retry.
+                    _colabcola_remote_space(
+                        remote_total_bytes - remote_verified_bytes - remote_have)
                     _colabcola_remote_progress("connecting", force=True)
                     remote_digest = hashlib.sha256()
                     if remote_have:
                         with remote_partial.open("rb") as remote_existing:
                             while remote_block := remote_existing.read(8 * 1024 * 1024):
                                 remote_digest.update(remote_block)
+                            _colabcola_remote_advise(
+                                remote_existing.fileno(), 0, remote_have)
                     remote_request = urllib.request.Request(
                         remote_url,
                         headers={"User-Agent": "colabcola/" + COLABCOLA_COMPILER_VERSION},
@@ -1411,6 +1476,12 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                         if remote_have and remote_status == 206:
                             remote_mode = "ab"
                         elif remote_status == 200:
+                            if remote_have:
+                                # The server ignored Range. Drop the incomplete
+                                # file and re-admit the entire declared length.
+                                remote_partial.unlink()
+                                _colabcola_remote_space(
+                                    remote_total_bytes - remote_verified_bytes)
                             remote_have = 0
                             remote_digest = hashlib.sha256()
                             remote_mode = "wb"
@@ -1422,16 +1493,26 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
                                 + remote_entry["target"]
                             )
                         with remote_partial.open(remote_mode) as remote_output:
-                            while remote_block := remote_response.read(8 * 1024 * 1024):
-                                remote_have += len(remote_block)
-                                if remote_have > remote_expected:
-                                    raise RuntimeError(
-                                        "remote input exceeds its declared byte count: "
-                                        + remote_entry["target"]
-                                    )
-                                remote_digest.update(remote_block)
-                                remote_output.write(remote_block)
-                                _colabcola_remote_progress("downloading")
+                            synced_to = remote_have
+                            try:
+                                while remote_block := remote_response.read(8 * 1024 * 1024):
+                                    remote_have += len(remote_block)
+                                    if remote_have > remote_expected:
+                                        raise RuntimeError(
+                                            "remote input exceeds its declared byte count: "
+                                            + remote_entry["target"]
+                                        )
+                                    remote_digest.update(remote_block)
+                                    remote_output.write(remote_block)
+                                    if remote_have - synced_to >= remote_cache["window_bytes"]:
+                                        synced_to = _colabcola_remote_sync(remote_output, synced_to)
+                                        _colabcola_remote_space(
+                                            remote_total_bytes - remote_verified_bytes - remote_have)
+                                    _colabcola_remote_progress("downloading")
+                            finally:
+                                # Includes partial downloads that will be resumed via HTTP Range.
+                                if remote_output.tell() > synced_to:
+                                    _colabcola_remote_sync(remote_output, synced_to)
                     if remote_have != remote_expected:
                         raise http.client.IncompleteRead(b"", remote_expected - remote_have)
                     if remote_digest.hexdigest() != remote_expected_sha256:
@@ -1476,6 +1557,7 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST.get("remote_inputs")
             "bytes": remote_total_bytes,
             "count": len(remote_entries),
             "entries": remote_facts,
+            "cache_control": remote_cache,
             "seconds": time.monotonic() - remote_started_monotonic,
         }
     except _ColabcolaRemoteDiskError as exc:
@@ -1500,24 +1582,24 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST["python"].get("isola
 '''
 
 
-def runtime_cell_sources(*, isolated=False) -> tuple[tuple[str, str], ...]:
-    """Return ordered group labels and stable code-cell source strings."""
-
+def runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+    """Preserve cell groups while omitting unused remote-input code."""
+    remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
-        ("extraction", (_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else _REMOTE_INPUTS_SOURCE)).strip()),
-        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + _REMOTE_INPUTS_SOURCE if isolated else "")).strip()),
+        ("extraction", (_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
+        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + remote if isolated else "")).strip()),
         ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _EXECUTION_SOURCE).strip()),
     )
 
 
-def drive_runtime_cell_sources(*, isolated=False) -> tuple[tuple[str, str], ...]:
-    """Return the Drive controller's ordered runtime cell groups."""
-
+def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+    """Preserve controller cell groups while omitting unused download code."""
+    remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
         ("acquisition", _DRIVE_ACQUISITION_SOURCE.strip()),
-        ("extraction", (_DRIVE_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else _REMOTE_INPUTS_SOURCE)).strip()),
-        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + _REMOTE_INPUTS_SOURCE if isolated else "")).strip()),
+        ("extraction", (_DRIVE_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
+        ("environment", (_ENVIRONMENT_SOURCE + ("\n" + remote if isolated else "")).strip()),
         ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _EXECUTION_SOURCE).strip()),
     )

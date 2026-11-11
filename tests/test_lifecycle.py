@@ -182,6 +182,383 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(self.provider.allocations), 1)
         self.assertEqual(len(self.provider.boots), 1)
 
+
+    def test_kernel_reply_failure_releases_owned_runtime_and_retries_checkpoint(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        atomic(self.root / "plan.json", engine.plan)
+        snapshot = publish(self.store, self.identity, "checkpoint",
+                           {"state.pt": b"verified"}, step=9)
+        self.provider.active.add("unrelated")
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 998.0,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "running",
+                                 "reply_error_type": "KeyboardInterrupt"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "recovering")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertEqual(self.provider.active, {"unrelated"})
+        self.assertTrue(engine.state["attempts"][0]["released"])
+        self.assertEqual(engine.state["worker"]["observed_at"], 1000.0)
+        failure = engine.state["last_failure"]
+        self.assertEqual(failure["cause"], "worker_failed")
+        self.assertEqual(failure["error_type"], "KeyboardInterrupt")
+        self.assertEqual(failure["last_heartbeat"], 998.0)
+        self.assertEqual(failure["signal"], "kernel_reply_failed")
+        event = [row for row in engine.state["events"]
+                 if row["event"] == "worker_failed"]
+        self.assertEqual(len(event), 1)
+        self.assertEqual(event[0]["observed_at"], 1000.0)
+        self.assertEqual(len(self.provider.boots), 1)
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "allocating")
+        self.assertEqual(restarted.state["attempts"][-1]["resume"], snapshot)
+        restarted.advance()
+        restarted.advance()
+        self.assertEqual(len(self.provider.boots), 2)
+        self.assertEqual(len(self.provider.allocations), 2)
+
+    def assert_owned_worker_receipt_failure(self, receipt, reply, signal):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": reply,
+                                 "worker_execution_state": receipt,
+                                 "worker_error_type": "RuntimeError",
+                                 "worker_finished_at": 900.25}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["reason"],
+                         "worker_failed_attempt_budget_exhausted")
+        self.assertEqual(engine.state["last_failure"]["signal"], signal)
+        self.assertEqual(engine.state["last_failure"]["finished_at"], 900.25)
+        self.assertFalse(self.provider.active)
+
+    def test_missing_receipt_with_terminal_status_fails_owned_attempt(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "failed", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "receipt_missing",
+                "worker_execution_state": "unknown"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["reason"], "runtime_failed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertFalse(self.provider.active)
+        self.assertEqual(len(self.provider.allocations), 1)
+        changes = [x for x in engine.state["events"]
+                   if x["event"] == "kernel_execution_changed"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kernel_execution"]["request_state"],
+                         "receipt_missing")
+        self.assertEqual(changes[0]["observed_at"], self.now)
+        self.assertFalse(any(x["event"] == "worker_failed"
+                             for x in engine.state["events"]))
+
+    def test_failed_worker_receipt_releases_attempt(self):
+        self.assert_owned_worker_receipt_failure(
+            "failed", "busy", "worker_receipt_failed")
+
+    def test_finished_without_final_commit_releases_attempt(self):
+        self.assert_owned_worker_receipt_failure(
+            "finished", "completed", "finished_without_final")
+
+    def test_uncertain_worker_failure_release_cannot_allocate_replacement(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "busy",
+                                 "worker_execution_state": "failed"}})
+        original = self.provider.release
+        self.provider.release = mock.Mock(side_effect=LifecycleError("release uncertain"))
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "releasing_failed_worker")
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertIn("vm-1", self.provider.active)
+        self.assertEqual(len([e for e in engine.state["events"]
+                              if e["event"] == "worker_failed"]), 1)
+        self.provider.release = original
+        restored = self.reload()
+        restored.advance()
+        self.assertEqual(restored.state["phase"], "recovering")
+        self.assertEqual(len(self.provider.allocations), 1)
+        restored.advance()
+        self.assertEqual(restored.state["phase"], "allocating")
+        self.assertEqual(len(self.provider.allocations), 1)
+
+    def test_worker_failure_requires_verified_release_absence(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed"}})
+        original = self.provider.release
+        self.provider.release = mock.Mock(return_value=None)
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "releasing_failed_worker")
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertIn("vm-1", self.provider.active)
+        self.provider.release = original
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "recovering")
+        self.assertTrue(engine.state["attempts"][0]["released"])
+
+    def test_kernel_failure_without_owned_evidence_does_not_release(self):
+        engine = self.running()
+        # Legacy plans have no tracked kernel execution contract.
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running",
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertFalse(self.provider.releases)
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe.return_value = {
+            "state": "running",
+            "kernel_execution": {"request_state": "attached",
+                                 "worker_execution_state": "running"}}
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertFalse(self.provider.releases)
+
+    def test_reported_final_precedes_failed_kernel_reply(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        final = self.final_snapshot(1, 0)
+        ref = {key: final[key] for key in ("id", "bytes", "sha256")}
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "final_commit": ref,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed"}})
+        with mock.patch.object(self.store, "list", return_value=[]):
+            engine.advance()
+            self.assertEqual(engine.state["phase"], "monitoring")
+            self.assertFalse(self.provider.releases)
+            engine.advance()
+        self.assertEqual(engine.state["phase"], "completed")
+        self.assertFalse(any(row["event"] == "worker_failed"
+                             for row in engine.state["events"]))
+
+    def test_kernel_absence_requires_repeated_observation_and_grace(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "kernel_absent",
+                "worker_execution_state": "running"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(engine.state["kernel_absence"]["observations"], 1)
+        self.assertEqual(self.provider.releases, [])
+        self.now += 10
+        second = self.reload()
+        second.advance()
+        self.assertEqual(second.state["phase"], "monitoring")
+        self.assertEqual(second.state["kernel_absence"]["observations"], 2)
+        self.assertEqual(self.provider.releases, [])
+        self.now += 20
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "failed")
+        self.assertEqual(restarted.state["reason"], "worker_failed_attempt_budget_exhausted")
+        self.assertEqual(restarted.state["last_failure"]["signal"], "kernel_absent_confirmed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "kernel_absent_observed"]), 1)
+
+    def test_same_kernel_reappears_before_grace_without_release(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {
+                "request_state": "kernel_absent",
+                "worker_execution_state": "running"}})
+        engine.advance()
+        self.assertIn("kernel_absence", engine.state)
+        self.now += 15
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": self.now,
+            "kernel_execution": {
+                "kernel_id": "kernel", "request_state": "attached",
+                "worker_execution_state": "running"}}
+        resumed = self.reload()
+        resumed.advance()
+        self.assertEqual(resumed.state["phase"], "monitoring")
+        self.assertNotIn("kernel_absence", resumed.state)
+        self.assertEqual(self.provider.releases, [])
+        resumed.advance()
+        self.assertEqual(len([e for e in resumed.state["events"]
+                              if e["event"] == "kernel_absence_cleared"]), 1)
+
+    def test_kernel_listing_failure_must_not_release_runtime(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        self.provider.observe = mock.Mock(
+            side_effect=LifecycleError("runtime kernel listing HTTP 503"))
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertNotIn("kernel_absence", engine.state)
+        self.assertEqual(self.provider.releases, [])
+
+    def test_kernel_execution_transitions_are_journaled_once_per_change(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "submitted",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "busy"}})
+        engine.advance()
+        self.assertEqual(len([x for x in engine.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 1)
+        self.reload().advance()
+        self.assertEqual(len([x for x in engine.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 1)
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "busy",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "busy"}}
+        refreshed = self.reload()
+        refreshed.advance()
+        self.assertEqual(len([x for x in refreshed.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 2)
+        # Reattached to a restarted kernel with the same ID: not failure
+        # evidence until a separate receipt/absence/stall signal exists.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "attached",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "idle"}}
+        refreshed.advance()
+        changes = [x for x in refreshed.state["events"]
+                   if x["event"] == "kernel_execution_changed"]
+        self.assertEqual(len(changes), 3)
+        self.assertEqual(changes[-1]["kernel_execution"]["request_state"], "attached")
+        self.assertEqual(changes[-1]["observed_at"], self.now)
+        self.assertEqual(refreshed.state["phase"], "monitoring")
+        self.assertFalse(self.provider.releases)
+
+    def test_heartbeat_stall_warns_once_and_never_releases(self):
+        engine = self.running()
+        self.provider.active.add("unrelated")
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 879.0})
+        engine.advance()  # Age 121 s exceeds max(120 s, 10 * 5 s).
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(engine.state["worker_stall"]["heartbeat_age"], 121.0)
+        rows = [e for e in engine.state["events"] if e["event"] == "worker_stalled"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["observed_at"], 1000.0)
+        self.assertEqual(rows[0]["last_heartbeat"], 879.0)
+        self.assertEqual(rows[0]["threshold_seconds"], 120.0)
+        self.assertEqual(self.provider.releases, [])
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertEqual(self.provider.active, {"vm-1", "unrelated"})
+
+        # Repeat observations and supervisor restart must not repeat a warning.
+        engine.advance()
+        self.reload().advance()
+        persisted = json.loads((self.root / "state.json").read_text())
+        self.assertEqual(len([e for e in persisted["events"]
+                              if e["event"] == "worker_stalled"]), 1)
+        self.assertEqual(self.provider.releases, [])
+
+    def test_stall_clears_only_when_fresh_heartbeat_resumes(self):
+        engine = self.running()
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 850.0})
+        engine.advance()
+        self.assertIn("worker_stall", engine.state)
+
+        # Unknown heartbeat does not falsely clear an existing warning.
+        self.provider.observe.return_value = {"state": "running", "attempt": 1}
+        engine.advance()
+        self.assertIn("worker_stall", engine.state)
+
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 999.5}
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "monitoring")
+        self.assertNotIn("worker_stall", restarted.state)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stall_cleared"]), 1)
+        restarted.advance()
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stall_cleared"]), 1)
+        self.assertEqual(self.provider.releases, [])
+
+        # The next stale interval begins a new warning episode.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 850.0}
+        restarted.advance()
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stalled"]), 2)
+
+    def test_stall_threshold_respects_declared_poll_interval(self):
+        engine = self.running()
+        engine.plan["poll_seconds"] = 30
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 700.0})
+        engine.advance()
+        self.assertNotIn("worker_stall", engine.state)  # Exactly 300s.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 699.0}
+        self.reload().advance()
+        observed = json.loads((self.root / "state.json").read_text())
+        self.assertEqual(observed["worker_stall"]["threshold_seconds"], 300.0)
+        self.assertEqual(self.provider.releases, [])
+
+    def test_malformed_or_future_heartbeat_does_not_claim_stall(self):
+        engine = self.running()
+        for heartbeat in (None, True, "old", float("nan"), float("inf"),
+                          -1, 1001.0):
+            with self.subTest(heartbeat=heartbeat):
+                self.provider.observe = mock.Mock(return_value={
+                    "state": "running", "attempt": 1,
+                    "heartbeat_at": heartbeat})
+                engine.advance()
+                self.assertEqual(engine.state["phase"], "monitoring")
+                self.assertNotIn("worker_stall", engine.state)
+        self.assertFalse(any(e["event"] == "worker_stalled"
+                             for e in engine.state["events"]))
+        self.assertEqual(self.provider.releases, [])
+
+    def test_terminal_worker_failure_preempts_stall_warning(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 700.0,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(len([e for e in engine.state["events"]
+                              if e["event"] == "worker_failed"]), 1)
+        self.assertFalse(any(e["event"] == "worker_stalled"
+                             for e in engine.state["events"]))
+
     def test_lookup_timeout_does_not_replace_runtime(self):
         engine = self.running()
         self.provider.lookup_error = True

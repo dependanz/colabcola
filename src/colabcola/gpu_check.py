@@ -28,3 +28,42 @@ def _colabcola_gpu_check(requested, resources, gpus, cuda_available):
     if reason:
         report.update(state="failed",reason=reason)
     return report
+
+
+
+def _colabcola_boot_memory(proc_root="/proc", cgroup_root="/sys/fs/cgroup"):
+    """Boot-time host/cgroup limit, if the corresponding Linux files exist."""
+    from pathlib import Path, PurePosixPath
+    proc, cg = Path(proc_root), Path(cgroup_root)
+    report = {"mem_total_bytes": None, "cgroup_memory_limit_bytes": None}
+    try:
+        lines = (proc / "meminfo").read_text().splitlines()
+        row = next((x.split() for x in lines if x.startswith("MemTotal:")), [])
+        if len(row) == 3 and row[2] == "kB":
+            report["mem_total_bytes"] = int(row[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    try:
+        v2 = (cg / "cgroup.controllers").is_file()
+        base = cg if v2 else cg / "memory"
+        filename = "memory.max" if v2 else "memory.limit_in_bytes"
+        selected = base / filename
+        for line in (proc / "self/cgroup").read_text().splitlines():
+            fields = line.split(":", 2)
+            if len(fields) != 3:
+                continue
+            if ((fields[0] == "0" and fields[1] == "") if v2
+                    else "memory" in fields[1].split(",")):
+                relative = PurePosixPath(fields[2])
+                if fields[2].startswith("/") and ".." not in relative.parts:
+                    candidate = base.joinpath(*relative.parts[1:], filename)
+                    if candidate.is_file():
+                        selected = candidate
+                break
+        if selected.is_file():
+            raw = selected.read_text().strip()
+            if raw != "max":
+                report["cgroup_memory_limit_bytes"] = int(raw)
+    except (OSError, ValueError):
+        pass
+    return report

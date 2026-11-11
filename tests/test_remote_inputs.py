@@ -342,6 +342,60 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         self.assertEqual((entry["attempts"], entry["http_status"]), (2, 206))
         self.assertEqual(calls[:2], [(URL_A, 0, 200), (URL_A, half, 206)])
 
+    def test_ignored_range_restarts_entire_file_and_preserves_sha(self) -> None:
+        calls = []
+        attempts = 0
+
+        def opener(request, timeout=None):
+            nonlocal attempts
+            calls.append(request.full_url)
+            if request.full_url == URL_A:
+                attempts += 1
+                return _FakeResponse(DATA_A, 200,
+                                     fail_after=len(DATA_A) // 2 if attempts == 1 else None)
+            return _FakeResponse(DATA_B, 200)
+
+        result, job_root, error = self.run_notebook(
+            self.mapping(), self.root / "content-range-200", opener)
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
+        self.assertEqual((job_root / "weights/sub/b.bin").read_bytes(), DATA_B)
+        self.assertEqual(calls, [URL_A, URL_A, URL_B])
+        self.assertFalse(list(job_root.rglob("*.partial")))
+
+    def test_ignored_range_restart_fails_closed_when_full_file_wont_fit(self) -> None:
+        calls = []
+        attempts = 0
+        total = len(DATA_A) + len(DATA_B)
+
+        def opener(request, timeout=None):
+            nonlocal attempts
+            calls.append(request.full_url)
+            if request.full_url == URL_A:
+                attempts += 1
+                return _FakeResponse(DATA_A, 200,
+                                     fail_after=len(DATA_A) // 2 if attempts == 1 else None)
+            return _FakeResponse(DATA_B, 200)
+
+        def usage(_path):
+            # Space is ample before the second HTTP response arrives. Once
+            # the server refuses Range, a whole-file restart no longer fits.
+            free = (2 ** 42 if attempts < 2
+                    else 1024 ** 3 + total - len(DATA_A) // 2 + 1)
+            return types.SimpleNamespace(total=2 ** 43, used=0, free=free)
+
+        with mock.patch("shutil.disk_usage", side_effect=usage):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-range-200-short", opener)
+        self.assertIsNotNone(error)
+        self.assertEqual(result["terminal_state"], "preflight_failed")
+        self.assertEqual(result["failure"]["stage"], "remote_inputs")
+        self.assertIn("insufficient free disk", result["failure"]["message"])
+        self.assertEqual(calls, [URL_A, URL_A])
+        self.assertFalse((job_root / "weights/a.bin").exists())
+        self.assertFalse(list(job_root.rglob("*.partial")))
+
     def test_hash_mismatch_is_a_remote_input_failure_with_no_file_left_behind(self) -> None:
         mapping = self.mapping()
         mapping["remote_inputs"][1]["sha256"] = sha(b"not the file")
@@ -359,6 +413,126 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         self.assertTrue((job_root / "weights" / "a.bin").exists())
         self.assertFalse((job_root / "weights" / "sub" / "b.bin").exists())
         self.assertFalse(list(job_root.rglob("*.partial")))
+
+    def test_remote_cache_control_syncs_in_windows_and_advices_on_posix(self) -> None:
+        from colabcola import runtime as runtime_source
+
+        # Use a small window only in this test's compiled notebook so that
+        # tiny in-memory fixtures exercise multiple fdatasync intervals.
+        short_source = runtime_source._REMOTE_INPUTS_SOURCE.replace(
+            '64 * 1024 ** 2', '32 * 1024')
+        self.assertNotEqual(short_source, runtime_source._REMOTE_INPUTS_SOURCE)
+
+        class SmallBlocks(_FakeResponse):
+            def read(response, amount=-1):
+                return super(SmallBlocks, response).read(min(amount, 16384))
+
+        def opener(request, timeout=None):
+            return SmallBlocks({URL_A: DATA_A, URL_B: DATA_B}[request.full_url], 200)
+
+        with mock.patch.object(runtime_source, '_REMOTE_INPUTS_SOURCE', short_source):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / 'content-cache', opener)
+        self.assertIsNone(error)
+        self.assertEqual(result['terminal_state'], 'success')
+        self.assertEqual((job_root / 'weights/a.bin').read_bytes(), DATA_A)
+        self.assertEqual((job_root / 'weights/sub/b.bin').read_bytes(), DATA_B)
+        policy = result['transport']['remote_inputs']['cache_control']
+        self.assertEqual(policy['window_bytes'], 32768)
+        self.assertGreaterEqual(policy['sync_calls'], 4)
+        self.assertEqual(policy['advice_supported'], hasattr(os, 'posix_fadvise'))
+        if policy['advice_supported']:
+            self.assertGreaterEqual(policy['advice_calls'], 1)
+            self.assertEqual(policy['advice_errors'], 0)
+        self.assertNotIn('https://', json.dumps(policy))
+
+    def test_free_disk_is_rechecked_before_second_remote_file(self) -> None:
+        import shutil
+        calls: list[tuple[str, int, int]] = []
+        content = self.root / 'content-space-recheck'
+        real_usage = shutil.disk_usage
+
+        def disk_usage(path):
+            # The first complete file intentionally consumes the remaining
+            # simulated free space. The next file must never be requested.
+            first = content / 'colabcola' / 'jobs'
+            if first in Path(path).parents and list(first.glob('*/weights/a.bin')):
+                return types.SimpleNamespace(total=100, used=99, free=1)
+            return types.SimpleNamespace(total=2 ** 42, used=0, free=2 ** 42)
+
+        with mock.patch('shutil.disk_usage', side_effect=disk_usage):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), content,
+                fake_urlopen({URL_A: DATA_A, URL_B: DATA_B}, calls=calls))
+        self.assertIsNotNone(error)
+        self.assertEqual(result['terminal_state'], 'preflight_failed')
+        self.assertEqual(result['failure']['stage'], 'remote_inputs')
+        self.assertIn('insufficient free disk', result['failure']['message'])
+        self.assertEqual(calls, [(URL_A, 0, 200)])
+        self.assertTrue((job_root / 'weights/a.bin').is_file())
+        self.assertFalse((job_root / 'weights/sub/b.bin').exists())
+
+    def test_scratch_evaluation_is_read_only_and_preserves_job_paths(self) -> None:
+        from colabcola import runtime as runtime_source
+        import shutil
+        candidate = self.root / "optional-scratch"
+        candidate.mkdir()
+        source = runtime_source._REMOTE_INPUTS_SOURCE
+        patched = source.replace(
+            '"/mnt/local-scratch", "/mnt/data", "/scratch"',
+            repr(str(candidate)) + ',')
+        self.assertNotEqual(source, patched)
+
+        with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-scratch-assessment",
+                fake_urlopen({URL_A: DATA_A, URL_B: DATA_B}))
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        report = result["transport"]["remote_input_storage_evaluation"]
+        self.assertEqual(report["mode"], "diagnostic_only")
+        self.assertEqual(report["schema"], 1)
+        self.assertEqual(report["required_bytes_including_margin"],
+                         len(DATA_A) + len(DATA_B) + 1024 ** 3)
+        self.assertEqual(len(report["candidates"]), 1)
+        self.assertEqual(report["candidates"][0]["path"], str(candidate))
+        self.assertFalse(report["candidates"][0]["different_device"])
+        self.assertEqual(
+            report["candidates"][0]["capacity_sufficient"],
+            shutil.disk_usage(candidate).free >= report["required_bytes_including_margin"])
+        result_root = job_root.parents[1] / "results" / job_root.name
+        self.assertEqual(
+            json.loads((result_root / "storage-assessment.json").read_text()),
+            report)
+        self.assertEqual(list(candidate.iterdir()), [])
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
+        self.assertEqual((job_root / "weights/sub/b.bin").read_bytes(), DATA_B)
+        self.assertFalse(list(job_root.rglob("*.partial")))
+        self.assertNotIn("https://", json.dumps(report))
+
+    def test_scratch_symlink_is_not_selected_or_followed(self) -> None:
+        from colabcola import runtime as runtime_source
+        real_dir = self.root / "actual-scratch"
+        real_dir.mkdir()
+        link = self.root / "scratch-link"
+        try:
+            link.symlink_to(real_dir, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest("directory symlinks unavailable: " + type(exc).__name__)
+        source = runtime_source._REMOTE_INPUTS_SOURCE
+        patched = source.replace(
+            '"/mnt/local-scratch", "/mnt/data", "/scratch"', repr(str(link)) + ',')
+        self.assertNotEqual(source, patched)
+        with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-scratch-symlink",
+                fake_urlopen({URL_A: DATA_A, URL_B: DATA_B}))
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        report = result["transport"]["remote_input_storage_evaluation"]
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(list(real_dir.iterdir()), [])
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
 
     def test_disk_shortfall_fails_before_any_download(self) -> None:
         calls: list[tuple[str, int, int]] = []

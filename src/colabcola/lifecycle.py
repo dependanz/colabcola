@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 from datetime import timezone
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -20,6 +21,22 @@ from .lifecycle_io import (DriveStore, LifecycleError, AllocationRejected, atomi
 MAX_SECONDS = 86400
 
 TERMINAL = {"completed", "failed", "cancelled", "budget_exhausted"}
+
+
+def _kernel_worker_failure_signal(observed, plan):
+    """Identify authenticated owned-worker terminal evidence; never infer from silence."""
+    if plan.get("execution_mode") != "kernel-v1":
+        return None
+    execution = observed.get("kernel_execution")
+    if not isinstance(execution, dict):
+        return None
+    if execution.get("worker_execution_state") == "failed":
+        return "worker_receipt_failed"
+    if execution.get("request_state") == "failed":
+        return "kernel_reply_failed"
+    if execution.get("worker_execution_state") == "finished" and not observed.get("final_commit"):
+        return "finished_without_final"
+    return None
 
 
 @contextlib.contextmanager
@@ -189,12 +206,15 @@ class Supervisor:
         self.provider, self.store, self.token, self.clock = provider, store, token, clock
         self.observer = observer
 
-    def save(self, event=None, **fields):
+    def save(self, event=None, *, event_details=None, **fields):
         self.state.update(fields)
         if event:
-            self.state["events"].append({"sequence": len(self.state["events"]) + 1,
-                                         "time": self.clock(), "event": event,
-                                         "phase": self.state["phase"]})
+            row = {"sequence": len(self.state["events"]) + 1,
+                   "time": self.clock(), "event": event,
+                   "phase": self.state["phase"]}
+            if event_details:
+                row.update(event_details)
+            self.state["events"].append(row)
         atomic(self.directory / "state.json", self.state)
         # Journal is the authority; regenerating this projection repairs a crash between writes.
         temporary = self.directory / "events.ndjson.tmp"
@@ -269,9 +289,144 @@ class Supervisor:
             "cause": "runtime_lost", "attempt": attempt["number"], "confirmed_at": self.clock(),
             "missing_since": attempt["missing_since"], "termination_cause": "unknown"})
 
+    def _release_failed_worker(self, attempt):
+        """Resume-safe release barrier: no replacement until exact-owned absence."""
+        if not attempt.get("released"):
+            endpoint = attempt["endpoint"]
+            release = self.provider.release(endpoint)
+            remaining = self.provider.reconcile(attempt["allocation_id"], self.plan["gpu"])
+            if remaining is not None:
+                if remaining != endpoint:
+                    raise LifecycleError("allocation lookup returned an unexpected endpoint;no replacement allowed")
+                raise LifecycleError("owned runtime absence is not confirmed after worker failure")
+            attempt["released"] = True
+            if isinstance(release, dict):
+                attempt["release_evidence"] = release
+        self.save("worker_failure_release_confirmed")
+        if len(self.state["attempts"]) >= self.plan["max_attempts"]:
+            self.finish("failed", "worker_failed_attempt_budget_exhausted")
+        else:
+            self.save("worker_failure_retry_ready", phase="recovering")
+
+    def _worker_failed(self, attempt, observed, signal):
+        from .lifecycle_kernel import sanitized_exception_class
+        kernel = observed["kernel_execution"]
+        facts = {"cause": "worker_failed", "attempt": attempt["number"],
+                 "signal": signal, "observed_at": observed["observed_at"]}
+        error_type = (sanitized_exception_class(kernel.get("worker_error_type"))
+                      or sanitized_exception_class(kernel.get("reply_error_type")))
+        if error_type:
+            facts["error_type"] = error_type
+        for key, value in (("finished_at", kernel.get("worker_finished_at")),
+                           ("last_heartbeat", observed.get("heartbeat_at"))):
+            if type(value) in (int, float) and 0 < value < 253402300800:
+                facts[key] = value
+        # Persist the failure and its exact owned attempt before releasing.
+        # A crash or uncertain release resumes the same release barrier.
+        self.save("worker_failed", event_details=facts,
+                  phase="releasing_failed_worker", last_failure=facts)
+        self._release_failed_worker(attempt)
+
+    def _observe_worker_heartbeat(self, attempt, observed):
+        """Journal stale/resumed heartbeats without terminating compute.
+
+        This is a warning, not proof of worker death. A release requires
+        independently verified terminal worker evidence or absent compute.
+        """
+        now = observed["observed_at"]
+        heartbeat = observed.get("heartbeat_at")
+        active = self.state.get("worker_stall")
+        if active and active.get("attempt") != attempt["number"]:
+            active = None
+            self.state.pop("worker_stall", None)
+        if observed.get("state") != "running":
+            self.save()
+            return
+        # Missing, invalid or future-dated heartbeats are not evidence that a
+        # worker has stalled. Keep any existing alert until freshness is known.
+        if (type(heartbeat) not in (int, float) or not math.isfinite(heartbeat)
+                or heartbeat <= 0 or heartbeat > now):
+            self.save()
+            return
+        interval = self.plan.get("poll_seconds", 5)
+        if (type(interval) not in (int, float) or not math.isfinite(interval)
+                or interval <= 0):
+            interval = 5
+        threshold = max(120.0, 10.0 * interval)
+        age = now - heartbeat
+        if age > threshold:
+            if active is None:
+                facts = {"attempt": attempt["number"], "heartbeat_age": age,
+                         "last_heartbeat": heartbeat, "observed_at": now,
+                         "threshold_seconds": threshold}
+                self.save("worker_stalled", event_details=facts,
+                          worker_stall=facts)
+            else:
+                self.save()
+        elif active is not None:
+            self.state.pop("worker_stall", None)
+            self.save("worker_stall_cleared", event_details={
+                "attempt": attempt["number"], "heartbeat_age": age,
+                "last_heartbeat": heartbeat, "observed_at": now})
+        else:
+            self.save()
+
+    def _journal_kernel_execution_change(self, previous, attempt, observed):
+        """Record only changes to bounded, known execution state fields."""
+        if self.plan.get("execution_mode") != "kernel-v1":
+            return
+        fields = {
+            "request_state": {"attached", "submitted", "submission_unknown",
+                              "busy", "completed", "failed", "kernel_absent",
+                              "receipt_missing"},
+            "worker_execution_state": {"submitted", "running", "finished", "failed"},
+            "execution_state": {"starting", "busy", "idle", "absent"},
+        }
+
+        def summary(value):
+            if not isinstance(value, dict):
+                return {}
+            return {k: value[k] for k, allowed in fields.items()
+                    if type(value.get(k)) is str and value[k] in allowed}
+
+        current = summary(observed.get("kernel_execution"))
+        if not current:
+            return
+        same_attempt = previous.get("attempt", attempt["number"]) == attempt["number"]
+        earlier = summary(previous.get("kernel_execution")) if same_attempt else {}
+        if earlier != current:
+            self.save("kernel_execution_changed", event_details={
+                "attempt": attempt["number"], "observed_at": observed["observed_at"],
+                "kernel_execution": current})
+
+    def _observe_kernel_absence(self, attempt, observed):
+        """Require repeated exact-kernel absence before owned-runtime release."""
+        now = observed["observed_at"]
+        previous = self.state.get("kernel_absence")
+        if previous is None or previous.get("attempt") != attempt["number"]:
+            self.save("kernel_absent_observed", event_details={
+                "attempt": attempt["number"], "observed_at": now},
+                kernel_absence={"attempt": attempt["number"],
+                                "first_seen_at": now, "observations": 1})
+            return
+        previous["observations"] += 1
+        interval = self.plan.get("poll_seconds", 5)
+        if type(interval) not in (int, float) or not math.isfinite(interval) or interval <= 0:
+            interval = 5
+        grace = max(30.0, 3.0 * interval)
+        if previous["observations"] >= 2 and now - previous["first_seen_at"] >= grace:
+            self.state.pop("kernel_absence", None)
+            self._worker_failed(attempt, observed, "kernel_absent_confirmed")
+        else:
+            self.save()
+
     def new_attempt(self):
         if len(self.state["attempts"]) >= self.plan["max_attempts"]:
-            self.finish("failed", "runtime_lost_attempt_budget_exhausted" if self.state.get("last_failure") else "attempt_budget_exhausted")
+            cause = (self.state.get("last_failure") or {}).get("cause")
+            reason = {"runtime_lost": "runtime_lost_attempt_budget_exhausted",
+                      "worker_failed": "worker_failed_attempt_budget_exhausted"}.get(
+                          cause, "attempt_budget_exhausted")
+            self.finish("failed", reason)
             return
         checkpoint = self.state.get("checkpoint")
         if len(self.state["attempts"]) == 1 and self.state.get("fault_injected"):
@@ -282,6 +437,8 @@ class Supervisor:
                    "allocation_id": str(uuid.uuid4()), "created_at": self.clock(),
                    "deadline": self.state["deadline"], "resume": checkpoint}
         self.state["attempts"].append(attempt)
+        self.state.pop("worker_stall", None)  # Alerts belong to one attempt.
+        self.state.pop("kernel_absence", None)
         self.save("allocation_intent", phase="allocating")
 
     def tick(self):
@@ -315,6 +472,9 @@ class Supervisor:
             self.new_attempt()
             return
         attempt = self.state["attempts"][-1]
+        if phase == "releasing_failed_worker":
+            self._release_failed_worker(attempt)
+            return
         if phase == "allocating":
             endpoint = self.provider.allocate(attempt["allocation_id"], self.plan["gpu"])
             if endpoint in [a.get("endpoint") for a in self.state["attempts"][:-1]]:
@@ -406,22 +566,40 @@ class Supervisor:
             return
         observed = self.provider.observe(endpoint, self.plan, attempt,
             None if self.plan.get("authorization_policy") == "renewable-v1" else self.token())
+        previous_worker = self.state.get("worker", {})
+        # A malformed provider/worker timestamp must never poison the strict
+        # JSON journal. Absence of a valid heartbeat is not proof of death.
+        heartbeat = observed.get("heartbeat_at")
+        if (type(heartbeat) not in (int, float) or not math.isfinite(heartbeat)
+                or heartbeat <= 0):
+            observed.pop("heartbeat_at", None)
+        observed["observed_at"] = self.clock()
         self.state["worker"] = observed
+        self._journal_kernel_execution_change(previous_worker, attempt, observed)
         if observed.get("hardware"):
             self.state["hardware"] = observed["hardware"]
         if self.plan.get("authorization_policy") == "renewable-v1":
             self.state["drive_authorization"] = authorization_health(self.state, now=self.clock())
+        failure_signal = _kernel_worker_failure_signal(observed, self.plan)
         if observed.get("final_commit"):
             # A list request above can race publication. Persist the exact ref first;
             # the next tick recovers it even if Drive search has not indexed it yet.
             self.save("terminal_commit_reported")
+        elif failure_signal is not None:
+            self._worker_failed(attempt, observed, failure_signal)
         elif observed.get("state") in {"failed", "persistence_failed"}:
             self.finish("failed", "runtime_" + observed["state"])
         elif (observed.get("state") == "starting"
               and self.clock() - attempt.get("bootstrapped_at", attempt["allocated_at"]) > 180):
             self.finish("failed", "worker_start_timeout")
+        elif (isinstance(observed.get("kernel_execution"), dict)
+              and observed["kernel_execution"].get("request_state") == "kernel_absent"):
+            self._observe_kernel_absence(attempt, observed)
         else:
-            self.save()
+            if self.state.pop("kernel_absence", None) is not None:
+                self.save("kernel_absence_cleared", event_details={
+                    "attempt": attempt["number"], "observed_at": observed["observed_at"]})
+            self._observe_worker_heartbeat(attempt, observed)
 
     def advance(self):
         try:

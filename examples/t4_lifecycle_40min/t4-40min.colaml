@@ -1,0 +1,35 @@
+# One T4 allocation, one 40-minute GPU-activity workload.
+# The 55-minute lifecycle cap includes provision, staging, and cleanup.
+commands = [["python", "probe.py", "--duration-seconds", "2400",
+             "--pulse-seconds", "10", "--progress-seconds", "30",
+             "--checkpoint-seconds", "300"]]
+project = "."
+inputs = []
+name = "t4-lifecycle-40min"
+
+[environment]
+python = ">=3.11"
+dependencies = []
+runtime_requirements = ["torch"]
+
+[compute]
+gpu = "T4"
+high_mem = false
+minimum_gpu_memory_gib = 14
+
+[outputs]
+include = ["outputs/acceptance.json"]
+checkpoints = ["outputs/checkpoints/state-*.json"]
+resume_arg = "--resume-manifest"
+logs = ["outputs/progress.ndjson"]
+maximum_bytes = 1048576
+
+[limits]
+timeout_seconds = 2520
+max_seconds = 3300
+max_runtimes = 1
+seed = 2026
+
+[execution]
+runtime_version = "latest"
+provider_backend = "legacy"

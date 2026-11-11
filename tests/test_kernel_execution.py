@@ -43,6 +43,36 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(LifecycleError,'not be replayed'):c.submit('again')
         w.execute.assert_called_once()
 
+    def test_failed_kernel_reply_keeps_exception_class_not_private_message(self):
+        c, wire = self.connection()
+        c.submit('real work')
+        wire.shell_channel.put({
+            'parent_header': {'msg_id': 'message'},
+            'header': {'msg_type': 'execute_reply'},
+            'content': {'status': 'error', 'ename': 'KeyboardInterrupt',
+                        'evalue': 'PRIVATE-ACCESS-TOKEN',
+                        'traceback': ['PRIVATE-TRACEBACK']}})
+        observed = c.poll()
+        self.assertEqual(observed['request_state'], 'failed')
+        self.assertEqual(observed['reply_error_type'], 'KeyboardInterrupt')
+        self.assertNotIn('PRIVATE-', json.dumps(observed))
+        self.assertEqual(c.poll()['reply_error_type'], 'KeyboardInterrupt')
+
+    def test_untrusted_reply_exception_names_are_omitted(self):
+        for value in ('PRIVATE-ACCESS-TOKEN', 'bad.word', 'x' * 200, 5, None):
+            with self.subTest(value=value):
+                c, wire = self.connection()
+                c.submit('real work')
+                wire.shell_channel.put({
+                    'parent_header': {'msg_id': 'message'},
+                    'header': {'msg_type': 'execute_reply'},
+                    'content': {'status': 'error', 'ename': value,
+                                'evalue': 'PRIVATE-ACCESS-TOKEN'}})
+                observed = c.poll()
+                self.assertEqual(observed['request_state'], 'failed')
+                self.assertNotIn('reply_error_type', observed)
+                self.assertNotIn('PRIVATE-', json.dumps(observed))
+
     def test_uncertain_submission_and_reconnect_never_reexecute(self):
         c,w=self.connection(TimeoutError('secret'));self.assertRaises(LifecycleError,c.submit,'real work')
         self.assertEqual(c.state,'submission_unknown')
@@ -118,6 +148,111 @@ class ProviderExecutionTests(unittest.TestCase):
         self.p._workloads={'owned':first};self.p._workload_connection.side_effect=[first,second]
         result=self.p.observe('owned',self.plan,self.attempt,None)
         self.assertEqual(result['kernel_execution']['execution_state'],'busy');first.close.assert_called_once();first.submit.assert_not_called();second.submit.assert_not_called()
+    def test_observe_preserves_owned_worker_failure_receipt_without_secrets(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'failed', 'finished_at': 1790000000.25,
+             'error_type': 'KeyboardInterrupt', 'evalue': 'PRIVATE-ACCESS-TOKEN'},
+            self.identity])
+        self.p._workload_connection.return_value.poll.return_value = {
+            'mode': 'kernel-v1', 'request_state': 'failed',
+            'reply_error_type': 'KeyboardInterrupt'}
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        details = result['kernel_execution']
+        self.assertEqual(details['worker_execution_state'], 'failed')
+        self.assertEqual(details['worker_error_type'], 'KeyboardInterrupt')
+        self.assertEqual(details['worker_finished_at'], 1790000000.25)
+        self.assertEqual(details['reply_error_type'], 'KeyboardInterrupt')
+        self.assertNotIn('PRIVATE-', json.dumps(result))
+
+    def test_observe_omits_malformed_worker_diagnostics(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'failed', 'finished_at': float('nan'),
+             'error_type': 'PRIVATE-ACCESS-TOKEN'},
+            self.identity])
+        self.p._workload_connection.return_value.poll.return_value = {
+            'mode': 'kernel-v1', 'request_state': 'failed'}
+        details = self.p.observe('owned', self.plan, self.attempt, None)['kernel_execution']
+        self.assertNotIn('worker_error_type', details)
+        self.assertNotIn('worker_finished_at', details)
+        self.assertNotIn('PRIVATE-', json.dumps(details))
+
+    def test_missing_receipt_and_intent_while_running_is_unknown_not_worker_death(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state':'running', 'attempt':1})})
+        self.p._json_file = mock.Mock(return_value=None)
+        with self.assertRaisesRegex(LifecycleError, 'receipt missing'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._kernel.assert_not_called()
+        self.p._workload_connection.assert_not_called()
+        self.p._execute.assert_not_called()
+
+    def test_terminal_failed_status_without_execution_artifacts_is_still_actionable(self):
+        for status in ('failed', 'persistence_failed'):
+            with self.subTest(status=status):
+                self.p._contents = mock.Mock(return_value={
+                    'format': 'text',
+                    'content': json.dumps({'state': status, 'attempt': 1})})
+                self.p._json_file = mock.Mock(return_value=None)
+                self.p._kernel.reset_mock()
+                result = self.p.observe('owned', self.plan, self.attempt, None)
+                self.assertEqual(result['state'], status)
+                self.assertEqual(result['kernel_execution']['request_state'],
+                                 'receipt_missing')
+                self.assertEqual(result['kernel_execution']['worker_execution_state'],
+                                 'unknown')
+                self.p._kernel.assert_not_called()
+                self.p._workload_connection.assert_not_called()
+                self.p._execute.assert_not_called()
+
+    def test_terminal_status_from_wrong_attempt_cannot_bypass_receipt_identity(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'failed', 'attempt': 2})})
+        self.p._json_file = mock.Mock(return_value=None)
+        with self.assertRaisesRegex(LifecycleError, 'receipt missing'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._kernel.assert_not_called()
+
+    def test_legacy_observation_has_no_kernel_receipt_dependency(self):
+        self.plan.pop('execution_mode')
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state':'failed', 'attempt':1})})
+        self.p._json_file = mock.Mock(side_effect=AssertionError(
+            'legacy must not read tracked-execution artifacts'))
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        self.assertEqual(result, {'state':'failed', 'attempt':1})
+        self.p._json_file.assert_not_called()
+        self.p._kernel.assert_not_called()
+        self.p._workload_connection.assert_not_called()
+
+    def test_missing_owned_kernel_returns_observation_without_reexecuting(self):
+        from colabcola.lifecycle_provider import OwnedKernelAbsent
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'running'}, self.identity])
+        self.p._kernel.side_effect = OwnedKernelAbsent('owned workload kernel is absent')
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        evidence = result['kernel_execution']
+        self.assertEqual(evidence['request_state'], 'kernel_absent')
+        self.assertEqual(evidence['worker_execution_state'], 'running')
+        self.assertEqual(evidence['kernel_id'], 'kernel')
+        self.p._workload_connection.assert_not_called()
+        self.p._execute.assert_not_called()
+
+    def test_kernel_listing_failure_is_not_claimed_as_absence(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'running'}, self.identity])
+        self.p._kernel.side_effect = LifecycleError('runtime kernel listing HTTP 503')
+        with self.assertRaisesRegex(LifecycleError, '503'):
+            self.p.observe('owned', self.plan, self.attempt, None)
+        self.p._workload_connection.assert_not_called()
+
     def test_connection_cleanup_does_not_release_compute(self):
         self.p.client=mock.Mock();one=mock.Mock();two=mock.Mock();self.p._workloads={'a':one,'b':two}
         self.p.close();one.close.assert_called_once();two.close.assert_called_once();self.p.client.unassign.assert_not_called()

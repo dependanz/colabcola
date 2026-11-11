@@ -541,3 +541,124 @@ The result retains `result_directory` and `completed_artifact_directory` and add
 
 A null intermediate directory is normal when intermediate commits were not configured;
 it does not indicate missing final results. Corrupt saved artifacts fail verification.
+
+
+## Worker heartbeat and host telemetry (issue #18, development)
+
+A tracked `kernel-v1` worker reports `kernel_execution` failure evidence with
+sanitized exception class and receipt completion time. Confirmed failed
+execution transitions through a durable owned-runtime release barrier before
+a bounded retry can allocate anything. A failed final commit is not assumed
+from a stale heartbeat.
+
+For every current-attempt `running` worker with a valid heartbeat, the supervisor
+checks its age against `max(120 seconds, 10 * poll_seconds)`, where the default
+poll interval is 5 seconds. A stale heartbeat records a single `worker_stalled`
+event with `heartbeat_age`, `last_heartbeat`, `observed_at`, and the threshold.
+The warning persists across supervisor restart. Once a fresh heartbeat is
+observed, a `worker_stall_cleared` event closes that warning episode.
+**A stalled heartbeat by itself never releases compute or starts a replacement.**
+Unknown, invalid, and future-dated heartbeat values are not interpreted as
+evidence of worker failure.
+
+Worker log commits include `runtime/host-telemetry.json` with bounded readings
+of Linux `/proc/meminfo` (MemTotal, MemAvailable, Cached, Dirty, Writeback);
+cgroup v1/v2 memory limits, usage and available event counters; host and
+available cgroup memory/I/O pressure; and free bytes on job/control filesystems.
+`runtime/execution-tail.log` is capped at 64 KiB. The initial
+`hardware.json` includes `host_memory.mem_total_bytes` and
+`host_memory.cgroup_memory_limit_bytes`. Unavailable metrics are null or
+empty, not invented zeros. Telemetry carries no token values or remote URLs;
+the execution log tail is ordinary workload log material and may contain
+content emitted by the workload, so protect recovered logs accordingly.
+
+These changes have offline Windows/Linux CI coverage. The specific real-Jupyter
+interrupt/restart acceptance tests, large-input page-cache control, and long
+real-Colab workload are still separate release gates for issue #18.
+
+
+## Large remote-input cache control (issue #18)
+
+For remote inputs, the notebook retains the exact target paths, byte-count and
+SHA-256 verification, and HTTP Range resumption semantics. Before each file
+and every retry it checks free disk against the bytes still outstanding plus
+the existing 1 GiB margin. After each 64 MiB of streamed file output, it
+flushes Python buffers and calls `fdatasync` (or `fsync` when unavailable),
+then **attempts** `posix_fadvise(POSIX_FADV_DONTNEED)` on the synchronized
+range. Remaining bytes are synchronized on exit, including resumable partial
+downloads. The disk check also repeats after each window, so an unexpected
+concurrent decrease in free space is detected before the next window.
+Cache eviction is an advisory kernel operation and is not a guaranteed hard
+RAM limit; unsupported or failed advice is represented by counters, not
+reported as successful eviction.
+
+Verified run metadata in `transport.remote_inputs.cache_control` reports
+`window_bytes`, `sync_calls`, `advice_supported`, `advice_calls` and
+`advice_errors`. Jobs declaring no remote inputs omit the entire downloader
+from their compiled notebook, preserving the compact controller size.
+No local GPU or Colab allocation is needed for the synthetic regression tests.
+
+A two-GiB Linux proof on GitHub Actions (November 11, 2026) streamed exactly
+2,147,483,648 deterministic bytes, successfully performed 32 synchronization
+and 32 cache-advice operations with no advice errors, and observed 0 resident
+bytes using `mincore` immediately after download. A subsequent independent
+read verified the final file's SHA-256. This is one filesystem/kernel result,
+not a promise of 0 resident pages on a Colab runtime. To repeat the opt-in
+local proof on Linux with at least 5 GiB free:
+
+    COLABCOLA_LARGE_INPUT_PROOF=1 python -m pytest -q -s tests/test_remote_input_cache_large.py
+
+The dedicated GitHub workflow for the issue executes this proof without
+Colab credentials, network inputs, or GPU allocation. Real long-duration
+Colab execution and kernel-interruption/restart acceptance remain outstanding.
+
+
+## Scratch filesystem assessment (issue #18)
+
+When remote inputs are declared, the downloader performs a **read-only**
+capacity comparison before its existing disk preflight. The evaluation
+records the bytes required including the 1 GiB safety margin, free bytes on
+the current job filesystem, and available fixed candidate directories
+(`/mnt/local-scratch`, `/mnt/data`, `/scratch`). For each existing
+non-symlink directory, it records free bytes, whether `st_dev` differs
+from the current job filesystem, and whether the capacity is sufficient.
+Missing candidates and symlinks are omitted. Candidate contents are never
+read, created, deleted, or modified.
+
+The evaluation is stored in
+`result.json -> transport.remote_input_storage_evaluation`, as
+`storage-assessment.json` in the runtime results, and under
+`runtime/storage-assessment.json` in worker log snapshots. This makes the
+assessment visible even while a large input is still downloading.
+
+**This is diagnostic only:** it does not choose a different disk, relocate
+files, use symlinks or bind mounts, or modify the working directory or
+remote-input target paths. A larger filesystem with enough reported free
+space is only a possible candidate for a future separately tested placement
+strategy. Distinct device IDs and available bytes do not prove that a path
+can safely be mounted or that its data will survive provider interruption.
+Actual placement remains out of scope until evaluated on the intended
+Colab runtime.
+
+
+## Missing tracked-execution receipts (issue #18, closure review)
+
+A `kernel-v1` runtime whose `status.json` still reports `running` but
+whose owned `kernel-execution.json` **and** `kernel-request.json` are both
+missing is *not* treated as a dead worker: missing files alone cannot
+establish a kernel failure, a process-group exit, or permission to
+release/replace an owned runtime. The supervisor retains a sanitized
+connectivity diagnostic and respects the existing wall-time limit.
+It never submits the workload again merely because the receipt is missing.
+
+If both execution artifacts are missing **but** `status.json` explicitly
+reports `failed` or `persistence_failed` for the exact current attempt,
+that terminal status remains actionable: the supervisor journals
+`request_state=receipt_missing`, follows the existing failed-status
+cleanup path, and never fabricates `KeyboardInterrupt` or other kernel
+exception evidence. A mismatched attempt cannot use this fallback.
+
+Legacy plans without `kernel-v1` remain status-driven and do not depend
+on execution receipts. This rule is covered by offline provider and
+supervisor tests; it does not claim that the original provider's unknown
+termination cause has been established.
