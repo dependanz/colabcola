@@ -1,0 +1,34 @@
+name: Large remote-input cache proof
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - src/colabcola/runtime.py
+      - tests/test_remote_input_cache_large.py
+      - .github/workflows/remote-input-cache-proof.yml
+
+permissions:
+  contents: read
+
+jobs:
+  page-cache:
+    if: github.head_ref == 'fix/18-worker-lifecycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install in an isolated environment
+        run: |
+          python -m venv .ci-venv
+          ./.ci-venv/bin/python -m pip install -e . pytest
+      - name: Require free disk for local 2-GiB synthetic download
+        run: |
+          ./.ci-venv/bin/python -c "import shutil; assert shutil.disk_usage('.').free >= 5 * 1024**3, 'insufficient runner disk'"
+      - name: Verify mincore page residency and SHA-256
+        env:
+          COLABCOLA_LARGE_INPUT_PROOF: '1'
+        run: ./.ci-venv/bin/python -m pytest -q -s tests/test_remote_input_cache_large.py
