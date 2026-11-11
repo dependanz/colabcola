@@ -32,6 +32,28 @@ def publish_status(directory: Path, **details) -> None:
     atomic_bytes(directory / "status.json", (json.dumps(details, sort_keys=True) + "\n").encode())
 
 
+def make_producer_window(*, run_id: str, last_seq: int, window_seq: int,
+                         published_count: int, elapsed_s: float,
+                         target_fps: int, rate_seq: int,
+                         render_samples: list[float],
+                         compress_samples: list[float],
+                         publish_samples: list[float]) -> dict:
+    """Build a remote-only, one-second CUDA producer sampling window.
+
+    Not derived from the frequency of remote H.264 pull requests.
+    """
+    return {
+        "schema": 1, "run_id": run_id, "seq": last_seq,
+        "window_seq": window_seq, "published_count": published_count,
+        "window_elapsed_ms": round(elapsed_s * 1000, 3),
+        "target_fps": target_fps, "rate_seq": rate_seq,
+        "renderer_fps": round(published_count / elapsed_s, 2),
+        "render_copy_ms": round(median(render_samples), 2),
+        "compress_ms": round(median(compress_samples), 2),
+        "publish_ms": round(median(publish_samples), 2),
+    }
+
+
 def start(directory: str, fps: int, run_id: str):
     import torch
 
@@ -61,6 +83,7 @@ def start(directory: str, fps: int, run_id: str):
             compress_samples = []
             publish_samples = []
             publish_count = 0
+            producer_window_seq = 0
             publish_status(directory, state="ready", device="cuda", gpu=name,
                            memory_bytes=memory, run_id=run_id, width=WIDTH, height=HEIGHT)
             while not (directory / "stop").exists():
@@ -132,14 +155,15 @@ def start(directory: str, fps: int, run_id: str):
                 now = time.monotonic()
                 if now - metrics_since >= 1:
                     elapsed = now - metrics_since
-                    metrics = {
-                        "schema": 1, "run_id": run_id, "seq": seq,
-                        "target_fps": current_fps, "rate_seq": applied_rate_seq,
-                        "renderer_fps": round(publish_count / elapsed, 2),
-                        "render_copy_ms": round(median(render_samples), 2),
-                        "compress_ms": round(median(compress_samples), 2),
-                        "publish_ms": round(median(publish_samples), 2),
-                    }
+                    # A unique producer measurement window is distinct from
+                    # any host video_pull and from the renderer's frame seq.
+                    producer_window_seq += 1
+                    metrics = make_producer_window(
+                        run_id=run_id, last_seq=seq, window_seq=producer_window_seq,
+                        published_count=publish_count, elapsed_s=elapsed,
+                        target_fps=current_fps, rate_seq=applied_rate_seq,
+                        render_samples=render_samples, compress_samples=compress_samples,
+                        publish_samples=publish_samples)
                     atomic_bytes(directory / "render-metrics.json",
                                  (json.dumps(metrics, separators=(",", ":"), allow_nan=False) + "\n").encode())
                     metrics_since = now

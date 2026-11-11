@@ -41,11 +41,37 @@ def receive_poll_timeout(*, experimental: bool, draining: bool,
                max(.001, next_due - now))
 
 
+def _record_producer_window(stats: dict, diagnostics: dict | None) -> None:
+    """Count each independently generated producer interval once per phase.
+
+    A repeated H.264 pull often sees the same one-second sidecar. Conflicting
+    readings for the same interval are excluded without dropping video replies.
+    """
+    window = diagnostics.get("producer_window") if diagnostics else None
+    if window is None:
+        stats["producer_missing_replies"] += 1
+        return
+    wid = window["window_seq"]
+    if wid in stats["producer_conflicted_ids"]:
+        return
+    previous = stats["producer_windows"].get(wid)
+    if previous is None:
+        stats["producer_windows"][wid] = window
+    elif previous != window:
+        stats["producer_window_conflicts"] += 1
+        del stats["producer_windows"][wid]
+        stats["producer_conflicted_ids"].add(wid)
+
+
 def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
                      end_gap_ms: float) -> dict:
     """Never mix phase drain/warmup work into scored samples."""
     assert measured_s > 0
     samples = stats["fresh_gaps_ms"] + [end_gap_ms]
+    # One sample per independent producer window: NOT one per H.264 reply.
+    windows = list(stats["producer_windows"].values())
+    def window_median(field):
+        return round(median(w[field] for w in windows), 3) if windows else None
     return {
         "name": name,
         "credits": cap,
@@ -72,6 +98,17 @@ def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
             if stats["source_read_us"] else None),
         "duplicate_renderer_replies": stats["duplicate_renderer_replies"],
         "remote_diagnostics_missing": stats["remote_diagnostics_missing"],
+        "producer_windows_observed": len(windows),
+        "producer_window_metrics_missing_replies": stats["producer_missing_replies"],
+        "producer_window_conflicts": stats["producer_window_conflicts"],
+        "producer_renderer_fps_p50": window_median("renderer_fps"),
+        "producer_renderer_fps_min": (min(w["renderer_fps"] for w in windows)
+                                      if windows else None),
+        "producer_renderer_fps_max": (max(w["renderer_fps"] for w in windows)
+                                      if windows else None),
+        "producer_render_copy_p50_ms": window_median("render_copy_ms"),
+        "producer_compress_p50_ms": window_median("compress_ms"),
+        "producer_publish_p50_ms": window_median("publish_ms"),
         "remote_snapshot_read_p50_us": (round(median(stats["source_read_us"]), 2)
                                         if stats["source_read_us"] else None),
         "remote_encode_p50_us": (round(median(stats["encode_us"]), 2)
@@ -96,7 +133,10 @@ def _empty_phase() -> dict:
             "remote_diagnostics_missing": 0, "source_read_us": [],
             "encode_us": [], "submit_intervals_ms": [],
             "last_submit_at": None, "receive_poll_elapsed_ms": [],
-            "receive_poll_count": 0, "receive_polls_without_commit": 0}
+            "receive_poll_count": 0, "receive_polls_without_commit": 0,
+            "producer_windows": {}, "producer_missing_replies": 0,
+            "producer_window_conflicts": 0,
+            "producer_conflicted_ids": set()}
 
 
 def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
@@ -262,6 +302,9 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                                 stats["renderer_seqs"].add(renderer_seq)
                             stats["source_read_us"].append(diagnostics["source_read_us"])
                             stats["encode_us"].append(diagnostics["encode_us"])
+                        # Do not count a repeated producer window once per
+                        # H.264 pull; this telemetry is independent of pull FPS.
+                        _record_producer_window(stats, diagnostics)
                         if unit is None:
                             stats["suppressed"] += 1
 

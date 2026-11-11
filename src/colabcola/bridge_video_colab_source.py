@@ -10,6 +10,8 @@ values in CCV1 are REMOTE and are never host capture-to-decode timestamps.
 from __future__ import annotations
 
 import base64
+import json
+import math
 from pathlib import Path
 import struct
 import time
@@ -155,6 +157,49 @@ def read_latest_rgb(path: Path, *, width: int = WIDTH, height: int = HEIGHT):
     return renderer_seq, input_ack, ppm[len(prefix):]
 
 
+def read_producer_window(path: Path, run_id: str) -> dict | None:
+    """Best-effort snapshot of INDEPENDENT CUDA producer measurements.
+
+    Failures are optional telemetry failures, never codec failures. The
+    sidecar is atomically replaced by the producer. No remote timestamps are
+    compared with host clocks; no new socket or request is introduced.
+    """
+    try:
+        if not path.is_file() or path.stat().st_size > 4096:
+            return None
+        raw = path.read_bytes()
+        if len(raw) > 4096:
+            return None
+        obj = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if (not isinstance(obj, dict) or type(obj.get("schema")) is not int
+            or obj["schema"] != 1 or obj.get("run_id") != run_id):
+        return None
+    ints = {"window_seq": (1, 10_000_000),
+            "seq": (0, 100_000_000), "published_count": (1, 10_000),
+            "target_fps": (1, 60)}
+    values = {"window_elapsed_ms": (1, 10_000),
+              "renderer_fps": (0, 120),
+              "render_copy_ms": (0, 10_000),
+              "compress_ms": (0, 10_000),
+              "publish_ms": (0, 10_000)}
+    if any(type(obj.get(k)) is not int or not lo <= obj[k] <= hi
+           for k, (lo, hi) in ints.items()):
+        return None
+    if any(type(obj.get(k)) not in (int, float)
+           or not math.isfinite(obj[k]) or not lo <= obj[k] <= hi
+           for k, (lo, hi) in values.items()):
+        return None
+    # A remote-only consistency check: the producer's own counted windows
+    # must agree with its own published rate, allowing round-off to .01 FPS.
+    measured_rate = obj["published_count"] * 1000 / obj["window_elapsed_ms"]
+    if abs(measured_rate - obj["renderer_fps"]) > 0.02:
+        return None
+    return {**{k: obj[k] for k in ints},
+            **{k: float(obj[k]) for k in values}}
+
+
 class RemoteH264PullSource:
     """Single ordered source per owned Comm; request IDs must increase.
 
@@ -195,6 +240,10 @@ class RemoteH264PullSource:
             renderer_seq, ack, pixels = read_latest_rgb(
                 self.directory / "frame.bin", width=self.width, height=self.height)
             source_read_us = (time.perf_counter_ns() - read_started_ns) / 1000
+            # The one-second producer sidecar may be missing at startup.
+            # Its status is independent of the snapshot used by this pull.
+            producer_window = read_producer_window(
+                self.directory / "render-metrics.json", self.run_id)
             if ack < self.last_ack or ack >= 10_000_000:
                 raise RemoteVideoSourceError("remote applied-input ACK invalid")
             recorded_ns = time.perf_counter_ns()  # remote encoding-input timestamp
@@ -219,6 +268,8 @@ class RemoteH264PullSource:
                 "encode_us": round(encode_us, 2),
                 "data": base64.b64encode(wire).decode("ascii"),
             }
+            if producer_window is not None:
+                reply["producer_window"] = producer_window
             self.coded_seq += 1
             self.last_ack = ack
             return reply

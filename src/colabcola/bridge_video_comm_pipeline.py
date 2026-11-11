@@ -30,6 +30,33 @@ MAX_EXPERIMENTAL_VIDEO_CREDITS = 32
 PULL_TIMEOUT_S = 8.0
 
 
+def validated_producer_window(payload: object) -> dict | None:
+    """Validate bounded producer windows independently of H.264 metadata.
+
+    The remote encoder reads an atomic one-second sidecar. Its production
+    clock is REMOTE; only its own elapsed interval is used to calculate FPS.
+    """
+    if not isinstance(payload, dict):
+        return None
+    integers = {"window_seq": (1, 10_000_000), "seq": (0, 100_000_000),
+                "published_count": (1, 10_000), "target_fps": (1, 60)}
+    floats = {"window_elapsed_ms": (1, 10_000), "renderer_fps": (0, 120),
+              "render_copy_ms": (0, 10_000), "compress_ms": (0, 10_000),
+              "publish_ms": (0, 10_000)}
+    if any(type(payload.get(k)) is not int or not lo <= payload[k] <= hi
+           for k, (lo, hi) in integers.items()):
+        return None
+    if any(type(payload.get(k)) not in (int, float)
+           or not math.isfinite(payload[k]) or not lo <= payload[k] <= hi
+           for k, (lo, hi) in floats.items()):
+        return None
+    if abs(payload["published_count"] * 1000 / payload["window_elapsed_ms"]
+           - payload["renderer_fps"]) > 0.02:
+        return None
+    return {**{k: payload[k] for k in integers},
+            **{k: float(payload[k]) for k in floats}}
+
+
 def validated_remote_video_diagnostics(payload: object) -> dict | None:
     """Optional same-remote-clock timings and CUDA source ID.
 
@@ -47,7 +74,8 @@ def validated_remote_video_diagnostics(payload: object) -> dict | None:
                    for value in (read_us, encode_us))):
         return None
     return {"renderer_seq": seq, "source_read_us": float(read_us),
-            "encode_us": float(encode_us)}
+            "encode_us": float(encode_us),
+            "producer_window": validated_producer_window(payload.get("producer_window"))}
 
 
 class KernelH264PullWindow:
