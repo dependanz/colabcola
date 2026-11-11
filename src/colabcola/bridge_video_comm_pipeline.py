@@ -7,6 +7,7 @@ This module is opt-in and does not change the established single-credit mode.
 """
 from __future__ import annotations
 
+import math
 import queue
 from statistics import median
 import time
@@ -27,6 +28,26 @@ from .lifecycle_io import LifecycleError
 MAX_VIDEO_CREDITS = 2
 MAX_EXPERIMENTAL_VIDEO_CREDITS = 32
 PULL_TIMEOUT_S = 8.0
+
+
+def validated_remote_video_diagnostics(payload: object) -> dict | None:
+    """Optional same-remote-clock timings and CUDA source ID.
+
+    Older test peers may omit the fields. Invalid optional metadata is ignored,
+    never treated as frame content, protocol authorization or a host timestamp.
+    """
+    if not isinstance(payload, dict):
+        return None
+    seq = payload.get("renderer_seq")
+    read_us = payload.get("source_read_us")
+    encode_us = payload.get("encode_us")
+    if (type(seq) is not int or not 0 <= seq < 100_000_000
+            or any(type(value) not in (int, float) or not math.isfinite(value)
+                   or not 0 <= value <= 10_000_000
+                   for value in (read_us, encode_us))):
+        return None
+    return {"renderer_seq": seq, "source_read_us": float(read_us),
+            "encode_us": float(encode_us)}
 
 
 class KernelH264PullWindow:
@@ -60,6 +81,8 @@ class KernelH264PullWindow:
         self.suppressed_dependent_units = 0
         self.failed = False
         self.maximum_outstanding = 0
+        # Same order as the last nonempty poll() return; not a wire/codec change.
+        self.last_committed_diagnostics: list[dict | None] = []
 
     def _healthy(self):
         wire = self.peer.wire
@@ -101,7 +124,7 @@ class KernelH264PullWindow:
         result = []
         try:
             while self.next_commit in self.completed:
-                unit, ack, sizes, rtt = self.completed.pop(self.next_commit)
+                unit, ack, sizes, rtt, diagnostics = self.completed.pop(self.next_commit)
                 if ack < self.input_ack:
                     raise VideoCommProtocolError('video pipeline applied ACK regressed')
                 keep = self.gate.accept(unit)
@@ -110,6 +133,7 @@ class KernelH264PullWindow:
                 if not keep:
                     self.suppressed_dependent_units += 1
                 result.append((unit if keep else None, ack, sizes, rtt))
+                self.last_committed_diagnostics.append(diagnostics)
         except VideoCommProtocolError:
             self.failed = True
             raise LifecycleError('video pipeline ordered frame invalid') from None
@@ -119,6 +143,7 @@ class KernelH264PullWindow:
         if (type(seconds) not in (float, int) or isinstance(seconds, bool)
                 or not .001 <= seconds <= .5):
             raise ValueError('video pipeline poll timeout outside bounds')
+        self.last_committed_diagnostics = []
         self.check_timeouts()
         try:
             message = self.peer.wire.iopub_channel.get_msg(timeout=seconds)
@@ -155,7 +180,9 @@ class KernelH264PullWindow:
             self.failed = True
             raise LifecycleError('invalid correlated H.264 pipeline reply') from None
         sizes = (len(unit.data), PACKET_HEADER.size + len(unit.data), len(payload['data']))
-        self.completed[pull_seq] = (unit, ack, sizes, (time.monotonic() - sent_at) * 1000)
+        diagnostics = validated_remote_video_diagnostics(payload)
+        self.completed[pull_seq] = (
+            unit, ack, sizes, (time.monotonic() - sent_at) * 1000, diagnostics)
         return self._commit_ready()
 
 

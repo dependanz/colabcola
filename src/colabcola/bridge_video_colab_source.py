@@ -191,12 +191,15 @@ class RemoteH264PullSource:
         # Never repeat a possibly executed request after a failure.
         self.last_pull = pull_seq
         try:
+            read_started_ns = time.perf_counter_ns()
             renderer_seq, ack, pixels = read_latest_rgb(
                 self.directory / "frame.bin", width=self.width, height=self.height)
+            source_read_us = (time.perf_counter_ns() - read_started_ns) / 1000
             if ack < self.last_ack or ack >= 10_000_000:
                 raise RemoteVideoSourceError("remote applied-input ACK invalid")
             recorded_ns = time.perf_counter_ns()  # remote encoding-input timestamp
             payload, keyframe = self.encoder(pixels, self.coded_seq)
+            encode_us = (time.perf_counter_ns() - recorded_ns) / 1000
             if (not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_UNIT_BYTES
                     or type(keyframe) is not bool or not payload.startswith(
                         (b"\x00\x00\x01", b"\x00\x00\x00\x01"))
@@ -210,6 +213,10 @@ class RemoteH264PullSource:
                 "v": 1, "kind": "video_access_unit", "codec": "h264-annexb",
                 "run_id": self.run_id, "pull_seq": pull_seq, "input_ack": ack,
                 "renderer_seq": renderer_seq,
+                # Independent remote CLOCK DURATIONS; never subtract these
+                # timestamps from host monotonic/perf-counter readings.
+                "source_read_us": round(source_read_us, 2),
+                "encode_us": round(encode_us, 2),
                 "data": base64.b64encode(wire).decode("ascii"),
             }
             self.coded_seq += 1

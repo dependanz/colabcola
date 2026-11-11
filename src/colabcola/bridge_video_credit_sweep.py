@@ -47,6 +47,21 @@ def _summarize_phase(name: str, cap: int, stats: dict, *, measured_s: float,
         "input_ack_observed_p50_ms": (round(median(stats["acks_ms"]), 2)
                                       if stats["acks_ms"] else None),
         "longest_no_new_decoded_frame_ms": round(max(samples) if samples else 0, 2),
+        # Distinct CUDA source IDs; never conflate H.264 units with fresh renders.
+        "distinct_renderer_sequences_in_replies": (
+            len(stats["renderer_seqs"]) if stats["source_read_us"] else None),
+        "distinct_renderer_reply_fps": (
+            round(len(stats["renderer_seqs"]) / measured_s, 3)
+            if stats["source_read_us"] else None),
+        "duplicate_renderer_replies": stats["duplicate_renderer_replies"],
+        "remote_diagnostics_missing": stats["remote_diagnostics_missing"],
+        "remote_snapshot_read_p50_us": (round(median(stats["source_read_us"]), 2)
+                                        if stats["source_read_us"] else None),
+        "remote_encode_p50_us": (round(median(stats["encode_us"]), 2)
+                                 if stats["encode_us"] else None),
+        "host_pull_submit_interval_p50_ms": (
+            round(median(stats["submit_intervals_ms"]), 2)
+            if stats["submit_intervals_ms"] else None),
     }
 
 
@@ -54,7 +69,11 @@ def _empty_phase() -> dict:
     return {"decoded": 0, "replies": 0, "suppressed": 0,
             "max_outstanding": 0, "h264_bytes": 0, "ccv1_bytes": 0,
             "base64_chars": 0, "rtts": [], "decode_us": [],
-            "acks_ms": [], "fresh_gaps_ms": []}
+            "acks_ms": [], "fresh_gaps_ms": [],
+            "renderer_seqs": set(), "duplicate_renderer_replies": 0,
+            "remote_diagnostics_missing": 0, "source_read_us": [],
+            "encode_us": [], "submit_intervals_ms": [],
+            "last_submit_at": None}
 
 
 def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
@@ -143,8 +162,15 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                     drain = True
                 if not drain and now >= next_due and window.outstanding < credit_cap:
                     window.submit(next_pull)
+                    submitted_at = time.monotonic()
+                    if scored_start <= submitted_at < phase_end:
+                        previous_submit = stats["last_submit_at"]
+                        if previous_submit is not None:
+                            stats["submit_intervals_ms"].append(
+                                (submitted_at - previous_submit) * 1000)
+                        stats["last_submit_at"] = submitted_at
                     next_pull += 1
-                    next_due = time.monotonic() + 1 / poll_hz  # never catch up
+                    next_due = submitted_at + 1 / poll_hz  # never catch up
 
                 if window.outstanding:
                     committed = window.poll(POLL_WAIT_SECONDS)
@@ -154,7 +180,14 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                         break  # all pending and out-of-order replies settled
                     time.sleep(min(.02, max(.001, min(next_due, phase_end) - time.monotonic())))
 
-                for unit, ack, sizes, rtt in committed:
+                # Optional, ordered side channel: a legacy/fake window has no
+                # diagnostics, while the production window aligns 1:1 to commits.
+                diagnostic_batch = getattr(window, "last_committed_diagnostics", None)
+                if diagnostic_batch is None:
+                    diagnostic_batch = [None] * len(committed)
+                if len(diagnostic_batch) != len(committed):
+                    raise LifecycleError("H.264 diagnostic/commit alignment invalid")
+                for (unit, ack, sizes, rtt), diagnostics in zip(committed, diagnostic_batch):
                     observed = time.monotonic()
                     scored = scored_start <= observed < phase_end
                     if scored:
@@ -164,6 +197,16 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                         stats["ccv1_bytes"] += framed
                         stats["base64_chars"] += base64_count
                         stats["rtts"].append(rtt)
+                        if diagnostics is None:
+                            stats["remote_diagnostics_missing"] += 1
+                        else:
+                            renderer_seq = diagnostics["renderer_seq"]
+                            if renderer_seq in stats["renderer_seqs"]:
+                                stats["duplicate_renderer_replies"] += 1
+                            else:
+                                stats["renderer_seqs"].add(renderer_seq)
+                            stats["source_read_us"].append(diagnostics["source_read_us"])
+                            stats["encode_us"].append(diagnostics["encode_us"])
                         if unit is None:
                             stats["suppressed"] += 1
 
