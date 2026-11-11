@@ -177,15 +177,30 @@ class GoogleProvider:
     ASSIGNMENT_POST_TIMEOUT_SECONDS = 120.0
 
     def allocate(self, allocation_id, gpu):
-        from ._vendor.colab_cli.client import Accelerator, Variant, resolve_assign_shape
-        # Persist allocation_id BEFORE calling. Retrying uses the same notebook UUID;
-        # upstream reconciles an uncertain POST with a GET before repeating allocation.
-        assignment = self.client.assign(uuid.UUID(allocation_id),
-                                        variant=Variant.GPU if gpu != "NONE" else Variant.DEFAULT,
-                                        accelerator=Accelerator(gpu),
-                                        shape=resolve_assign_shape(Accelerator(gpu), high_mem=self.high_mem),
-                                        post_timeout=self.ASSIGNMENT_POST_TIMEOUT_SECONDS)
-        return assignment.endpoint
+        from ._vendor.colab_cli.client import (
+            Accelerator, Assignment, COLAB_XSRF_TOKEN_HEADER,
+            PostAssignmentResponse, Variant, resolve_assign_shape,
+        )
+        # Keep the vendored client byte-for-byte pinned to its audited upstream.
+        # The bridge itself performs one GET followed by at most one POST.
+        # The allocation UUID was durably journaled before this operation.
+        notebook_id = uuid.UUID(allocation_id)
+        accelerator = Accelerator(gpu)
+        variant = Variant.GPU if gpu != "NONE" else Variant.DEFAULT
+        shape = resolve_assign_shape(accelerator, high_mem=self.high_mem)
+        assignment = self.client._get_assignment(notebook_id, variant, accelerator, shape)
+        if isinstance(assignment, Assignment):
+            return assignment.endpoint
+        # An ambiguous POST is never retried. Existing run_colab finally-block
+        # reconciles the original allocation UUID and releases only owned T4.
+        result = self.client._issue_request(
+            self.client._build_assign_url(notebook_id, variant, accelerator, shape),
+            method="POST",
+            headers={COLAB_XSRF_TOKEN_HEADER["key"]: assignment.token},
+            schema=PostAssignmentResponse,
+            timeout=self.ASSIGNMENT_POST_TIMEOUT_SECONDS,
+        )
+        return result.endpoint
 
     def reconcile(self, allocation_id, gpu):
         from ._vendor.colab_cli.client import Accelerator, Variant, Assignment, resolve_assign_shape

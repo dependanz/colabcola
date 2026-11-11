@@ -1,66 +1,90 @@
-"""Scoped Colab assignment POST timeout; no network or Colab allocation."""
+"""Scoped Colab assignment POST timeout, with audited vendored sources intact."""
 from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
 
 import pytest
+from requests.exceptions import ReadTimeout
 
-from colabcola._vendor.colab_cli.client import Client
-from colabcola.lifecycle_provider import GoogleProvider
+from colabcola._vendor.colab_cli.client import Assignment, COLAB_XSRF_TOKEN_HEADER
+from colabcola.lifecycle_provider import GoogleProvider, verify_provider, _verify_bundle
 
 
-def test_bridge_provider_overrides_assignment_post_only():
-    provider = GoogleProvider.__new__(GoogleProvider)
-    observed = []
+def make_provider(assignment):
+    calls = []
 
     class StubClient:
-        def assign(self, notebook_hash, **options):
-            observed.append((notebook_hash, options))
-            return SimpleNamespace(endpoint="owned-runtime")
+        def assign(self, *args, **kwargs):
+            raise AssertionError("Vendored assign must not be invoked by bridge")
 
+        def _get_assignment(self, *args, **kwargs):
+            calls.append(("get", args, kwargs))
+            return assignment
+
+        def _build_assign_url(self, *args, **kwargs):
+            calls.append(("url", args, kwargs))
+            return "https://colab.research.google.com/fixture-only"
+
+        def _issue_request(self, url, **kwargs):
+            calls.append(("post", url, kwargs))
+            return SimpleNamespace(endpoint="owned-t4")
+
+    provider = GoogleProvider.__new__(GoogleProvider)
     provider.client = StubClient()
+    return provider, calls
+
+
+def test_vendor_source_and_provenance_still_verify():
+    verify_provider()
+    manifest = _verify_bundle()
+    assert manifest["schema"] == 1
+
+
+def test_assignment_get_uses_unmodified_timeout_and_posts_only_once():
+    provider, calls = make_provider(SimpleNamespace(token="test-xsrf"))
     allocation_id = str(uuid.uuid4())
-    assert provider.allocate(allocation_id, "T4") == "owned-runtime"
-    assert len(observed) == 1
-    request_id, options = observed[0]
-    assert request_id == uuid.UUID(allocation_id)
-    assert options["post_timeout"] == 120.0
-    assert options["accelerator"].value == "T4"
+    assert provider.allocate(allocation_id, "T4") == "owned-t4"
+    assert [c[0] for c in calls] == ["get", "url", "post"]
+    identifier, variant, accelerator, shape = calls[0][1]
+    assert identifier == uuid.UUID(allocation_id)
+    assert variant.value == "GPU"
+    assert accelerator.value == "T4"
+    assert shape is None
+    assert calls[0][2] == {}
+    assert calls[1][1] == calls[0][1]
+    request = calls[2][2]
+    assert request["method"] == "POST"
+    assert request["timeout"] == 120.0
+    assert request["headers"][COLAB_XSRF_TOKEN_HEADER["key"]] == "test-xsrf"
+    assert request["schema"].__name__ == "PostAssignmentResponse"
 
 
-@pytest.mark.parametrize("override", [None, 120.0])
-def test_client_assign_preserves_default_and_forwards_override(monkeypatch, override):
-    monkeypatch.setenv("COLAB_CLI_ASSIGN_RETRIES", "0")
-    client = Client.__new__(Client)
-    observed = []
-    client._get_assignment = lambda *args: SimpleNamespace(token="xsrf")
-    client._post_assignment = lambda *args, **kwargs: (
-        observed.append(kwargs) or SimpleNamespace(endpoint="owned-runtime")
-    )
-    if override is None:
-        result = client.assign(uuid.uuid4())
-        assert observed == [{}]
-    else:
-        result = client.assign(uuid.uuid4(), post_timeout=override)
-        assert observed == [{"post_timeout": 120.0}]
-    assert result.endpoint == "owned-runtime"
+def test_preexisting_owned_assignment_never_posts():
+    existing = Assignment.model_construct(endpoint="existing-owned-t4")
+    provider, calls = make_provider(existing)
+    assert provider.allocate(str(uuid.uuid4()), "T4") == "existing-owned-t4"
+    assert len(calls) == 1
+    assert calls[0][0] == "get"
 
 
-def test_only_assignment_post_http_request_receives_override():
-    client = Client.__new__(Client)
-    observed = []
-    client._build_assign_url = lambda *args: "https://colab.research.google.com/tun/m/assign"
-    client._issue_request = lambda url, **kwargs: (
-        observed.append(kwargs) or SimpleNamespace(token="xsrf")
-    )
-    allocation_id = uuid.uuid4()
-    client._get_assignment(allocation_id)
-    client._post_assignment(allocation_id, "xsrf", post_timeout=120.0)
-    client._post_assignment(allocation_id, "xsrf")
-    assert "timeout" not in observed[0]
-    assert observed[0]["schema"] is not None
-    assert observed[1]["method"] == "POST"
-    assert observed[1]["timeout"] == 120.0
-    assert observed[2]["method"] == "POST"
-    assert "timeout" not in observed[2]
+def test_uncertain_assignment_post_is_not_retried():
+    provider, calls = make_provider(SimpleNamespace(token="test-xsrf"))
+    def fail_once(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        raise ReadTimeout("SECRET_SHOULD_NOT_BE_LOGGED")
+    provider.client._issue_request = fail_once
+    with pytest.raises(ReadTimeout):
+        provider.allocate(str(uuid.uuid4()), "T4")
+    assert [c[0] for c in calls] == ["get", "url", "post"]
+
+
+def test_assignment_get_failure_never_posts():
+    provider, calls = make_provider(SimpleNamespace(token="ignored"))
+    def fail_get(*args, **kwargs):
+        calls.append(("get", args, kwargs))
+        raise ReadTimeout("GET timed out")
+    provider.client._get_assignment = fail_get
+    with pytest.raises(ReadTimeout):
+        provider.allocate(str(uuid.uuid4()), "T4")
+    assert [c[0] for c in calls] == ["get"]

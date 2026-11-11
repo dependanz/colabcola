@@ -2,18 +2,20 @@
 
 ## Evidence
 
-Two Colab Cola T4 assignment POSTs failed on November 11, 2026 with 40-second read timeouts. Both owned-runtime journals were confirmed released; neither reached renderer startup. In contrast, a normal Colab browser notebook successfully connected to a Tesla T4 with CUDA available and `nvidia-smi` exit code 0.
+Two Colab Cola T4 assignment POSTs failed on November 11, 2026 with 40-second read timeouts; cleanup confirmed both owned runs released, and neither reached GPU renderer startup. A normal Colab browser notebook using the same account successfully connected to a Tesla T4 with CUDA available and `nvidia-smi` exit code 0. This supports investigating the timeout but does not prove that longer waiting fixes allocation.
 
-The official Google Colab CLI session-management documentation describes an AuthorizedSession default timeout of 120 seconds when not overridden: https://github.com/googlecolab/google-colab-cli/blob/main/docs/01_session_management.md . Browser provisioning success does not prove a longer CLI timeout fixes these failures, but establishes a bounded experimental hypothesis.
+## Corrected implementation (integrity-preserving)
 
-## Change
+The first v33t commit (`b1953ad`) modified the vendored Colab CLI client. That violated the intentional pinned-source integrity check in `verify_provider()`, so the local 657-test regression passed but managed provider preflight failed with `Google provider differs from inspected commit 79cd126...`.
 
-The existing `COLAB_CLI_REQUEST_TIMEOUT=40` and `COLAB_CLI_ASSIGN_RETRIES=0` settings are unchanged. Only the bridge's `GoogleProvider.allocate` supplies `post_timeout=120.0`; this is forwarded to the vendored client's assignment POST. The initial assignment GET, preflight GET, reconciliation GET, unassign and all unrelated client operations retain their normal timeout behavior. The default vendored client call signature remains compatible.
+The corrective commit restores `src/colabcola/_vendor/colab_cli/client.py` byte-for-byte from the previously verified feature commit `917934e`, with **no** changes to its pinned upstream hashes or the provider provenance manifest.
 
-No automatic retries, repeated ambiguous requests, changed allocation identifiers, codec changes, renderer changes, or new listeners are introduced. If the POST still times out, the durable allocation UUID, sanitized journal failure category and fail-closed owned cleanup remain active.
+The bridge's own `GoogleProvider.allocate` now uses the verified vendored client's GET/POST helpers directly. It performs the normal assignment GET, returns an existing owned assignment when present, or submits a **single** allocation POST using the 120-second scoped timeout. All other provider operations retain the normal 40-second timeout. The original `COLAB_CLI_ASSIGN_RETRIES=0` remains and the bridge does not retry any ambiguous POST.
 
-## Verification
+This preserves the journaled allocation UUID, the timeout-sanitizing wrapper in `bridge_colab.run_colab`, and fail-closed owned-runtime reconciliation. No new listener, codec, or renderer behavior is introduced.
 
-Run `tests/test_bridge_colab_assignment_post_timeout.py`, `tests/test_bridge_colab_assignment_timeout.py`, then all `tests/test_bridge*.py`. Run the managed 30 FPS `--preflight-only` mode. After GitHub CI and local tests pass, verify the ordinary browser notebook has been disconnected and that Colab Cola sees no active assignments before contemplating at most one **explicitly authorized** supervised allocation. Never launch a paid trial automatically.
+## Validation and next steps
 
-Keep this feature change isolated from `dev` and `main` pending evaluation. Tracking: https://github.com/dependanz/colabcola/issues/21 .
+Run `verify_provider()` and `_verify_bundle()` through offline tests, then `tests/test_bridge_colab_assignment_post_timeout.py`, `tests/test_bridge_colab_assignment_timeout.py`, full `tests/test_bridge*.py` regression and a managed 30 FPS `--preflight-only`. Only after CI and Windows preflight pass, after disconnecting the separate browser Colab notebook, consider one explicitly approved supervised T4 experiment. No automatic allocation or retry is part of this change.
+
+Keep this feature branch isolated from `dev` and `main` pending validation. Issue: https://github.com/dependanz/colabcola/issues/21.
