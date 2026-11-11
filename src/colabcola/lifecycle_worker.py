@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import shutil
 import os
 from pathlib import Path
 import signal
@@ -202,7 +203,152 @@ def acquire_inputs(config, store, root):
     shutil.copyfile(recovered / "notebook.ipynb", root / "notebook.ipynb")
 
 
-def log_members(result_root, job_root, patterns):
+
+_MEMINFO_FIELDS = ("MemTotal", "MemAvailable", "Cached", "Dirty", "Writeback")
+
+
+def _telemetry_text(path):
+    try:
+        with Path(path).open("r", encoding="ascii", errors="replace") as stream:
+            return stream.read(32768)
+    except (OSError, ValueError):
+        return ""
+
+
+def _telemetry_number(text):
+    try:
+        value = int(text.strip())
+        return value if value >= 0 else None
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _telemetry_pressure(text):
+    report = {}
+    for line in text.splitlines()[:8]:
+        values = line.split()
+        if not values or values[0] not in ("some", "full"):
+            continue
+        row = {}
+        for field in values[1:]:
+            key, sep, raw = field.partition("=")
+            if sep and key in ("avg10", "avg60", "avg300", "total"):
+                try:
+                    value = int(raw) if key == "total" else float(raw)
+                    if math.isfinite(value) and value >= 0:
+                        row[key] = value
+                except ValueError:
+                    pass
+        if row:
+            report[values[0]] = row
+    return report
+
+
+def _telemetry_cgroup_path(proc_root, controller):
+    for line in _telemetry_text(proc_root / "self/cgroup").splitlines():
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            continue
+        match = (fields[0] == "0" and fields[1] == "") if controller == "v2" else (
+            "memory" in fields[1].split(","))
+        if not match:
+            continue
+        value = fields[2]
+        pieces = Path(value).parts
+        if not value.startswith("/") or ".." in pieces:
+            continue
+        return Path(*pieces[1:])
+    return Path()
+
+
+def _telemetry_disk_free(path):
+    candidate = Path(path)
+    try:
+        while not candidate.exists() and candidate.parent != candidate:
+            candidate = candidate.parent
+        return shutil.disk_usage(candidate).free
+    except (OSError, ValueError):
+        return None
+
+
+def collect_host_telemetry(control_root, job_root, *,
+                           proc_root=Path("/proc"), cgroup_root=Path("/sys/fs/cgroup"),
+                           clock=time.time):
+    """Bounded, read-only Linux diagnostics. Missing capabilities are reported, not fatal."""
+    proc_root, cgroup_root = Path(proc_root), Path(cgroup_root)
+    memory = {key: None for key in _MEMINFO_FIELDS}
+    for line in _telemetry_text(proc_root / "meminfo").splitlines()[:256]:
+        key, sep, tail = line.partition(":")
+        if sep and key in memory:
+            parts = tail.split()
+            if len(parts) == 2 and parts[1] == "kB":
+                size = _telemetry_number(parts[0])
+                if size is not None:
+                    memory[key] = size * 1024
+
+    cgroup = {"version": None, "memory_limit_bytes": None,
+              "memory_usage_bytes": None, "memory_events": {}}
+    if (cgroup_root / "cgroup.controllers").is_file():
+        base = cgroup_root
+        selected = base / _telemetry_cgroup_path(proc_root, "v2")
+        if not (selected / "memory.current").is_file():
+            selected = base
+        cgroup["version"] = 2
+        cgroup["memory_limit_bytes"] = _telemetry_number(
+            _telemetry_text(selected / "memory.max"))
+        cgroup["memory_usage_bytes"] = _telemetry_number(
+            _telemetry_text(selected / "memory.current"))
+        cgroup["memory_events"] = {
+            row[0]: value
+            for line in _telemetry_text(selected / "memory.events").splitlines()[:64]
+            if len(row := line.split()) == 2
+            if (value := _telemetry_number(row[1])) is not None
+            if row[0] in ("low", "high", "max", "oom", "oom_kill", "oom_group_kill")
+        }
+    elif (cgroup_root / "memory").is_dir():
+        base = cgroup_root / "memory"
+        selected = base / _telemetry_cgroup_path(proc_root, "v1")
+        if not (selected / "memory.usage_in_bytes").is_file():
+            selected = base
+        cgroup["version"] = 1
+        cgroup["memory_limit_bytes"] = _telemetry_number(
+            _telemetry_text(selected / "memory.limit_in_bytes"))
+        cgroup["memory_usage_bytes"] = _telemetry_number(
+            _telemetry_text(selected / "memory.usage_in_bytes"))
+        failcnt = _telemetry_number(_telemetry_text(selected / "memory.failcnt"))
+        if failcnt is not None:
+            cgroup["memory_events"] = {"failcnt": failcnt}
+    pressure = {
+        name: _telemetry_pressure(_telemetry_text(proc_root / "pressure" / name))
+        for name in ("memory", "io")
+    }
+    if cgroup["version"] == 2:
+        for name in ("memory", "io"):
+            contents = _telemetry_text(selected / (name + ".pressure"))
+            if contents:
+                pressure["cgroup_" + name] = _telemetry_pressure(contents)
+
+    return {
+        "schema": 1, "observed_at": clock(),
+        "memory_bytes": memory, "cgroup": cgroup, "pressure": pressure,
+        "disk_free_bytes": {"job": _telemetry_disk_free(job_root),
+                            "control": _telemetry_disk_free(control_root)},
+    }
+
+
+def _execution_log_tail(control_root, limit=65536):
+    path = Path(control_root) / "execution.log"
+    if not path.exists():
+        return None
+    # The control directory may hold credentials; do not follow arbitrary links.
+    file = safe_file(control_root, "execution.log")
+    with file.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.seek(max(0, stream.tell() - limit))
+        return stream.read(limit)
+
+
+def log_members(result_root, job_root, patterns, *, control_root=None):
     logs = {}
     for name in ("stdout.log", "stderr.log", "environment.log", "transfer.log"):
         if (result_root / name).is_file():
@@ -211,6 +357,13 @@ def log_members(result_root, job_root, patterns):
         for path in job_root.glob(pattern):
             name = path.relative_to(job_root).as_posix()
             logs[name] = read_regular(job_root, name, 8 * 1024 * 1024)
+    if control_root is not None:
+        # Even quiet jobs publish a bounded telemetry observation periodically.
+        logs["runtime/host-telemetry.json"] = encoded(
+            collect_host_telemetry(control_root, job_root))
+        tail = _execution_log_tail(control_root)
+        if tail is not None:
+            logs["runtime/execution-tail.log"] = tail
     return logs
 
 
@@ -415,7 +568,8 @@ def run(config_path):
                     status["checkpoint_step"] = last_checkpoint = step
                     status["checkpoint_commit"] = {k: snapshot[k] for k in ("id", "sha256", "bytes")}
                 if time.time() - last_logs >= 5 or finished:
-                    logs = log_members(result_root, job_root, config["log_patterns"])
+                    logs = log_members(result_root, job_root, config["log_patterns"],
+                                       control_root=root)
                     log_hash = digest(encoded({n: digest(b) for n, b in logs.items()}))
                     if logs and log_hash != last_log_hash:
                         snapshot = publish(store, config, "logs", logs, step=max(0, last_checkpoint),

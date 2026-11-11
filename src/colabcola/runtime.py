@@ -206,6 +206,7 @@ try:
         _COLABCOLA_RUNTIME_FACTS["gpus"], _COLABCOLA_RUNTIME_FACTS["cuda_available"])
     hardware.update(job_id=COLABCOLA_JOB_ID, run_id=globals().get("COLABCOLA_RUN_ID"),
                     attempt=globals().get("COLABCOLA_ATTEMPT"), allocation_id=globals().get("COLABCOLA_ALLOCATION_ID"))
+    hardware["host_memory"] = _colabcola_boot_memory()
     _COLABCOLA_RUNTIME_FACTS["resource_check"] = hardware
     temporary = COLABCOLA_RESULT_ROOT / "hardware.json.tmp"
     temporary.write_text(json.dumps(hardware, sort_keys=True) + "\n", encoding="utf-8")

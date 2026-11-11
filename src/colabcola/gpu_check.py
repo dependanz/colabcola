@@ -28,3 +28,51 @@ def _colabcola_gpu_check(requested, resources, gpus, cuda_available):
     if reason:
         report.update(state="failed",reason=reason)
     return report
+
+
+def _colabcola_boot_memory(proc_root="/proc", cgroup_root="/sys/fs/cgroup"):
+    """Boot-time host memory snapshot; missing Linux metrics remain null."""
+    import pathlib
+    proc_root, cgroup_root = pathlib.Path(proc_root), pathlib.Path(cgroup_root)
+    report = {"mem_total_bytes": None, "cgroup_memory_limit_bytes": None}
+    try:
+        for line in (proc_root / "meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                parts = line.partition(":")[2].split()
+                if len(parts) == 2 and parts[1] == "kB":
+                    report["mem_total_bytes"] = int(parts[0]) * 1024
+                break
+    except (OSError, ValueError):
+        pass
+    try:
+        cgroup_value = ""
+        if (cgroup_root / "cgroup.controllers").is_file():
+            cgroup_value = (cgroup_root / "memory.max").read_text().strip()
+            for line in (proc_root / "self/cgroup").read_text().splitlines():
+                parts = line.split(":", 2)
+                if len(parts) == 3 and parts[:2] == ["0", ""]:
+                    relative = pathlib.PurePosixPath(parts[2])
+                    if parts[2].startswith("/") and ".." not in relative.parts:
+                        scoped = cgroup_root.joinpath(*relative.parts[1:], "memory.max")
+                        if scoped.is_file():
+                            cgroup_value = scoped.read_text().strip()
+                    break
+        elif (cgroup_root / "memory").is_dir():
+            base = cgroup_root / "memory"
+            cgroup_value = (base / "memory.limit_in_bytes").read_text().strip()
+            for line in (proc_root / "self/cgroup").read_text().splitlines():
+                parts = line.split(":", 2)
+                if len(parts) == 3 and "memory" in parts[1].split(","):
+                    relative = pathlib.PurePosixPath(parts[2])
+                    if parts[2].startswith("/") and ".." not in relative.parts:
+                        scoped = base.joinpath(*relative.parts[1:], "memory.limit_in_bytes")
+                        if scoped.is_file():
+                            cgroup_value = scoped.read_text().strip()
+                    break
+        if cgroup_value and cgroup_value != "max":
+            amount = int(cgroup_value)
+            if amount >= 0:
+                report["cgroup_memory_limit_bytes"] = amount
+    except (OSError, ValueError):
+        pass
+    return report
