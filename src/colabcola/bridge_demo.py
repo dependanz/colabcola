@@ -416,6 +416,9 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--benchmark-h264-credits", action="store_true",
                         help="opt-in H.264 single-runtime 1/2/1 credit A/B/A sweep")
     remote.add_argument("--h264-credit-phase-seconds", type=int, default=16)
+    remote.add_argument("--benchmark-h264-capacity", action="store_true",
+                        help="EXPERIMENTAL 30/60 FPS H.264 sweep of 1,2,3,4,8,16,32 credits")
+    remote.add_argument("--h264-capacity-phase-seconds", type=int, default=10)
     remote.add_argument("--max-seconds", type=int, default=600)
     remote.add_argument("--confirm-allocation", action="store_true")
     remote.add_argument("--preflight-only", action="store_true")
@@ -443,15 +446,30 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("H.264 video requires --transport comm --inflight 1 or 2, without benchmarks/probe")
             if args.install_remote_pyav and args.video_codec != "h264":
                 parser.error("--install-remote-pyav requires --video-codec h264")
-            max_poll_hz = 12 if args.transport == "comm" else 6
-            if not 1 <= args.fps <= 12 or not 1 <= args.poll_hz <= max_poll_hz:
+            max_rate = 60 if args.benchmark_h264_capacity else 12
+            max_poll_hz = max_rate if args.transport == "comm" else 6
+            if not 1 <= args.fps <= max_rate or not 1 <= args.poll_hz <= max_poll_hz:
                 parser.error(
-                    f"colab FPS must be 1..12 and {args.transport} poll-hz must be 1..{max_poll_hz}"
+                    f"colab FPS must be 1..{max_rate} and {args.transport} poll-hz must be 1..{max_poll_hz}"
                 )
             if not 120 <= args.max_seconds <= 1800:
                 parser.error("colab --max-seconds must be within 120..1800")
             if not 1 <= args.inflight <= 4:
                 parser.error("--inflight must be in 1..4")
+            if args.h264_capacity_phase_seconds != 10 and not args.benchmark_h264_capacity:
+                parser.error("--h264-capacity-phase-seconds requires --benchmark-h264-capacity")
+            if args.benchmark_h264_capacity:
+                if (args.transport != "comm" or args.video_codec != "h264"
+                        or args.inflight != 1 or args.fps != args.poll_hz
+                        or args.fps not in (30, 60)
+                        or args.benchmark_h264_credits or args.benchmark_sweep
+                        or args.benchmark_credits or args.probe_link):
+                    parser.error("H.264 capacity sweep requires Comm H.264, one startup credit,"
+                                 " matching 30/60 FPS/Hz and no other benchmark")
+                if not 6 <= args.h264_capacity_phase_seconds <= 30:
+                    parser.error("H.264 capacity phase duration must be 6..30 seconds")
+                if args.max_seconds < 7 * args.h264_capacity_phase_seconds + 120:
+                    parser.error("H.264 capacity sweep time budget insufficient")
             if args.h264_credit_phase_seconds != 16 and not args.benchmark_h264_credits:
                 parser.error("--h264-credit-phase-seconds requires --benchmark-h264-credits")
             if args.benchmark_h264_credits:

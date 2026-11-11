@@ -13,11 +13,14 @@ from statistics import median
 import time
 
 from .bridge_colab import offer_update
-from .bridge_video_comm_pipeline import KernelH264PullWindow
+from .bridge_video_comm_pipeline import (
+    KernelH264PullWindow, MAX_EXPERIMENTAL_VIDEO_CREDITS,
+)
 from .bridge_video_comm_session import WIDTH, HEIGHT, MAX_NO_FRESH_SECONDS, make_host_decoder
 from .lifecycle_io import LifecycleError
 
 PHASES = (("A", 1), ("B", 2), ("A_repeat", 1))
+HIGH_RATE_PHASES = tuple((f"C{credit}", credit) for credit in (1, 2, 3, 4, 8, 16, 32))
 POLL_WAIT_SECONDS = .03
 
 
@@ -57,7 +60,9 @@ def _empty_phase() -> dict:
 def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
                           frames: queue.Queue, stopped, deadline: float,
                           poll_hz: int, *, phase_seconds: int = 16,
-                          warmup_seconds: int = 2) -> dict:
+                          warmup_seconds: int = 2,
+                          experimental: bool = False,
+                          phases: tuple[tuple[str, int], ...] | None = None) -> dict:
     """Controlled 1/2/1 credit A/B/A' experiment without reconnect or replay.
 
     A phase stops *submitting* requests at its deadline, drains every already
@@ -66,7 +71,17 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
     draining are excluded from scored phase metrics. No input-to-photon or
     cross-machine capture-to-decode measurement is claimed.
     """
-    if (type(poll_hz) is not int or not 1 <= poll_hz <= 12
+    if type(experimental) is not bool:
+        raise ValueError("invalid experimental sweep selector")
+    if phases is None:
+        phases = PHASES
+    if experimental:
+        if (phases != HIGH_RATE_PHASES or type(poll_hz) is not int
+                or poll_hz not in (30, 60)):
+            raise ValueError("invalid experimental H.264 capacity sweep")
+    elif phases != PHASES:
+        raise ValueError("custom H.264 phases require experimental opt-in")
+    if (type(poll_hz) is not int or not 1 <= poll_hz <= (60 if experimental else 12)
             or type(phase_seconds) is not int or not 6 <= phase_seconds <= 40
             or type(warmup_seconds) is not int
             or not 1 <= warmup_seconds <= min(5, phase_seconds - 3)):
@@ -77,7 +92,9 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
         raise ValueError("invalid sweep deadline")
 
     av, decoder = make_host_decoder()
-    window = KernelH264PullWindow(peer, credits=2)
+    window = (KernelH264PullWindow(
+        peer, credits=MAX_EXPERIMENTAL_VIDEO_CREDITS, experimental=True)
+        if experimental else KernelH264PullWindow(peer, credits=2))
     header = b"P6\n640 360\n255\n"
     input_seq = 0
     last_ack = 0
@@ -86,10 +103,12 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
     next_due = time.monotonic()
     last_fresh_global = next_due
     results = []
-    print("[colabcola] H.264 single-runtime 1/2/1 credit sweep started", flush=True)
+    print("[colabcola] H.264 single-runtime " +
+          ("1/2/3/4/8/16/32 capacity" if experimental else "1/2/1 credit") +
+          " sweep started", flush=True)
 
     try:
-        for phase_name, credit_cap in PHASES:
+        for phase_name, credit_cap in phases:
             phase_start = time.monotonic()
             phase_end = phase_start + phase_seconds
             scored_start = phase_start + warmup_seconds
@@ -206,7 +225,10 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
             print("[colabcola] H.264 sweep phase " + json.dumps(result, sort_keys=True), flush=True)
             next_due = time.monotonic()  # new phase; no catch-up burst
 
-        report = {"schema": 1, "mode": "single-owned-comm-h264-credit-aba",
+        report = {"schema": 1,
+                  "mode": ("single-owned-comm-h264-capacity" if experimental
+                           else "single-owned-comm-h264-credit-aba"),
+                  "requested_poll_hz": poll_hz,
                   "phases": results,
                   "request_count": next_pull - 1,
                   "maximum_window_outstanding": window.maximum_outstanding,
@@ -220,3 +242,19 @@ def run_h264_credit_sweep(peer, gpu: str, outgoing: queue.Queue,
         raise LifecycleError("H.264 credit sweep interrupted") from None
     finally:
         stopped.set()
+
+
+def run_h264_capacity_sweep(peer, gpu: str, outgoing: queue.Queue,
+                            frames: queue.Queue, stopped, deadline: float,
+                            poll_hz: int, *, phase_seconds: int = 10,
+                            warmup_seconds: int = 2) -> dict:
+    """Offline-first experimental 30/60 Hz sweep: credits 1,2,3,4,8,16,32.
+
+    The authenticated Comm and GPU lifecycle remain owned by the caller.
+    This function never allocates GPU resources or creates a socket.
+    """
+    return run_h264_credit_sweep(
+        peer, gpu, outgoing, frames, stopped, deadline, poll_hz,
+        phase_seconds=phase_seconds, warmup_seconds=warmup_seconds,
+        experimental=True, phases=HIGH_RATE_PHASES,
+    )

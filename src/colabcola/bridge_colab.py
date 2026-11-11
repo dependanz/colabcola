@@ -299,6 +299,19 @@ def run_colab(args) -> int:
                         or type(phase_seconds) is not int or not 6 <= phase_seconds <= 40
                         or getattr(args, "max_seconds", 0) < 3 * phase_seconds + 100):
                     raise LifecycleError("invalid H.264 credit sweep configuration")
+            if getattr(args, "benchmark_h264_capacity", False):
+                capacity_seconds = getattr(args, "h264_capacity_phase_seconds", 10)
+                if (video_codec != "h264" or getattr(args, "transport", "files") != "comm"
+                        or getattr(args, "inflight", 1) != 1
+                        or getattr(args, "fps", None) not in (30, 60)
+                        or getattr(args, "poll_hz", None) != args.fps
+                        or getattr(args, "benchmark_h264_credits", False)
+                        or getattr(args, "benchmark_sweep", False)
+                        or getattr(args, "benchmark_credits", False)
+                        or getattr(args, "probe_link", False)
+                        or type(capacity_seconds) is not int or not 6 <= capacity_seconds <= 30
+                        or getattr(args, "max_seconds", 0) < 7 * capacity_seconds + 120):
+                    raise LifecycleError("invalid high-rate H.264 capacity sweep configuration")
             if video_codec == "h264":
                 if (getattr(args, "transport", "files") != "comm"
                         or getattr(args, "inflight", 1) not in (1, 2)
@@ -355,7 +368,14 @@ def run_colab(args) -> int:
                                      transport="comm")
                             print("[colabcola] Remote GPU verified: " + details["gpu"], flush=True)
                             if video_codec == "h264":
-                                if getattr(args, "benchmark_h264_credits", False):
+                                if getattr(args, "benchmark_h264_capacity", False):
+                                    from .bridge_video_credit_sweep import run_h264_capacity_sweep
+                                    def work(outgoing, frames, stopped):
+                                        run_h264_capacity_sweep(
+                                            peer, details["gpu"], outgoing, frames, stopped,
+                                            deadline, args.poll_hz,
+                                            phase_seconds=getattr(args, "h264_capacity_phase_seconds", 10))
+                                elif getattr(args, "benchmark_h264_credits", False):
                                     from .bridge_video_credit_sweep import run_h264_credit_sweep
                                     def work(outgoing, frames, stopped):
                                         run_h264_credit_sweep(

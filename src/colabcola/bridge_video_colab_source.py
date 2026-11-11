@@ -167,7 +167,7 @@ class RemoteH264PullSource:
     def __init__(self, directory: str | Path, run_id: str, *, fps: int,
                  width: int = WIDTH, height: int = HEIGHT, encoder_factory=None):
         if (not isinstance(run_id, str) or len(run_id) != 32
-                or type(fps) is not int or not 1 <= fps <= 12
+                or type(fps) is not int or not 1 <= fps <= 60
                 or (width, height) != (WIDTH, HEIGHT)):
             raise RemoteVideoSourceError("invalid remote video source configuration")
         self.directory = Path(directory)

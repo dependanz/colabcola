@@ -37,7 +37,7 @@ def start(directory: str, fps: int, run_id: str):
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    if not 1 <= fps <= 12:
+    if not 1 <= fps <= 60:
         raise ValueError("fps outside accepted range")
 
     def worker():

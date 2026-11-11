@@ -25,6 +25,7 @@ from .bridge_video_stream import PACKET_HEADER
 from .lifecycle_io import LifecycleError
 
 MAX_VIDEO_CREDITS = 2
+MAX_EXPERIMENTAL_VIDEO_CREDITS = 32
 PULL_TIMEOUT_S = 8.0
 
 
@@ -37,13 +38,17 @@ class KernelH264PullWindow:
     ACK state advance only at commit, not when an out-of-order reply arrives.
     """
 
-    def __init__(self, peer, *, credits: int = MAX_VIDEO_CREDITS):
-        if (type(credits) is not int or credits != MAX_VIDEO_CREDITS
+    def __init__(self, peer, *, credits: int = MAX_VIDEO_CREDITS,
+                 experimental: bool = False):
+        allowed = (type(experimental) is bool and type(credits) is int and
+                   ((1 <= credits <= MAX_EXPERIMENTAL_VIDEO_CREDITS)
+                    if experimental else credits == MAX_VIDEO_CREDITS))
+        if (not allowed
                 or not isinstance(getattr(peer, 'run_id', None), str)
                 or len(peer.run_id) != 32
                 or not isinstance(getattr(peer, 'comm_id', None), str)
                 or not peer.comm_id or getattr(peer, 'wire', None) is None):
-            raise ValueError('two-credit H.264 receiver requires an attached owned Comm')
+            raise ValueError('bounded H.264 receiver requires an attached owned Comm')
         self.peer = peer
         self.credits = credits
         self.pending: dict[int, float] = {}
