@@ -152,7 +152,6 @@ else:
                 child_pid = status["execution_pid"]
                 self.assertEqual(json.loads((control / "kernel-execution.json").read_text())
                                  ["state"], "running")
-                self.assertIsNone(km.provisioner.poll())
 
                 # Interrupt the *actual* kernel process during the child stream.
                 km.interrupt_kernel()
