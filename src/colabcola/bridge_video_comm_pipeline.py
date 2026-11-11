@@ -163,12 +163,17 @@ class KernelH264PullWindow:
                 unit, ack, sizes, rtt, diagnostics = self.completed.pop(self.next_commit)
                 if ack < self.input_ack:
                     raise VideoCommProtocolError('video pipeline applied ACK regressed')
-                keep = self.gate.accept(unit)
+                # A correlated video_no_new releases one credit but is NOT
+                # an H.264 access unit; preserve the sequence gate state.
+                no_new = unit is None and isinstance(diagnostics, dict) and (
+                    diagnostics.get("no_new") is True)
+                keep = True if no_new else self.gate.accept(unit)
                 self.input_ack = ack
                 self.next_commit += 1
                 if not keep:
                     self.suppressed_dependent_units += 1
-                result.append((unit if keep else None, ack, sizes, rtt))
+                result.append((None if no_new else unit if keep else None,
+                               ack, sizes, rtt))
                 self.last_committed_diagnostics.append(diagnostics)
         except VideoCommProtocolError:
             self.failed = True
@@ -205,7 +210,8 @@ class KernelH264PullWindow:
         if payload.get('kind') == 'error':
             self.failed = True
             raise LifecycleError('remote H.264 pipeline reported an error')
-        if payload.get('kind') != 'video_access_unit':
+        kind = payload.get('kind')
+        if kind not in ('video_access_unit', 'video_no_new'):
             return []
         pull_seq = payload.get('pull_seq')
         if type(pull_seq) is not int or pull_seq not in self.pending:
@@ -213,13 +219,25 @@ class KernelH264PullWindow:
             raise LifecycleError('unsolicited or duplicate video pipeline reply')
         sent_at = self.pending.pop(pull_seq)
         try:
-            unit, ack = decode_video_reply(payload, run_id=self.peer.run_id,
-                                          expected_pull_seq=pull_seq)
+            if kind == 'video_no_new':
+                ack = payload.get('input_ack')
+                if (getattr(self.peer, 'sequence_buffered', False) is not True
+                        or type(ack) is not int or not 0 <= ack < 10_000_000
+                        or set(payload) != {'v', 'kind', 'run_id', 'pull_seq',
+                                            'input_ack'}):
+                    raise VideoCommProtocolError('invalid empty video response')
+                unit = None
+                sizes = (0, 0, 0)
+                diagnostics = {'no_new': True}
+            else:
+                unit, ack = decode_video_reply(payload, run_id=self.peer.run_id,
+                                              expected_pull_seq=pull_seq)
+                sizes = (len(unit.data), PACKET_HEADER.size + len(unit.data),
+                         len(payload['data']))
+                diagnostics = validated_remote_video_diagnostics(payload)
         except VideoCommProtocolError:
             self.failed = True
             raise LifecycleError('invalid correlated H.264 pipeline reply') from None
-        sizes = (len(unit.data), PACKET_HEADER.size + len(unit.data), len(payload['data']))
-        diagnostics = validated_remote_video_diagnostics(payload)
         self.completed[pull_seq] = (
             unit, ack, sizes, (time.monotonic() - sent_at) * 1000, diagnostics)
         return self._commit_ready()

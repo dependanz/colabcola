@@ -66,6 +66,10 @@ on:
       - 'tests/test_bridge_sweep.py'
       - 'tests/test_bridge_comm_local_kernel.py'
       - '.github/workflows/bridge-tests.yml'
+      # Include newly added experimental modules and tests in PR triggers.
+      - 'src/colabcola/bridge*.py'
+      - 'tests/test_bridge*.py'
+      - 'src/colabcola/lifecycle_provider.py'
   push:
     branches:
       - feature/interactive-bridge-prototype
@@ -96,7 +100,7 @@ jobs:
         run: python -m pip install 'av>=17,<20' 'numpy>=2,<3'
       - name: Run bridge protocol and Tk tests (Linux virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py tests/test_bridge_video_datagram.py tests/test_bridge_video_packet_transport.py tests/test_bridge_video_packetization.py
+        run: xvfb-run -a python -c "import glob, pytest; raise SystemExit(pytest.main(['-q', *sorted(glob.glob('tests/test_bridge*.py'))]))"
       - name: Demonstrate paced local H.264 video stream (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -164,4 +168,4 @@ jobs:
           PY
       - name: Run bridge protocol and Tk tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest -q tests/test_bridge.py tests/test_bridge_colab.py tests/test_bridge_comm.py tests/test_bridge_comm_local_kernel.py tests/test_bridge_sweep.py tests/test_bridge_pipeline.py tests/test_bridge_credit_sweep.py tests/test_bridge_viewer_stats.py tests/test_bridge_video_benchmark.py tests/test_bridge_video_stream.py tests/test_bridge_video_inprocess.py tests/test_bridge_video_live.py tests/test_bridge_video_impairment.py tests/test_bridge_video_feedback.py tests/test_bridge_video_controller.py tests/test_bridge_video_rate.py tests/test_bridge_video_watchdog.py tests/test_bridge_video_recovery.py tests/test_bridge_video_load.py tests/test_bridge_video_load_control.py tests/test_bridge_video_burst.py tests/test_bridge_video_burst_compare.py tests/test_bridge_video_sender.py tests/test_bridge_video_pacing.py tests/test_bridge_video_sender_service.py tests/test_bridge_video_service.py tests/test_bridge_video_datagram.py tests/test_bridge_video_packet_transport.py tests/test_bridge_video_packetization.py
+        run: python -c "import glob, pytest; raise SystemExit(pytest.main(['-q', *sorted(glob.glob('tests/test_bridge*.py'))]))"
