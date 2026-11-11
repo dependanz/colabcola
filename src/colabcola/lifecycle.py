@@ -371,6 +371,33 @@ class Supervisor:
         else:
             self.save()
 
+    def _journal_kernel_execution_change(self, previous, attempt, observed):
+        """Record only changes to bounded, known execution state fields."""
+        if self.plan.get("execution_mode") != "kernel-v1":
+            return
+        fields = {
+            "request_state": {"attached", "submitted", "submission_unknown",
+                              "busy", "completed", "failed", "kernel_absent"},
+            "worker_execution_state": {"submitted", "running", "finished", "failed"},
+            "execution_state": {"starting", "busy", "idle", "absent"},
+        }
+
+        def summary(value):
+            if not isinstance(value, dict):
+                return {}
+            return {k: value[k] for k, allowed in fields.items()
+                    if type(value.get(k)) is str and value[k] in allowed}
+
+        current = summary(observed.get("kernel_execution"))
+        if not current:
+            return
+        same_attempt = previous.get("attempt", attempt["number"]) == attempt["number"]
+        earlier = summary(previous.get("kernel_execution")) if same_attempt else {}
+        if earlier != current:
+            self.save("kernel_execution_changed", event_details={
+                "attempt": attempt["number"], "observed_at": observed["observed_at"],
+                "kernel_execution": current})
+
     def _observe_kernel_absence(self, attempt, observed):
         """Require repeated exact-kernel absence before owned-runtime release."""
         now = observed["observed_at"]
@@ -538,6 +565,7 @@ class Supervisor:
             return
         observed = self.provider.observe(endpoint, self.plan, attempt,
             None if self.plan.get("authorization_policy") == "renewable-v1" else self.token())
+        previous_worker = self.state.get("worker", {})
         # A malformed provider/worker timestamp must never poison the strict
         # JSON journal. Absence of a valid heartbeat is not proof of death.
         heartbeat = observed.get("heartbeat_at")
@@ -546,6 +574,7 @@ class Supervisor:
             observed.pop("heartbeat_at", None)
         observed["observed_at"] = self.clock()
         self.state["worker"] = observed
+        self._journal_kernel_execution_change(previous_worker, attempt, observed)
         if observed.get("hardware"):
             self.state["hardware"] = observed["hardware"]
         if self.plan.get("authorization_policy") == "renewable-v1":

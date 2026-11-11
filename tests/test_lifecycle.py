@@ -392,6 +392,46 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn("kernel_absence", engine.state)
         self.assertEqual(self.provider.releases, [])
 
+    def test_kernel_execution_transitions_are_journaled_once_per_change(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "submitted",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "busy"}})
+        engine.advance()
+        self.assertEqual(len([x for x in engine.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 1)
+        self.reload().advance()
+        self.assertEqual(len([x for x in engine.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 1)
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "busy",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "busy"}}
+        refreshed = self.reload()
+        refreshed.advance()
+        self.assertEqual(len([x for x in refreshed.state["events"]
+                              if x["event"] == "kernel_execution_changed"]), 2)
+        # Reattached to a restarted kernel with the same ID: not failure
+        # evidence until a separate receipt/absence/stall signal exists.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "attached",
+                                 "worker_execution_state": "running",
+                                 "execution_state": "idle"}}
+        refreshed.advance()
+        changes = [x for x in refreshed.state["events"]
+                   if x["event"] == "kernel_execution_changed"]
+        self.assertEqual(len(changes), 3)
+        self.assertEqual(changes[-1]["kernel_execution"]["request_state"], "attached")
+        self.assertEqual(changes[-1]["observed_at"], self.now)
+        self.assertEqual(refreshed.state["phase"], "monitoring")
+        self.assertFalse(self.provider.releases)
+
     def test_heartbeat_stall_warns_once_and_never_releases(self):
         engine = self.running()
         self.provider.active.add("unrelated")
