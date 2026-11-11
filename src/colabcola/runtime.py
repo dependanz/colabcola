@@ -1106,6 +1106,14 @@ if _COLABCOLA_TERMINAL_STATE is None:
             for candidate in matches:
                 if candidate.is_dir():
                     continue
+                # Some Windows glob implementations yield the nonexistent
+                # static directory prefix for a trailing '**' (outputs/**).
+                # Ignore that placeholder only, not vanished output files or
+                # dangling symlinks; those must still fail validation.
+                if (pattern.endswith("/**")
+                        and candidate == COLABCOLA_JOB_ROOT / pathlib.PurePosixPath(pattern).parent
+                        and not os.path.lexists(candidate)):
+                    continue
                 metadata = os.lstat(candidate)
                 attributes = getattr(metadata, "st_file_attributes", 0)
                 if (
