@@ -611,3 +611,31 @@ local proof on Linux with at least 5 GiB free:
 The dedicated GitHub workflow for the issue executes this proof without
 Colab credentials, network inputs, or GPU allocation. Real long-duration
 Colab execution and kernel-interruption/restart acceptance remain outstanding.
+
+
+## Scratch filesystem assessment (issue #18)
+
+When remote inputs are declared, the downloader performs a **read-only**
+capacity comparison before its existing disk preflight. The evaluation
+records the bytes required including the 1 GiB safety margin, free bytes on
+the current job filesystem, and available fixed candidate directories
+(`/mnt/local-scratch`, `/mnt/data`, `/scratch`). For each existing
+non-symlink directory, it records free bytes, whether `st_dev` differs
+from the current job filesystem, and whether the capacity is sufficient.
+Missing candidates and symlinks are omitted. Candidate contents are never
+read, created, deleted, or modified.
+
+The evaluation is stored in
+`result.json -> transport.remote_input_storage_evaluation`, as
+`storage-assessment.json` in the runtime results, and under
+`runtime/storage-assessment.json` in worker log snapshots. This makes the
+assessment visible even while a large input is still downloading.
+
+**This is diagnostic only:** it does not choose a different disk, relocate
+files, use symlinks or bind mounts, or modify the working directory or
+remote-input target paths. A larger filesystem with enough reported free
+space is only a possible candidate for a future separately tested placement
+strategy. Distinct device IDs and available bytes do not prove that a path
+can safely be mounted or that its data will survive provider interruption.
+Actual placement remains out of scope until evaluated on the intended
+Colab runtime.
