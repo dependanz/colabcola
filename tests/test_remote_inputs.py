@@ -472,6 +472,68 @@ class RemoteInputRuntimeTests(unittest.TestCase):
         self.assertTrue((job_root / 'weights/a.bin').is_file())
         self.assertFalse((job_root / 'weights/sub/b.bin').exists())
 
+    def test_scratch_evaluation_is_read_only_and_preserves_job_paths(self) -> None:
+        from colabcola import runtime as runtime_source
+        import shutil
+        candidate = self.root / "optional-scratch"
+        candidate.mkdir()
+        source = runtime_source._REMOTE_INPUTS_SOURCE
+        patched = source.replace(
+            '"/mnt/local-scratch", "/mnt/data", "/scratch"',
+            repr(str(candidate)))
+        self.assertNotEqual(source, patched)
+
+        with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-scratch-assessment",
+                fake_urlopen({URL_A: DATA_A, URL_B: DATA_B}))
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        report = result["transport"]["remote_input_storage_evaluation"]
+        self.assertEqual(report["mode"], "diagnostic_only")
+        self.assertEqual(report["schema"], 1)
+        self.assertEqual(report["required_bytes_including_margin"],
+                         len(DATA_A) + len(DATA_B) + 1024 ** 3)
+        self.assertEqual(len(report["candidates"]), 1)
+        self.assertEqual(report["candidates"][0]["path"], str(candidate))
+        self.assertFalse(report["candidates"][0]["different_device"])
+        self.assertEqual(
+            report["candidates"][0]["capacity_sufficient"],
+            shutil.disk_usage(candidate).free >= report["required_bytes_including_margin"])
+        result_root = job_root.parents[1] / "results" / job_root.name
+        self.assertEqual(
+            json.loads((result_root / "storage-assessment.json").read_text()),
+            report)
+        self.assertEqual(list(candidate.iterdir()), [])
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
+        self.assertEqual((job_root / "weights/sub/b.bin").read_bytes(), DATA_B)
+        self.assertFalse(list(job_root.rglob("*.partial")))
+        self.assertNotIn("https://", json.dumps(report))
+
+    def test_scratch_symlink_is_not_selected_or_followed(self) -> None:
+        from colabcola import runtime as runtime_source
+        real_dir = self.root / "actual-scratch"
+        real_dir.mkdir()
+        link = self.root / "scratch-link"
+        try:
+            link.symlink_to(real_dir, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest("directory symlinks unavailable: " + type(exc).__name__)
+        source = runtime_source._REMOTE_INPUTS_SOURCE
+        patched = source.replace(
+            '"/mnt/local-scratch", "/mnt/data", "/scratch"', repr(str(link)))
+        self.assertNotEqual(source, patched)
+        with mock.patch.object(runtime_source, "_REMOTE_INPUTS_SOURCE", patched):
+            result, job_root, error = self.run_notebook(
+                self.mapping(), self.root / "content-scratch-symlink",
+                fake_urlopen({URL_A: DATA_A, URL_B: DATA_B}))
+        self.assertIsNone(error)
+        self.assertEqual(result["terminal_state"], "success")
+        report = result["transport"]["remote_input_storage_evaluation"]
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(list(real_dir.iterdir()), [])
+        self.assertEqual((job_root / "weights/a.bin").read_bytes(), DATA_A)
+
     def test_disk_shortfall_fails_before_any_download(self) -> None:
         calls: list[tuple[str, int, int]] = []
         with mock.patch("shutil.disk_usage", return_value=types.SimpleNamespace(total=10, used=5, free=5)):
