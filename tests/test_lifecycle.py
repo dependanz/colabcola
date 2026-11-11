@@ -220,31 +220,31 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(self.provider.boots), 2)
         self.assertEqual(len(self.provider.allocations), 2)
 
-    def test_failed_receipt_and_missing_final_both_end_owned_attempt(self):
-        for receipt, reply, expected in [
-            ("failed", "busy", "worker_receipt_failed"),
-            ("finished", "completed", "finished_without_final")
-        ]:
-            with self.subTest(receipt=receipt):
-                engine = self.running()
-                engine.plan["execution_mode"] = "kernel-v1"
-                engine.plan["max_attempts"] = 1
-                self.provider.observe = mock.Mock(return_value={
-                    "state": "running", "attempt": 1,
-                    "kernel_execution": {"request_state": reply,
-                                         "worker_execution_state": receipt,
-                                         "worker_error_type": "RuntimeError",
-                                         "worker_finished_at": 900.25}})
-                engine.advance()
-                self.assertEqual(engine.state["phase"], "failed")
-                self.assertEqual(engine.state["reason"],
-                                 "worker_failed_attempt_budget_exhausted")
-                self.assertEqual(engine.state["last_failure"]["signal"], expected)
-                self.assertEqual(engine.state["last_failure"]["finished_at"], 900.25)
-                self.assertFalse(self.provider.active)
-                # A new isolated fixture is required for the next subcase.
-                if receipt != "finished":
-                    self.setUp()
+    def assert_owned_worker_receipt_failure(self, receipt, reply, signal):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": reply,
+                                 "worker_execution_state": receipt,
+                                 "worker_error_type": "RuntimeError",
+                                 "worker_finished_at": 900.25}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["reason"],
+                         "worker_failed_attempt_budget_exhausted")
+        self.assertEqual(engine.state["last_failure"]["signal"], signal)
+        self.assertEqual(engine.state["last_failure"]["finished_at"], 900.25)
+        self.assertFalse(self.provider.active)
+
+    def test_failed_worker_receipt_releases_attempt(self):
+        self.assert_owned_worker_receipt_failure(
+            "failed", "busy", "worker_receipt_failed")
+
+    def test_finished_without_final_commit_releases_attempt(self):
+        self.assert_owned_worker_receipt_failure(
+            "finished", "completed", "finished_without_final")
 
     def test_uncertain_worker_failure_release_cannot_allocate_replacement(self):
         engine = self.running()
