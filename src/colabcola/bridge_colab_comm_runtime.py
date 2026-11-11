@@ -58,12 +58,16 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
           install_remote_pyav: bool = False,
           sequence_buffered: bool = False,
           max_buffer_lag_frames: int = 2,
-          video_push: bool = False, video_push_source_path: str | None = None):
+          video_push: bool = False, video_push_source_path: str | None = None,
+          push_credits: int = 4):
     global BOOTSTRAP_STAGE
     if (type(video_push) is not bool
             or (video_push and (not sequence_buffered or not preflight_video
                                 or video_push_source_path is None))):
         raise ValueError("push video requires sequence-buffered H.264")
+    if (type(push_credits) is not int or push_credits not in (4, 6, 8)
+            or (not video_push and push_credits != 4)):
+        raise ValueError("invalid sender credit configuration")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int
@@ -156,7 +160,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         try:
             push_impl = runpy.run_path(video_push_source_path)
             push_sender = push_impl["CreditPushSender"](
-                comm=comm, source=video_source, directory=root, run_id=run_id)
+                comm=comm, source=video_source, directory=root,
+                run_id=run_id, credits=push_credits)
         except Exception:
             video_failed = True
 
@@ -303,7 +308,8 @@ if __name__ == "__main__":
               sequence_buffered=globals().get("BRIDGE_SEQUENCE_BUFFERED", False) is True,
               max_buffer_lag_frames=globals().get("BRIDGE_MAX_BUFFER_LAG_FRAMES", 2),
               video_push=globals().get("BRIDGE_VIDEO_PUSH", False) is True,
-              video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"))
+              video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"),
+              push_credits=globals().get("BRIDGE_PUSH_CREDITS", 4))
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise

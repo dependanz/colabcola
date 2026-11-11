@@ -10,7 +10,10 @@ import struct
 import threading
 import time
 
-MAX_PUSH_CREDITS = 4
+DEFAULT_PUSH_CREDITS = 4
+# Experimental bounds; larger windows may increase queued-video age.
+PUSH_CREDIT_CHOICES = (4, 6, 8)
+MAX_PUSH_CREDITS = DEFAULT_PUSH_CREDITS  # backward-compatible default
 _FRAME_HEADER = struct.Struct("!4sIIII")
 
 
@@ -30,10 +33,10 @@ def newest_frame_seq(directory):
 
 
 class CreditPushSender:
-    """At most four granted unacknowledged frame sends; no replay or polling RPC."""
+    """Strict bounded grants; no replay or per-frame host pull RPC."""
 
     def __init__(self, *, comm, source, directory, run_id, credits=MAX_PUSH_CREDITS):
-        if (type(credits) is not int or credits != MAX_PUSH_CREDITS
+        if (type(credits) is not int or credits not in PUSH_CREDIT_CHOICES
                 or not isinstance(run_id, str) or len(run_id) != 32
                 or not getattr(source, "sequence_buffered", False)):
             raise ValueError("invalid experimental push sender configuration")
@@ -60,7 +63,7 @@ class CreditPushSender:
                 raise ValueError("video sender already closed")
             if not self.initialized_credits:
                 if count != self.capacity or self.sent_count:
-                    raise ValueError("push initial grant must equal four credits")
+                    raise ValueError("push initial grant must equal configured window")
                 self.initialized_credits = True
                 self.available = count
             else:

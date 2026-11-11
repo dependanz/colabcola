@@ -22,6 +22,7 @@ from .bridge_video_comm_session import WIDTH, HEIGHT, make_host_decoder
 from .lifecycle_io import LifecycleError
 
 PUSH_CREDITS = 4
+PUSH_CREDIT_CHOICES = (4, 6, 8)
 PUSH_RECEIVE_WATCHDOG_S = 12.0
 MAX_INPUT_PENDING = 128
 
@@ -78,8 +79,13 @@ def decode_push_message(payload, *, expected_seq, run_id, last_ack,
         raise LifecycleError("push H.264 response failed validation") from None
 
 
-def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
-    """One host event loop, 4 credits, no per-frame request or automatic replay."""
+def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
+                       *, credits: int = PUSH_CREDITS):
+    """One host event loop, bounded credits, no per-frame pull or replay."""
+    if type(credits) is not int or credits not in PUSH_CREDIT_CHOICES:
+        raise ValueError("invalid sender-driven credit configuration")
+    if getattr(peer, "push_credits", credits) != credits:
+        raise LifecycleError("push credit configuration mismatch")
     if (getattr(peer, "video_push", False) is not True
             or getattr(peer, "video_codec", None) != "h264"
             or peer.wire is None or not peer.wire.connection_ready.is_set()):
@@ -102,10 +108,10 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
     previous_received_ns = None
     started = last_frame_at = time.monotonic()
     header = b"P6\n640 360\n255\n"
-    print("[colabcola] v34 sender-driven H.264 Comm; 4-credit receive window",
+    print(f"[colabcola] v34 sender-driven H.264 Comm; {credits}-credit receive window",
           flush=True)
     offer_update(frames, ("status", f"Push H.264 Comm · {gpu}"))
-    peer._send("video_credit", count=PUSH_CREDITS)
+    peer._send("video_credit", count=credits)
     try:
         while not stopped.is_set() and time.monotonic() < deadline:
             # Coalesce user motion; input submission is never blocked on video.
@@ -227,7 +233,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
             "video_no_new": empty_replies,
             "last_renderer_seq": last_renderer_seq,
             "renderer_frames_skipped_total": renderer_skipped,
-            "configured_credits": PUSH_CREDITS,
+            "configured_credits": credits,
             "producer_windows_observed": len(producer_windows),
             "producer_renderer_fps_p50": (
                 round(median(w["renderer_fps"] for w in producer_windows.values()), 3)

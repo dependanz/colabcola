@@ -91,7 +91,7 @@ class KernelCommBridge:
                  video_codec: str = "ppm", *, install_remote_pyav: bool = False,
                  sequence_buffered: bool = False,
                  max_buffer_lag_frames: int = 2,
-                 video_push: bool = False):
+                 video_push: bool = False, push_credits: int = 4):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -112,7 +112,11 @@ class KernelCommBridge:
         if (type(video_push) is not bool
                 or (video_push and not sequence_buffered)):
             raise ValueError("push requires buffered H.264")
+        if (type(push_credits) is not int or push_credits not in (4, 6, 8)
+                or (not video_push and push_credits != 4)):
+            raise ValueError("push credit window only applies to external push")
         self.video_push = video_push
+        self.push_credits = push_credits
         self.max_buffer_lag_frames = max_buffer_lag_frames
         self.client = None
         self.wire = None
@@ -225,7 +229,8 @@ class KernelCommBridge:
                     f"'BRIDGE_SEQUENCE_BUFFERED':{self.sequence_buffered!r},"
                     f"'BRIDGE_MAX_BUFFER_LAG_FRAMES':{self.max_buffer_lag_frames!r},"
                     f"'BRIDGE_VIDEO_PUSH':{self.video_push!r},"
-                    f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r}"
+                    f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r},"
+                    f"'BRIDGE_PUSH_CREDITS':{self.push_credits!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.

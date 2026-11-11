@@ -163,7 +163,8 @@ def test_valid_empty_push_does_not_advance_h264_gate():
     assert gate.last_seq == -1
 
 
-def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
+@pytest.mark.parametrize("credits", [4, 6, 8])
+def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch, credits):
     from colabcola import bridge_video_push_session as mod
     from colabcola.bridge_colab_runtime import make_producer_window
     window = make_producer_window(
@@ -191,13 +192,14 @@ def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
     class Peer:
         video_push = True
         video_codec = "h264"
+        push_credits = credits
         comm_id = "authenticated"
         run_id = RUN
         wire = SimpleNamespace(
             connection_ready=ready, iopub_channel=Channel())
         def _send(self, kind, **kwargs):
             sent.append((kind, kwargs))
-            if kind == "video_credit" and kwargs == {"count": 4}:
+            if kind == "video_credit" and kwargs == {"count": credits}:
                 for seq, ack in ((0, 1), (1, 1)):
                     p = h264_reply(seq, pull_seq=seq + 1, ack=ack,
                                    idr=seq == 0)
@@ -235,9 +237,9 @@ def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
     monkeypatch.setattr(mod, "offer_update", publish)
     report = run_push_comm_h264(
         Peer(), "Tesla T4", events, queue.Queue(), stopped,
-        time.monotonic() + 0.5)
+        time.monotonic() + 0.5, credits=credits)
     assert report["decoded_frames"] == 2
-    assert report["configured_credits"] == PUSH_CREDITS
+    assert report["configured_credits"] == credits
     assert report["input_to_decoded_observations"] == 1
     assert report["input_callback_to_receive_p50_ms"] is not None
     assert report["input_callback_to_decode_p50_ms"] is not None
@@ -292,3 +294,62 @@ def test_push_credit_total_including_inflight_is_bounded(tmp_path):
         sender.grant(4)  # only the initial four-credit grant may be batched
     assert sender.available + sender.sent_count - sender.replenished == 4
     sender.close()
+
+@pytest.mark.parametrize("capacity", [4, 6, 8])
+def test_push_credit_window_is_bounded_for_all_configurations(tmp_path, capacity):
+    sender = CreditPushSender(
+        comm=Comm(), source=Source(), directory=tmp_path,
+        run_id=RUN, credits=capacity)
+    sender.grant(capacity)
+    with pytest.raises(ValueError):
+        sender.grant(1)  # no frame sent; unsolicited return
+    for seq in range(capacity):
+        publish_header(tmp_path, seq)
+        assert sender.step()
+        assert sender.available == capacity - seq - 1
+    publish_header(tmp_path, capacity)
+    assert not sender.step()
+    sender.grant(1)
+    assert sender.step()
+    assert sender.available == 0
+    assert sender.available + sender.sent_count - sender.replenished == capacity
+    with pytest.raises(ValueError):
+        sender.grant(2)  # initial batch must not be repeated
+    sender.close()
+
+
+@pytest.mark.parametrize("credits", [4, 6, 8])
+def test_push_credit_cli_requires_external_push_mode(monkeypatch, credits):
+    from colabcola.cli import main
+    from colabcola import bridge_colab
+    selected = []
+    monkeypatch.setattr(bridge_colab, "run_colab",
+                        lambda args: selected.append(args) or 0)
+    valid = ["--profile", "example", "bridge", "colab",
+             "--attach-existing", "--sequence-buffered", "--push-video",
+             "--push-credits", str(credits),
+             "--transport", "comm", "--video-codec", "h264",
+             "--fps", "30", "--poll-hz", "30", "--inflight", "1",
+             "--max-seconds", "120", "--preflight-only"]
+    assert main(valid) == 0
+    assert selected[-1].push_credits == credits
+    assert selected[-1].push_video is True
+    if credits != 4:
+        for invalid in (
+            [x for x in valid if x != "--push-video"],
+            [x for x in valid if x != "--attach-existing"],
+        ):
+            with pytest.raises(SystemExit):
+                main(invalid)
+
+
+@pytest.mark.parametrize("credits", [0, 3, 5, 9, True, 6.0, "6"])
+def test_push_credit_window_invalid_inputs_rejected(tmp_path, credits):
+    from colabcola.bridge_comm import KernelCommBridge
+    with pytest.raises(ValueError):
+        CreditPushSender(comm=Comm(), source=Source(),
+                         directory=tmp_path, run_id=RUN, credits=credits)
+    with pytest.raises(ValueError):
+        KernelCommBridge(None, None, RUN, fps=30, video_codec="h264",
+                         sequence_buffered=True, video_push=True,
+                         push_credits=credits)

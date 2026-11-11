@@ -407,7 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     remote.add_argument("--sequence-buffered", action="store_true",
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
     remote.add_argument("--push-video", action="store_true",
-                        help="v34 opt-in: sender-driven four-credit H.264 Comm")
+                        help="v34 opt-in: sender-driven bounded H.264 Comm")
+    remote.add_argument("--push-credits", type=int, choices=(4, 6, 8),
+                        default=4, help="v34C opt-in push window, 4 (default), 6, or 8")
     remote.add_argument("--renderer-lag-frames", type=int, choices=(0, 1, 2),
                         default=2,
                         help="v33w opt-in buffered-mode frame freshness bound (default 2)")
@@ -466,8 +468,10 @@ def main(argv: list[str] | None = None) -> int:
                         or args.benchmark_credits or args.benchmark_sweep
                         or args.probe_link):
                     parser.error("push-video requires external sequence-buffered Comm without pull benchmarks")
+                if args.push_credits != 4 and not args.push_video:
+                    parser.error("--push-credits 6/8 requires --push-video")
             elif (args.confirm_attach or args.sequence_buffered or args.push_video
-                  or args.renderer_lag_frames != 2):
+                  or args.renderer_lag_frames != 2 or args.push_credits != 4):
                 parser.error("attach/sequence-buffered/push-video flags require --attach-existing")
             if args.run_dir is None and not args.preflight_only:
                 parser.error("colab requires --run-dir except for --preflight-only")

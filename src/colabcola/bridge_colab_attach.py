@@ -74,6 +74,10 @@ def validate_attach_options(args) -> None:
             or getattr(args, "benchmark_h264_capacity", False)
             or getattr(args, "benchmark_h264_credits", False)):
         raise LifecycleError("push video requires external buffered H.264 without pull benchmarks")
+    credits = getattr(args, "push_credits", 4)
+    if (type(credits) is not int or credits not in (4, 6, 8)
+            or (not getattr(args, "push_video", False) and credits != 4)):
+        raise LifecycleError("invalid external push credit window")
     if not getattr(args, "preflight_only", False) and not getattr(args, "confirm_attach", False):
         raise LifecycleError("external attach requires --confirm-attach")
 
@@ -114,6 +118,7 @@ def run_attached_colab(args, provider) -> int:
             sequence_buffered=getattr(args, "sequence_buffered", False),
             max_buffer_lag_frames=getattr(args, "renderer_lag_frames", 2),
             video_push=getattr(args, "push_video", False),
+            push_credits=getattr(args, "push_credits", 4),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
@@ -126,7 +131,8 @@ def run_attached_colab(args, provider) -> int:
                  transport="comm", video_codec="h264",
                  sequence_buffered=getattr(args, "sequence_buffered", False),
                  renderer_lag_frames=getattr(args, "renderer_lag_frames", 2),
-                 video_push=getattr(args, "push_video", False))
+                 video_push=getattr(args, "push_video", False),
+                 push_credits=getattr(args, "push_credits", 4))
 
             push = getattr(args, "push_video", False)
             if push:
@@ -134,7 +140,7 @@ def run_attached_colab(args, provider) -> int:
                 def work(outgoing, frames, stopped):
                     run_push_comm_h264(
                         peer, details["gpu"], outgoing, frames, stopped,
-                        deadline)
+                        deadline, credits=peer.push_credits)
             else:
                 def work(outgoing, frames, stopped):
                     run_h264_capacity_sweep(
