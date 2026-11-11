@@ -516,6 +516,12 @@ class Supervisor:
             return
         observed = self.provider.observe(endpoint, self.plan, attempt,
             None if self.plan.get("authorization_policy") == "renewable-v1" else self.token())
+        # A malformed provider/worker timestamp must never poison the strict
+        # JSON journal. Absence of a valid heartbeat is not proof of death.
+        heartbeat = observed.get("heartbeat_at")
+        if (type(heartbeat) not in (int, float) or not math.isfinite(heartbeat)
+                or heartbeat <= 0):
+            observed.pop("heartbeat_at", None)
         observed["observed_at"] = self.clock()
         self.state["worker"] = observed
         if observed.get("hardware"):
