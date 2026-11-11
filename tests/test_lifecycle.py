@@ -326,6 +326,108 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(any(row["event"] == "worker_failed"
                              for row in engine.state["events"]))
 
+    def test_heartbeat_stall_warns_once_and_never_releases(self):
+        engine = self.running()
+        self.provider.active.add("unrelated")
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 879.0})
+        engine.advance()  # Age 121 s exceeds max(120 s, 10 * 5 s).
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(engine.state["worker_stall"]["heartbeat_age"], 121.0)
+        rows = [e for e in engine.state["events"] if e["event"] == "worker_stalled"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["observed_at"], 1000.0)
+        self.assertEqual(rows[0]["last_heartbeat"], 879.0)
+        self.assertEqual(rows[0]["threshold_seconds"], 120.0)
+        self.assertEqual(self.provider.releases, [])
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertEqual(self.provider.active, {"vm-1", "unrelated"})
+
+        # Repeat observations and supervisor restart must not repeat a warning.
+        engine.advance()
+        self.reload().advance()
+        persisted = json.loads((self.root / "state.json").read_text())
+        self.assertEqual(len([e for e in persisted["events"]
+                              if e["event"] == "worker_stalled"]), 1)
+        self.assertEqual(self.provider.releases, [])
+
+    def test_stall_clears_only_when_fresh_heartbeat_resumes(self):
+        engine = self.running()
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 850.0})
+        engine.advance()
+        self.assertIn("worker_stall", engine.state)
+
+        # Unknown heartbeat does not falsely clear an existing warning.
+        self.provider.observe.return_value = {"state": "running", "attempt": 1}
+        engine.advance()
+        self.assertIn("worker_stall", engine.state)
+
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 999.5}
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "monitoring")
+        self.assertNotIn("worker_stall", restarted.state)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stall_cleared"]), 1)
+        restarted.advance()
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stall_cleared"]), 1)
+        self.assertEqual(self.provider.releases, [])
+
+        # The next stale interval begins a new warning episode.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 850.0}
+        restarted.advance()
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "worker_stalled"]), 2)
+
+    def test_stall_threshold_respects_declared_poll_interval(self):
+        engine = self.running()
+        engine.plan["poll_seconds"] = 30
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 700.0})
+        engine.advance()
+        self.assertNotIn("worker_stall", engine.state)  # Exactly 300s.
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1, "heartbeat_at": 699.0}
+        self.reload().advance()
+        observed = json.loads((self.root / "state.json").read_text())
+        self.assertEqual(observed["worker_stall"]["threshold_seconds"], 300.0)
+        self.assertEqual(self.provider.releases, [])
+
+    def test_malformed_or_future_heartbeat_does_not_claim_stall(self):
+        engine = self.running()
+        for heartbeat in (None, True, "old", float("nan"), float("inf"),
+                          -1, 1001.0):
+            with self.subTest(heartbeat=heartbeat):
+                self.provider.observe = mock.Mock(return_value={
+                    "state": "running", "attempt": 1,
+                    "heartbeat_at": heartbeat})
+                engine.advance()
+                self.assertEqual(engine.state["phase"], "monitoring")
+                self.assertNotIn("worker_stall", engine.state)
+        self.assertFalse(any(e["event"] == "worker_stalled"
+                             for e in engine.state["events"]))
+        self.assertEqual(self.provider.releases, [])
+
+    def test_terminal_worker_failure_preempts_stall_warning(self):
+        engine = self.running()
+        engine.plan["execution_mode"] = "kernel-v1"
+        engine.plan["max_attempts"] = 1
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1, "heartbeat_at": 700.0,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed"}})
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(len([e for e in engine.state["events"]
+                              if e["event"] == "worker_failed"]), 1)
+        self.assertFalse(any(e["event"] == "worker_stalled"
+                             for e in engine.state["events"]))
+
     def test_lookup_timeout_does_not_replace_runtime(self):
         engine = self.running()
         self.provider.lookup_error = True

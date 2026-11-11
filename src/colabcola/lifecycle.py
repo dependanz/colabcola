@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 from datetime import timezone
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -326,6 +327,50 @@ class Supervisor:
                   phase="releasing_failed_worker", last_failure=facts)
         self._release_failed_worker(attempt)
 
+    def _observe_worker_heartbeat(self, attempt, observed):
+        """Journal stale/resumed heartbeats without terminating compute.
+
+        This is a warning, not proof of worker death. A release requires
+        independently verified terminal worker evidence or absent compute.
+        """
+        now = observed["observed_at"]
+        heartbeat = observed.get("heartbeat_at")
+        active = self.state.get("worker_stall")
+        if active and active.get("attempt") != attempt["number"]:
+            active = None
+            self.state.pop("worker_stall", None)
+        if observed.get("state") != "running":
+            self.save()
+            return
+        # Missing, invalid or future-dated heartbeats are not evidence that a
+        # worker has stalled. Keep any existing alert until freshness is known.
+        if (type(heartbeat) not in (int, float) or not math.isfinite(heartbeat)
+                or heartbeat <= 0 or heartbeat > now):
+            self.save()
+            return
+        interval = self.plan.get("poll_seconds", 5)
+        if (type(interval) not in (int, float) or not math.isfinite(interval)
+                or interval <= 0):
+            interval = 5
+        threshold = max(120.0, 10.0 * interval)
+        age = now - heartbeat
+        if age > threshold:
+            if active is None:
+                facts = {"attempt": attempt["number"], "heartbeat_age": age,
+                         "last_heartbeat": heartbeat, "observed_at": now,
+                         "threshold_seconds": threshold}
+                self.save("worker_stalled", event_details=facts,
+                          worker_stall=facts)
+            else:
+                self.save()
+        elif active is not None:
+            self.state.pop("worker_stall", None)
+            self.save("worker_stall_cleared", event_details={
+                "attempt": attempt["number"], "heartbeat_age": age,
+                "last_heartbeat": heartbeat, "observed_at": now})
+        else:
+            self.save()
+
     def new_attempt(self):
         if len(self.state["attempts"]) >= self.plan["max_attempts"]:
             cause = (self.state.get("last_failure") or {}).get("cause")
@@ -343,6 +388,7 @@ class Supervisor:
                    "allocation_id": str(uuid.uuid4()), "created_at": self.clock(),
                    "deadline": self.state["deadline"], "resume": checkpoint}
         self.state["attempts"].append(attempt)
+        self.state.pop("worker_stall", None)  # Alerts belong to one attempt.
         self.save("allocation_intent", phase="allocating")
 
     def tick(self):
@@ -489,7 +535,7 @@ class Supervisor:
               and self.clock() - attempt.get("bootstrapped_at", attempt["allocated_at"]) > 180):
             self.finish("failed", "worker_start_timeout")
         else:
-            self.save()
+            self._observe_worker_heartbeat(attempt, observed)
 
     def advance(self):
         try:
