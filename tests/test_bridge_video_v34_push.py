@@ -165,6 +165,12 @@ def test_valid_empty_push_does_not_advance_h264_gate():
 
 def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
     from colabcola import bridge_video_push_session as mod
+    from colabcola.bridge_colab_runtime import make_producer_window
+    window = make_producer_window(
+        run_id=RUN, last_seq=102, window_seq=1, published_count=30,
+        elapsed_s=1.0, target_fps=30, rate_seq=0,
+        render_samples=[1.5], compress_samples=[8.0],
+        publish_samples=[0.5])
     ready = threading.Event()
     ready.set()
     messages = deque()
@@ -195,7 +201,9 @@ def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
                 for seq, ack in ((0, 1), (1, 1)):
                     p = h264_reply(seq, pull_seq=seq + 1, ack=ack,
                                    idr=seq == 0)
-                    p["renderer_seq"] = seq + 100
+                    p.update(renderer_seq=100 + seq * 2,
+                             source_read_us=4200.0, encode_us=2700.0,
+                             producer_window=window)
                     messages.append(payload_message(p))
         def send_input(self, seq, event):
             assert seq == 1
@@ -231,6 +239,15 @@ def test_host_push_sends_credit_not_pulls_and_stamps_input_for_tk(monkeypatch):
     assert report["decoded_frames"] == 2
     assert report["configured_credits"] == PUSH_CREDITS
     assert report["input_to_decoded_observations"] == 1
+    assert report["input_callback_to_receive_p50_ms"] is not None
+    assert report["input_callback_to_decode_p50_ms"] is not None
+    assert report["input_callback_to_decode_p50_ms"] >= (
+        report["input_callback_to_receive_p50_ms"])
+    assert report["host_receive_interval_p50_ms"] is not None
+    assert report["renderer_frames_skipped_total"] == 1
+    assert report["producer_renderer_fps_p50"] == 30
+    assert report["producer_windows_observed"] == 1
+    assert report["remote_encode_p50_ms"] == 2.7
     assert [name for name, _ in sent].count("video_credit") == 3
     assert not any(name == "video_pull" for name, _ in sent)
     timed = [item[1][1] for item in displayed if item[0] == "frame-timed"]

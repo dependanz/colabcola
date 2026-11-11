@@ -92,8 +92,14 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
     received_frames = empty_replies = input_observations = 0
     input_callback_ns = {}
     latest_acked_callback_ns = None
+    first_receive_input_ms = []
     first_decode_input_ms = []
     renderer_lags = []
+    renderer_skipped = 0
+    remote_encode_us = []
+    producer_windows = {}
+    receive_interval_ms = []
+    previous_received_ns = None
     started = last_frame_at = time.monotonic()
     header = b"P6\n640 360\n255\n"
     print("[colabcola] v34 sender-driven H.264 Comm; 4-credit receive window",
@@ -147,12 +153,14 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
                 last_ack=last_ack, last_renderer_seq=last_renderer_seq,
                 gate=gate)
             expected_seq += 1
+            newly_acked_callback_ns = None
             if ack > last_ack:
                 matched = [seq for seq in input_callback_ns if last_ack < seq <= ack]
                 if matched:
                     newest_ack = max(matched)
                     latest_acked_callback_ns = input_callback_ns[newest_ack]
-                    first_decode_input_ms.append(
+                    newly_acked_callback_ns = latest_acked_callback_ns
+                    first_receive_input_ms.append(
                         (received_ns - latest_acked_callback_ns) / 1_000_000)
                     input_observations += 1
                 for seq in list(input_callback_ns):
@@ -160,7 +168,13 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
                         del input_callback_ns[seq]
             last_ack = ack
             if unit is not None:
+                if last_renderer_seq >= 0:
+                    renderer_skipped += max(0, renderer_seq - last_renderer_seq - 1)
                 last_renderer_seq = renderer_seq
+                if previous_received_ns is not None:
+                    receive_interval_ms.append(
+                        (received_ns - previous_received_ns) / 1_000_000)
+                previous_received_ns = received_ns
                 try:
                     packet = av.Packet(unit.data)
                     packet.pts = unit.seq
@@ -176,6 +190,9 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
                 except Exception:
                     raise LifecycleError("push H.264 decoder failed") from None
                 decoded_ns = time.perf_counter_ns()
+                if newly_acked_callback_ns is not None:
+                    first_decode_input_ms.append(
+                        (decoded_ns - newly_acked_callback_ns) / 1_000_000)
                 offer_update(frames, ("frame-timed", (
                     header + pixels,
                     LocalFrameTiming(
@@ -184,8 +201,18 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
                 received_frames += 1
                 last_frame_at = time.monotonic()
                 diag = validated_remote_video_diagnostics(payload)
-                if diag and "renderer_buffer_lag" in diag:
-                    renderer_lags.append(diag["renderer_buffer_lag"])
+                if diag:
+                    if "renderer_buffer_lag" in diag:
+                        renderer_lags.append(diag["renderer_buffer_lag"])
+                    remote_encode_us.append(diag["encode_us"])
+                    window = diag.get("producer_window")
+                    if window is not None:
+                        wid = window["window_seq"]
+                        previous = producer_windows.get(wid)
+                        if previous is None:
+                            producer_windows[wid] = window
+                        elif previous != window:
+                            raise LifecycleError("conflicting push producer windows")
             else:
                 empty_replies += 1
             # Credit is returned only AFTER complete validated processing.
@@ -199,9 +226,26 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline):
             "elapsed_seconds": round(elapsed, 3),
             "video_no_new": empty_replies,
             "last_renderer_seq": last_renderer_seq,
+            "renderer_frames_skipped_total": renderer_skipped,
             "configured_credits": PUSH_CREDITS,
+            "producer_windows_observed": len(producer_windows),
+            "producer_renderer_fps_p50": (
+                round(median(w["renderer_fps"] for w in producer_windows.values()), 3)
+                if producer_windows else None),
+            "remote_encode_p50_ms": (
+                round(median(remote_encode_us) / 1000, 3)
+                if remote_encode_us else None),
+            "host_receive_interval_p50_ms": (
+                round(median(receive_interval_ms), 2)
+                if receive_interval_ms else None),
+            "host_receive_interval_max_ms": (
+                round(max(receive_interval_ms), 2)
+                if receive_interval_ms else None),
             "input_to_decoded_observations": input_observations,
             "input_callback_to_receive_p50_ms": (
+                round(median(first_receive_input_ms), 2)
+                if first_receive_input_ms else None),
+            "input_callback_to_decode_p50_ms": (
                 round(median(first_decode_input_ms), 2)
                 if first_decode_input_ms else None),
             "renderer_buffer_lag_p50_frames": (

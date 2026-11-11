@@ -291,7 +291,9 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
     label, status = create_viewer_layout(root, width, height)
-    from .bridge_viewer_stats import LocalFrameTiming, ViewerPresentationMeter
+    from .bridge_viewer_stats import (
+        LocalFrameTiming, ViewerPresentationMeter, console_safe_viewer_summary,
+    )
     gui_meter = ViewerPresentationMeter(started_at=time.monotonic()) if viewer_stats else None
     last_motion = [0.0]
 
@@ -347,7 +349,13 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
         if gui_meter is not None:
             summary = gui_meter.report(time.monotonic())
             if summary is not None:
-                print("[colabcola] " + summary, flush=True)
+                # Telemetry must not stop the Tk callback scheduler because
+                # Windows console encoding (e.g. cp1252) cannot print arrows.
+                try:
+                    print("[colabcola] " + console_safe_viewer_summary(summary),
+                          flush=True)
+                except (OSError, UnicodeError):
+                    pass  # The viewer and video worker must keep running.
         root.after(poll_interval_ms, poll)
 
     label.bind("<Motion>", mouse)

@@ -10,6 +10,18 @@ from statistics import median
 from dataclasses import dataclass
 
 
+def console_safe_viewer_summary(summary: str) -> str:
+    """Render diagnostic-only Unicode text safely in legacy Windows consoles.
+
+    The Tk update callback must never be interrupted by cp1252 encoding.
+    The original report remains Unicode for tests, logs, and GUI consumers.
+    """
+    if not isinstance(summary, str):
+        raise TypeError("viewer summary must be text")
+    return (summary.replace("→", "->").replace("·", "|")
+            .encode("ascii", errors="backslashreplace").decode("ascii"))
+
+
 @dataclass(frozen=True)
 class LocalFrameTiming:
     """Only local-process performance timestamps; never put on remote wire."""

@@ -93,3 +93,26 @@ def test_viewer_timing_rejects_invalid_or_future_input_before_counting():
     assert meter.report(2.0) == (
         "GUI configured 0.0 FPS · Tk image+label p50 n/a ms"
     )
+
+
+def test_console_viewer_summary_is_cp1252_safe_without_losing_metrics():
+    import io
+    from colabcola.bridge_viewer_stats import console_safe_viewer_summary
+
+    meter = ViewerPresentationMeter(started_at=10.0)
+    meter.presented(1.25)
+    meter.configured_timed_frame(
+        LocalFrameTiming(captured_ns=1_040_000_000,
+                         decoded_ns=1_043_000_000,
+                         input_callback_ns=1_020_000_000),
+        now_ns=1_050_000_000,
+    )
+    summary = meter.report(12.0)
+    assert "capture→Tk" in summary
+    safe = console_safe_viewer_summary(summary)
+    assert "capture->Tk" in safe
+    assert "decode->Tk" in safe
+    assert "input callback->Tk p50 30.0 ms" in safe
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    print("[colabcola] " + safe, file=stream, flush=True)
+    assert "input callback->Tk" in stream.buffer.getvalue().decode("cp1252")
