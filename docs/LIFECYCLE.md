@@ -575,3 +575,39 @@ content emitted by the workload, so protect recovered logs accordingly.
 These changes have offline Windows/Linux CI coverage. The specific real-Jupyter
 interrupt/restart acceptance tests, large-input page-cache control, and long
 real-Colab workload are still separate release gates for issue #18.
+
+
+## Large remote-input cache control (issue #18)
+
+For remote inputs, the notebook retains the exact target paths, byte-count and
+SHA-256 verification, and HTTP Range resumption semantics. Before each file
+and every retry it checks free disk against the bytes still outstanding plus
+the existing 1 GiB margin. After each 64 MiB of streamed file output, it
+flushes Python buffers and calls `fdatasync` (or `fsync` when unavailable),
+then **attempts** `posix_fadvise(POSIX_FADV_DONTNEED)` on the synchronized
+range. Remaining bytes are synchronized on exit, including resumable partial
+downloads. The disk check also repeats after each window, so an unexpected
+concurrent decrease in free space is detected before the next window.
+Cache eviction is an advisory kernel operation and is not a guaranteed hard
+RAM limit; unsupported or failed advice is represented by counters, not
+reported as successful eviction.
+
+Verified run metadata in `transport.remote_inputs.cache_control` reports
+`window_bytes`, `sync_calls`, `advice_supported`, `advice_calls` and
+`advice_errors`. Jobs declaring no remote inputs omit the entire downloader
+from their compiled notebook, preserving the compact controller size.
+No local GPU or Colab allocation is needed for the synthetic regression tests.
+
+A two-GiB Linux proof on GitHub Actions (November 11, 2026) streamed exactly
+2,147,483,648 deterministic bytes, successfully performed 32 synchronization
+and 32 cache-advice operations with no advice errors, and observed 0 resident
+bytes using `mincore` immediately after download. A subsequent independent
+read verified the final file's SHA-256. This is one filesystem/kernel result,
+not a promise of 0 resident pages on a Colab runtime. To repeat the opt-in
+local proof on Linux with at least 5 GiB free:
+
+    COLABCOLA_LARGE_INPUT_PROOF=1 python -m pytest -q -s tests/test_remote_input_cache_large.py
+
+The dedicated GitHub workflow for the issue executes this proof without
+Colab credentials, network inputs, or GPU allocation. Real long-duration
+Colab execution and kernel-interruption/restart acceptance remain outstanding.
