@@ -44,5 +44,13 @@ jobs:
         run: ${{ matrix.test_python }} -m pip install -e . pytest ipykernel
       - name: Verify installed package environment
         run: ${{ matrix.test_python }} -m pip check
+      - name: Use canonical temporary directory on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempPath = Join-Path $env:GITHUB_WORKSPACE '.ci-temp'
+          New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
+          "TEMP=$tempPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$tempPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Run full regression suite
         run: ${{ matrix.test_python }} -m pytest -q -rs
