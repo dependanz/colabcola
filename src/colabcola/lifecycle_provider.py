@@ -397,8 +397,22 @@ class GoogleProvider:
                 self._workloads.pop(endpoint, None)
                 connection = self._workload_connection(endpoint, session, kernel["id"])
                 evidence = connection.poll()  # Reattach only;never send execute again.
+            # The in-kernel worker already wrote these fields to its owned
+            # receipt. Keep bounded diagnostics after checking run identity;
+            # arbitrary error messages and traceback text remain excluded.
+            from .lifecycle_kernel import sanitized_exception_class
+            receipt_diagnostics = {}
+            if receipt is not None:
+                error_type = sanitized_exception_class(receipt.get("error_type"))
+                if error_type is not None:
+                    receipt_diagnostics["worker_error_type"] = error_type
+                finished_at = receipt.get("finished_at")
+                if (type(finished_at) in (int, float)
+                        and 0 < finished_at < 253402300800):
+                    receipt_diagnostics["worker_finished_at"] = finished_at
             observed["kernel_execution"] = {**evidence,"execution_state":kernel.get("execution_state"),
-                "worker_execution_state":(receipt or {}).get("state", "submitted")}
+                "worker_execution_state":(receipt or {}).get("state", "submitted"),
+                **receipt_diagnostics}
         return observed
 
 

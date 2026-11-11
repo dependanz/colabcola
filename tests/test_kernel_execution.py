@@ -43,6 +43,36 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(LifecycleError,'not be replayed'):c.submit('again')
         w.execute.assert_called_once()
 
+    def test_failed_kernel_reply_keeps_exception_class_not_private_message(self):
+        c, wire = self.connection()
+        c.submit('real work')
+        wire.shell_channel.put({
+            'parent_header': {'msg_id': 'message'},
+            'header': {'msg_type': 'execute_reply'},
+            'content': {'status': 'error', 'ename': 'KeyboardInterrupt',
+                        'evalue': 'PRIVATE-ACCESS-TOKEN',
+                        'traceback': ['PRIVATE-TRACEBACK']}})
+        observed = c.poll()
+        self.assertEqual(observed['request_state'], 'failed')
+        self.assertEqual(observed['reply_error_type'], 'KeyboardInterrupt')
+        self.assertNotIn('PRIVATE-', json.dumps(observed))
+        self.assertEqual(c.poll()['reply_error_type'], 'KeyboardInterrupt')
+
+    def test_untrusted_reply_exception_names_are_omitted(self):
+        for value in ('PRIVATE-ACCESS-TOKEN', 'bad.word', 'x' * 200, 5, None):
+            with self.subTest(value=value):
+                c, wire = self.connection()
+                c.submit('real work')
+                wire.shell_channel.put({
+                    'parent_header': {'msg_id': 'message'},
+                    'header': {'msg_type': 'execute_reply'},
+                    'content': {'status': 'error', 'ename': value,
+                                'evalue': 'PRIVATE-ACCESS-TOKEN'}})
+                observed = c.poll()
+                self.assertEqual(observed['request_state'], 'failed')
+                self.assertNotIn('reply_error_type', observed)
+                self.assertNotIn('PRIVATE-', json.dumps(observed))
+
     def test_uncertain_submission_and_reconnect_never_reexecute(self):
         c,w=self.connection(TimeoutError('secret'));self.assertRaises(LifecycleError,c.submit,'real work')
         self.assertEqual(c.state,'submission_unknown')
@@ -118,6 +148,38 @@ class ProviderExecutionTests(unittest.TestCase):
         self.p._workloads={'owned':first};self.p._workload_connection.side_effect=[first,second]
         result=self.p.observe('owned',self.plan,self.attempt,None)
         self.assertEqual(result['kernel_execution']['execution_state'],'busy');first.close.assert_called_once();first.submit.assert_not_called();second.submit.assert_not_called()
+    def test_observe_preserves_owned_worker_failure_receipt_without_secrets(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'failed', 'finished_at': 1790000000.25,
+             'error_type': 'KeyboardInterrupt', 'evalue': 'PRIVATE-ACCESS-TOKEN'},
+            self.identity])
+        self.p._workload_connection.return_value.poll.return_value = {
+            'mode': 'kernel-v1', 'request_state': 'failed',
+            'reply_error_type': 'KeyboardInterrupt'}
+        result = self.p.observe('owned', self.plan, self.attempt, None)
+        details = result['kernel_execution']
+        self.assertEqual(details['worker_execution_state'], 'failed')
+        self.assertEqual(details['worker_error_type'], 'KeyboardInterrupt')
+        self.assertEqual(details['worker_finished_at'], 1790000000.25)
+        self.assertEqual(details['reply_error_type'], 'KeyboardInterrupt')
+        self.assertNotIn('PRIVATE-', json.dumps(result))
+
+    def test_observe_omits_malformed_worker_diagnostics(self):
+        self.p._contents = mock.Mock(return_value={
+            'format': 'text', 'content': json.dumps({'state': 'running', 'attempt': 1})})
+        self.p._json_file = mock.Mock(side_effect=[
+            {**self.identity, 'state': 'failed', 'finished_at': float('nan'),
+             'error_type': 'PRIVATE-ACCESS-TOKEN'},
+            self.identity])
+        self.p._workload_connection.return_value.poll.return_value = {
+            'mode': 'kernel-v1', 'request_state': 'failed'}
+        details = self.p.observe('owned', self.plan, self.attempt, None)['kernel_execution']
+        self.assertNotIn('worker_error_type', details)
+        self.assertNotIn('worker_finished_at', details)
+        self.assertNotIn('PRIVATE-', json.dumps(details))
+
     def test_connection_cleanup_does_not_release_compute(self):
         self.p.client=mock.Mock();one=mock.Mock();two=mock.Mock();self.p._workloads={'a':one,'b':two}
         self.p.close();one.close.assert_called_once();two.close.assert_called_once();self.p.client.unassign.assert_not_called()

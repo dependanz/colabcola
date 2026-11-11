@@ -1,8 +1,16 @@
 """Owned kernel connections and genuine tracked workload execution."""
 from __future__ import annotations
 import logging
+import re
 import time
 from .lifecycle_io import LifecycleError
+
+
+def sanitized_exception_class(value):
+    """Retain only a bounded exception class identifier, never its message."""
+    if type(value) is str and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", value):
+        return value
+    return None
 
 
 def safe_client_class(base):
@@ -119,6 +127,7 @@ class WorkloadExecution:
                      "X-Colab-Runtime-Proxy-Token": session.token})
         self.request_id = None
         self.state = "attached"
+        self.reply_error_type = None
         self.kernel_id = kernel_id
         try:
             self.client.start()
@@ -157,8 +166,13 @@ class WorkloadExecution:
                     self.state = "busy"
                 elif kind == "execute_reply":
                     self.state = "completed" if content.get("status") == "ok" else "failed"
-        return {"mode": "kernel-v1", "kernel_id": self.kernel_id,
-                "request_id": self.request_id, "request_state": self.state}
+                    self.reply_error_type = (sanitized_exception_class(content.get("ename"))
+                                             if self.state == "failed" else None)
+        result = {"mode": "kernel-v1", "kernel_id": self.kernel_id,
+                  "request_id": self.request_id, "request_state": self.state}
+        if self.state == "failed" and getattr(self, "reply_error_type", None):
+            result["reply_error_type"] = self.reply_error_type
+        return result
 
     def close(self):
         _close(self.client)  # Never interrupt, shutdown or release compute here.
