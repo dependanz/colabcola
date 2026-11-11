@@ -330,6 +330,7 @@ class LifecycleTests(unittest.TestCase):
         engine = self.running()
         engine.plan["execution_mode"] = "kernel-v1"
         engine.plan["max_attempts"] = 1
+        atomic(self.root / "plan.json", engine.plan)
         self.provider.observe = mock.Mock(return_value={
             "state": "running", "attempt": 1,
             "kernel_execution": {
@@ -340,8 +341,10 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(engine.state["kernel_absence"]["observations"], 1)
         self.assertEqual(self.provider.releases, [])
         self.now += 10
-        self.reload().advance()
-        self.assertEqual(engine.state["phase"], "monitoring")
+        second = self.reload()
+        second.advance()
+        self.assertEqual(second.state["phase"], "monitoring")
+        self.assertEqual(second.state["kernel_absence"]["observations"], 2)
         self.assertEqual(self.provider.releases, [])
         self.now += 20
         restarted = self.reload()
