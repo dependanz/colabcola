@@ -379,3 +379,105 @@ def test_windows_cursor_hide_fallback_is_paired(monkeypatch):
         {"event": "pointer_lock", "enabled": True},
         {"event": "pointer_lock", "enabled": False},
     ]
+
+
+def test_frame_cache_reuses_still_keyboard_and_preserves_updated_ack(tmp_path):
+    """Cached pixels must never mean stale input acknowledgment metadata."""
+    import zlib
+    from colabcola.bridge_input_lab_runtime import (
+        InputLabFrameCache, LabState, HEADER, MAGIC, P6)
+    from colabcola.bridge_video_colab_source import read_latest_rgb
+
+    class Painter:
+        calls = 0
+
+        def frame(self, state, now):
+            self.calls += 1
+            # Deterministic pixels keyed to the observed keyboard heatmap.
+            shade = 37 if "space" in state.seen_keys else 4
+            return P6 + bytes([shade, 50, 90]) * (WIDTH * HEIGHT)
+
+    state = LabState()
+    painter = Painter()
+    cache = InputLabFrameCache()
+
+    first, _, _, hit = cache.frame(painter, state, 10.0)
+    assert hit is False and painter.calls == 1
+
+    same, render_ms, compress_ms, hit = cache.frame(painter, state, 11.0)
+    assert hit is True and same == first
+    assert render_ms == compress_ms == 0.0 and painter.calls == 1
+
+    assert state.apply(evt(1, "key_down", key="space"))
+    different, _, _, hit = cache.frame(painter, state, 12.0)
+    assert hit is False and different != first and painter.calls == 2
+
+    assert state.apply(evt(2, "key_up", key="space"))
+    unchanged, _, _, hit = cache.frame(painter, state, 13.0)
+    assert hit is True and unchanged == different and painter.calls == 2
+
+    path = tmp_path / "frame.bin"
+    # The cached image is intentionally identical but ACK must be 2.
+    path.write_bytes(HEADER.pack(MAGIC, 31, 2, WIDTH, HEIGHT) + unchanged)
+    seq, ack, rgb = read_latest_rgb(path)
+    assert (seq, ack) == (31, 2)
+    assert rgb[:3] == bytes([37, 50, 90])
+
+
+def test_frame_cache_only_invalidates_when_visible_state_changes():
+    from colabcola.bridge_input_lab_runtime import (
+        InputLabFrameCache, visual_frame_key, LabState, P6)
+
+    class Painter:
+        calls = 0
+
+        def frame(self, state, now):
+            self.calls += 1
+            return P6 + bytes([state.stage, 0, 0]) * (WIDTH * HEIGHT)
+
+    state = LabState()
+    painter = Painter()
+    cache = InputLabFrameCache()
+    cache.frame(painter, state, 2.0)
+    assert painter.calls == 1
+
+    # A redundant key release is acknowledged but not a visible change.
+    state.apply(evt(1, "key_up", key="a"))
+    assert cache.frame(painter, state, 2.1)[3] is True
+    assert painter.calls == 1
+
+    press_next(state, 2)
+    assert state.stage == 1
+    assert cache.frame(painter, state, 2.2)[3] is False
+    assert painter.calls == 2
+
+    state.apply(evt(4, "mouse_button_down", button=2, x=.3, y=.5))
+    assert cache.frame(painter, state, 2.3)[3] is False
+    assert painter.calls == 3
+
+    state.stage = 4
+    state.finished_at = 100
+    assert visual_frame_key(state, 100.0) != visual_frame_key(state, 100.3)
+    assert visual_frame_key(state, 103.0) == visual_frame_key(state, 104.0)
+
+
+def test_frame_cache_fails_closed_on_malformed_ppm():
+    from colabcola.bridge_input_lab_runtime import InputLabFrameCache, LabState
+
+    class BrokenPainter:
+        def frame(self, state, now):
+            return b"bad"
+
+    with pytest.raises(RuntimeError, match="invalid lab image dimensions"):
+        InputLabFrameCache().frame(BrokenPainter(), LabState(), 1.0)
+
+
+def test_keyboard_stage_does_not_require_reserved_win_keys():
+    state = LabState()
+    state.apply(evt(1, "key_down", key="space"))
+    state.apply(evt(2, "key_up", key="space"))
+    press_next(state, 3)
+    assert state.stage == 1
+    assert "space" in state.seen_keys
+    assert "Super_L" not in state.seen_keys
+    assert "Super_R" not in state.seen_keys

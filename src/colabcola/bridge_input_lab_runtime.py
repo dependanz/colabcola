@@ -294,9 +294,12 @@ class LabPainter:
                 self.text(draw, ((x1+x2)//2, y+10), val, 10,
                           "#052223" if active else "#d8e3f1", "mm")
         extra = len(state.seen_keys - set(k for row in rows for k in row))
-        self.text(draw, (24, 305),
-                  f"Mapped: {len(KEYS)} keys  |  OS-reserved shortcuts may not register",
+        self.text(draw, (24, 306),
+                  "Win keys/shortcuts are OS-reserved and may not register.",
                   10, "#93aac1")
+        self.text(draw, (24, 321),
+                  "No need to press every key. Click NEXT TEST when ready.",
+                  10, "#a9c5d8")
         self.button(draw, NEXT_RECT, "NEXT TEST")
 
     def render_buttons(self, draw, state):
@@ -435,6 +438,55 @@ class LabPainter:
         return P6+image.tobytes()
 
 
+def visual_frame_key(state, now):
+    """Return only state visible in the remote image.
+
+    Input ACK is NOT part of the key: every new output frame gets a fresh CCB1
+    header/ACK even if the compressed RGB image can safely be reused.
+    """
+    if state.stage == 0:
+        return (0, tuple(sorted(state.seen_keys)))
+    if state.stage == 1:
+        return (1, tuple(sorted(state.seen_buttons)), tuple(state.clicks))
+    if state.stage == 2:
+        return (2, state.wheel_up, state.wheel_down)
+    if state.stage == 3:
+        return (3, state.locked, state.yaw, state.pitch,
+                state.look_distance >= 10)
+    if state.stage == 4:
+        # Refresh at 30Hz while the white circle expands, then retain the
+        # completed splash image without re-drawing it on every video tick.
+        elapsed = max(0.0, now - state.finished_at)
+        return (4, min(35, int(elapsed * FPS)))
+    raise ValueError("invalid Input Lab stage")
+
+
+class InputLabFrameCache:
+    """Reuse exact zlib-encoded image bytes between visual state changes."""
+
+    def __init__(self):
+        self._key = None
+        self._compressed = None
+
+    def frame(self, painter, state, now):
+        signature = visual_frame_key(state, now)
+        if signature == self._key and self._compressed is not None:
+            return self._compressed, 0.0, 0.0, True
+        started = time.monotonic()
+        ppm = painter.frame(state, now)
+        render_ms = (time.monotonic() - started) * 1000
+        if len(ppm) != len(P6) + WIDTH * HEIGHT * 3 or not ppm.startswith(P6):
+            raise RuntimeError("invalid lab image dimensions")
+        compress_start = time.monotonic()
+        compressed = zlib.compress(ppm, level=1)
+        compress_ms = (time.monotonic() - compress_start) * 1000
+        if not 0 < len(compressed) <= FRAME_LIMIT:
+            raise RuntimeError("lab intermediate image exceeds bound")
+        self._key = signature
+        self._compressed = compressed
+        return compressed, render_ms, compress_ms, False
+
+
 class InputLabSource:
     def __init__(self,directory,run_id,fps=30,sequence_buffered=True):
         if (not isinstance(run_id,str) or RUN_RE.fullmatch(run_id) is None
@@ -480,6 +532,7 @@ class InputLabSource:
             if "T4" not in gpu:
                 raise RuntimeError("external GPU is not T4")
             painter=LabPainter()
+            cache=InputLabFrameCache()
             frame_seq=0
             window_seq=0
             window_since=time.monotonic()
@@ -498,16 +551,8 @@ class InputLabSource:
                         self.state.apply(e,now=tick)
                 with self._lock:
                     ack=self.state.last_input_seq
-                    started=time.monotonic()
-                    ppm=painter.frame(self.state,started)
-                render_ms=(time.monotonic()-started)*1000
-                if len(ppm)!=len(P6)+WIDTH*HEIGHT*3 or not ppm.startswith(P6):
-                    raise RuntimeError("invalid lab image dimensions")
-                encode_start=time.monotonic()
-                compressed=zlib.compress(ppm,level=1)
-                compress_ms=(time.monotonic()-encode_start)*1000
-                if not 0<len(compressed)<=FRAME_LIMIT:
-                    raise RuntimeError("lab intermediate image exceeds bound")
+                    compressed,render_ms,compress_ms,_=cache.frame(
+                        painter,self.state,time.monotonic())
                 packed=HEADER.pack(MAGIC,frame_seq,ack,WIDTH,HEIGHT)+compressed
                 publish_start=time.monotonic()
                 _atomic_bytes(self.root/f"frame-ring-{frame_seq % SLOTS:02d}.bin",packed)
