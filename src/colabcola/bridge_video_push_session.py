@@ -165,15 +165,25 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
     peer._send("video_credit", count=credits)
     try:
         while not stopped.is_set() and time.monotonic() < deadline:
-            # Coalesce user motion; input submission is never blocked on video.
-            newest = None
-            while True:
-                try:
-                    newest = outgoing.get_nowait()
-                except queue.Empty:
-                    break
-            if newest is not None:
-                event = dict(newest)
+            # Synthetic input coalesces; gameplay preserves all key transitions.
+            pending = []
+            if getattr(peer, "application", "synthetic") == "freedoom":
+                for _ in range(16):
+                    try:
+                        pending.append(outgoing.get_nowait())
+                    except queue.Empty:
+                        break
+            else:
+                newest = None
+                while True:
+                    try:
+                        newest = outgoing.get_nowait()
+                    except queue.Empty:
+                        break
+                if newest is not None:
+                    pending.append(newest)
+            for fresh in pending:
+                event = dict(fresh)
                 callback_ns = event.pop("_ui_callback_ns", None)
                 if (callback_ns is not None and
                         (type(callback_ns) is not int or callback_ns <= 0)):
@@ -302,6 +312,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             "renderer_frames_skipped_total": renderer_skipped,
             "configured_credits": credits,
             "target_fps": target_fps,
+            "application": getattr(peer, "application", "synthetic"),
             "producer_zlib_level": (
                 0 if getattr(peer, "producer_zlib_level0", False) else 1),
             "producer_windows_observed": len(producer_windows),
