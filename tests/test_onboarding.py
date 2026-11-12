@@ -464,6 +464,99 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(value, {"drive_parent": "owned-folder", "token_command": self.home / "drive-helper.json"})
         self.patches["colabcola.lifecycle_provider.credentials"].assert_not_called()
 
+    def test_two_installations_share_one_profile_and_preserve_legacy_helper(self):
+        first = self.root / "env-first" / "python"
+        second = self.root / "env-second" / "python"
+        for path in (first, second):
+            path.parent.mkdir()
+            path.write_text("fixture", encoding="utf-8")
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(self.run_login(), 0, self.stderr.getvalue())
+            original = (self.home / "drive-helper.json").read_bytes()
+            initial = onboarding.execution_defaults()
+            self.assertEqual(initial["token_command"], self.home / "drive-helper.json")
+        with mock.patch.object(onboarding.sys, "executable", str(second)):
+            switched = onboarding.execution_defaults()
+            self.assertNotEqual(switched["token_command"], initial["token_command"])
+            self.assertEqual(json.loads(switched["token_command"].read_text()), onboarding._helper_argv())
+            self.assertEqual(self.run_login(), 0, self.stderr.getvalue())
+            self.assertEqual((self.home / "drive-helper.json").read_bytes(), original)
+            again = onboarding.execution_defaults()
+            self.assertEqual(again, switched)
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(onboarding.execution_defaults(), initial)
+        self.assertEqual((self.home / "drive-helper.json").read_bytes(), original)
+        self.assert_no_secrets()
+
+    def test_status_on_second_installation_does_not_create_helper_or_read_tokens(self):
+        first = self.root / "first-python"
+        second = self.root / "second-python"
+        first.touch(); second.touch()
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(self.run_login(), 0)
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(onboarding.sys, "executable", str(second)):
+            candidate = onboarding._install_helper_path()
+            self.assertFalse(candidate.exists())
+            self.patches["colabcola.drive_oauth.credentials"].reset_mock()
+            self.patches["colabcola.lifecycle_provider.credentials"].reset_mock()
+            self.assertEqual(self.run_login("--status"), 0, self.stderr.getvalue())
+            self.assertFalse(candidate.exists())
+            self.assertEqual(json.loads(self.stdout.getvalue())["credentials_checked"], False)
+            self.patches["colabcola.drive_oauth.credentials"].assert_not_called()
+            self.patches["colabcola.lifecycle_provider.credentials"].assert_not_called()
+            onboarding.execution_defaults()
+            self.assertTrue(candidate.exists())
+
+    def test_modified_install_helper_is_rejected_without_replacing_it(self):
+        first = self.root / "one-python"
+        second = self.root / "two-python"
+        first.touch(); second.touch()
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(self.run_login(), 0)
+        with mock.patch.object(onboarding.sys, "executable", str(second)):
+            helper = onboarding.execution_defaults()["token_command"]
+            another = self.root / "other-interpreter"
+            another.touch()
+            atomic(helper, [str(another), "-m", "colabcola", "_drive-token",
+                            "--config-home", str(self.home)])
+            before = helper.read_bytes()
+            with self.assertRaisesRegex(onboarding.OnboardingError, "Drive helper changed"):
+                onboarding.execution_defaults()
+            self.assertEqual(helper.read_bytes(), before)
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(onboarding.execution_defaults()["token_command"], self.home / "drive-helper.json")
+
+    def test_missing_current_interpreter_fails_before_creating_sidecar(self):
+        first = self.root / "valid-python"
+        missing = self.root / "deleted-python"
+        first.touch()
+        with mock.patch.object(onboarding.sys, "executable", str(first)):
+            self.assertEqual(self.run_login(), 0)
+        with mock.patch.object(onboarding.sys, "executable", str(missing)):
+            candidate = onboarding._install_helper_path()
+            with self.assertRaisesRegex(onboarding.OnboardingError, "interpreter is missing or moved"):
+                onboarding.execution_defaults()
+            self.assertFalse(candidate.exists())
+
+    def test_profile_and_helper_schema_mismatches_name_both_versions(self):
+        self.assertEqual(self.run_login(), 0)
+        atomic(self.home / "profile.json", {"schema": 2, "drive_parent": "owned-folder"})
+        with self.assertRaisesRegex(onboarding.OnboardingError, "profile schema 2; supported schema: 1"):
+            onboarding.execution_defaults()
+        atomic(self.home / "profile.json", {"schema": 1, "drive_parent": "owned-folder"})
+        atomic(self.home / "drive-helper.json", {"schema": 2, "argv": onboarding._helper_argv()})
+        with self.assertRaisesRegex(onboarding.OnboardingError, "Drive helper schema 2; supported schema: 1"):
+            onboarding.execution_defaults()
+
+    def test_legacy_helper_wrong_profile_is_rejected(self):
+        self.assertEqual(self.run_login(), 0)
+        argv = onboarding._helper_argv()
+        argv[-1] = str(self.root / "other-account")
+        atomic(self.home / "drive-helper.json", argv)
+        with self.assertRaisesRegex(onboarding.OnboardingError, "Invalid Colabcola Drive helper"):
+            onboarding.execution_defaults()
+
     def test_host_rejected_before_authorization(self):
         self.patches["colabcola.onboarding._check_host"].side_effect = onboarding.OnboardingError("Use Ubuntu WSL")
         self.assertEqual(self.run_login(), 2)
