@@ -53,8 +53,19 @@ def validated_producer_window(payload: object) -> dict | None:
     if abs(payload["published_count"] * 1000 / payload["window_elapsed_ms"]
            - payload["renderer_fps"]) > 0.02:
         return None
+    tails = {}
+    for field, median_field in (
+            ("render_copy_p95_ms", "render_copy_ms"),
+            ("compress_p95_ms", "compress_ms"),
+            ("publish_p95_ms", "publish_ms")):
+        if field in payload:
+            value = payload[field]
+            if (type(value) not in (int, float) or not math.isfinite(value)
+                    or not payload[median_field] <= value <= 10_000):
+                return None
+            tails[field] = float(value)
     return {**{k: payload[k] for k in integers},
-            **{k: float(payload[k]) for k in floats}}
+            **{k: float(payload[k]) for k in floats}, **tails}
 
 
 def validated_remote_video_diagnostics(payload: object) -> dict | None:

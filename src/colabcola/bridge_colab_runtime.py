@@ -33,6 +33,15 @@ def publish_status(directory: Path, **details) -> None:
     atomic_bytes(directory / "status.json", (json.dumps(details, sort_keys=True) + "\n").encode())
 
 
+def _window_p95_ms(samples: list[float]) -> float:
+    """Interpolated within-window p95 (never a pooled session percentile)."""
+    values = sorted(samples)
+    position = (len(values) - 1) * 0.95
+    low = int(position)
+    fraction = position - low
+    return round(values[low] + fraction * (values[min(low + 1, len(values) - 1)] - values[low]), 2)
+
+
 def make_producer_window(*, run_id: str, last_seq: int, window_seq: int,
                          published_count: int, elapsed_s: float,
                          target_fps: int, rate_seq: int,
@@ -52,6 +61,9 @@ def make_producer_window(*, run_id: str, last_seq: int, window_seq: int,
         "render_copy_ms": round(median(render_samples), 2),
         "compress_ms": round(median(compress_samples), 2),
         "publish_ms": round(median(publish_samples), 2),
+        "render_copy_p95_ms": _window_p95_ms(render_samples),
+        "compress_p95_ms": _window_p95_ms(compress_samples),
+        "publish_p95_ms": _window_p95_ms(publish_samples),
     }
 
 

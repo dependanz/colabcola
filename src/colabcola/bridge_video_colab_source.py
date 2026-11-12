@@ -249,8 +249,20 @@ def read_producer_window(path: Path, run_id: str) -> dict | None:
     measured_rate = obj["published_count"] * 1000 / obj["window_elapsed_ms"]
     if abs(measured_rate - obj["renderer_fps"]) > 0.02:
         return None
+    # v35B fields are optional for compatibility with earlier sidecars.
+    tails = {}
+    for field, median_field in (
+            ("render_copy_p95_ms", "render_copy_ms"),
+            ("compress_p95_ms", "compress_ms"),
+            ("publish_p95_ms", "publish_ms")):
+        if field in obj:
+            value = obj[field]
+            if (type(value) not in (int, float) or not math.isfinite(value)
+                    or not obj[median_field] <= value <= 10_000):
+                return None
+            tails[field] = float(value)
     return {**{k: obj[k] for k in ints},
-            **{k: float(obj[k]) for k in values}}
+            **{k: float(obj[k]) for k in values}, **tails}
 
 
 class RemoteH264PullSource:

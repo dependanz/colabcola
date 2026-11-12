@@ -53,6 +53,11 @@ class CreditPushSender:
         self.stopped = threading.Event()
         self._condition = threading.Condition()
         self._thread = None
+        # v35B optional diagnostics: 30Hz sender payloads remain untouched.
+        self.diagnostics = getattr(source, "fps", 30) == 60
+        self._credit_wait_ns = 0
+        self._credit_wait_iterations = 0
+        self._previous_comm_send_us = None
 
     def grant(self, count):
         """Grant from authenticated Comm only; never accept unlimited credit."""
@@ -99,8 +104,24 @@ class CreditPushSender:
             reply = self.source.pull(send_seq)
             if reply.get("kind") not in ("video_access_unit", "video_no_new"):
                 raise ValueError("invalid push video response")
-            # A no-new race remains correlated; the host returns one credit.
+            # An encoded frame carries bounded, previous-send diagnostics.
+            # We cannot time the current send until after it has completed.
+            if self.diagnostics and reply["kind"] == "video_access_unit":
+                with self._condition:
+                    extras = {
+                        "sender_credit_wait_us_total": round(
+                            self._credit_wait_ns / 1000, 2),
+                        "sender_credit_wait_iterations": self._credit_wait_iterations,
+                    }
+                    if self._previous_comm_send_us is not None:
+                        extras["sender_comm_previous_us"] = self._previous_comm_send_us
+                reply = {**reply, **extras}
+            started_ns = time.perf_counter_ns()
             self.comm.send(reply)
+            if self.diagnostics:
+                elapsed_us = (time.perf_counter_ns() - started_ns) / 1000
+                with self._condition:
+                    self._previous_comm_send_us = round(elapsed_us, 2)
             return True
         except Exception:
             with self._condition:
@@ -118,7 +139,13 @@ class CreditPushSender:
         while not self.stopped.is_set():
             with self._condition:
                 if self.available == 0 and not self.stopped.is_set():
+                    since = (time.perf_counter_ns()
+                             if self.diagnostics and self.initialized_credits else None)
                     self._condition.wait(timeout=0.05)
+                    if since is not None:
+                        self._credit_wait_ns += max(
+                            0, time.perf_counter_ns() - since)
+                        self._credit_wait_iterations += 1
             if self.stopped.is_set():
                 break
             if not self.step():

@@ -185,13 +185,18 @@ def offer_update(items: queue.Queue, item: tuple[str, object]) -> None:
         items.put_nowait(item)
     except queue.Full:
         try:
-            items.get_nowait()
+            discarded = items.get_nowait()
+            observer = getattr(items, "note_discarded", None)
+            if observer is not None:
+                observer(discarded)
         except queue.Empty:
             pass
         try:
             items.put_nowait(item)
         except queue.Full:
-            pass
+            observer = getattr(items, "note_discarded", None)
+            if observer is not None:
+                observer(item)
 
 
 def stream_remote(provider, session, remote: str, run_id: str, gpu: str,

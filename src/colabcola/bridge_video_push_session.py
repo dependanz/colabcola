@@ -79,6 +79,47 @@ def decode_push_message(payload, *, expected_seq, run_id, last_ack,
         raise LifecycleError("push H.264 response failed validation") from None
 
 
+def validated_sender_diagnostics(payload: object) -> dict | None:
+    """Optional v35B remote-only durations; no remote/host clock subtraction."""
+    if not isinstance(payload, dict):
+        return None
+    keys = ("sender_credit_wait_us_total", "sender_credit_wait_iterations")
+    if not any(k in payload for k in (*keys, "sender_comm_previous_us")):
+        return None
+    wait = payload.get(keys[0])
+    iterations = payload.get(keys[1])
+    previous = payload.get("sender_comm_previous_us")
+    if (type(wait) not in (int, float) or not 0 <= wait <= 1_800_000_000
+            or type(iterations) is not int or not 0 <= iterations <= 10_000_000
+            or (previous is not None and (
+                type(previous) not in (int, float) or not 0 <= previous <= 10_000_000))):
+        return None
+    import math
+    if not math.isfinite(wait) or (previous is not None and not math.isfinite(previous)):
+        return None
+    return {"credit_wait_us_total": float(wait), "credit_wait_iterations": iterations,
+            "comm_previous_us": float(previous) if previous is not None else None}
+
+
+def producer_stage_summary(windows: dict) -> dict:
+    """Report *window statistics*, not fictitious pooled producer samples."""
+    result = {}
+    for prefix, field in (
+            ("render_copy", "render_copy_ms"),
+            ("compress", "compress_ms"),
+            ("publish", "publish_ms")):
+        medians = [w[field] for w in windows.values()]
+        tails = [w[field.replace("_ms", "_p95_ms")] for w in windows.values()
+                 if field.replace("_ms", "_p95_ms") in w]
+        result[f"producer_{prefix}_window_median_p50_ms"] = (
+            round(median(medians), 2) if medians else None)
+        result[f"producer_{prefix}_window_median_p95_ms"] = (
+            pooled_percentiles(medians)["p95"])
+        result[f"producer_{prefix}_within_window_p95_median_ms"] = (
+            round(median(tails), 2) if tails else None)
+    return result
+
+
 def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                        *, credits: int = PUSH_CREDITS):
     """One host event loop, bounded credits, no per-frame pull or replay."""
@@ -108,6 +149,11 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
     renderer_lags = []
     renderer_skipped = 0
     remote_encode_us = []
+    remote_source_read_us = []
+    remote_comm_previous_us = []
+    sender_credit_wait_us_total = None
+    sender_credit_wait_iterations = None
+    sender_diag_observations = 0
     producer_windows = {}
     receive_interval_ms = []
     previous_received_ns = None
@@ -216,6 +262,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                     if "renderer_buffer_lag" in diag:
                         renderer_lags.append(diag["renderer_buffer_lag"])
                     remote_encode_us.append(diag["encode_us"])
+                    remote_source_read_us.append(diag["source_read_us"])
                     window = diag.get("producer_window")
                     if window is not None:
                         wid = window["window_seq"]
@@ -224,12 +271,27 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                             producer_windows[wid] = window
                         elif previous != window:
                             raise LifecycleError("conflicting push producer windows")
+                sender_diag = validated_sender_diagnostics(payload)
+                if sender_diag is not None:
+                    wait = sender_diag["credit_wait_us_total"]
+                    iterations = sender_diag["credit_wait_iterations"]
+                    if (sender_credit_wait_us_total is None
+                            or (wait >= sender_credit_wait_us_total and
+                                iterations >= sender_credit_wait_iterations)):
+                        sender_credit_wait_us_total = wait
+                        sender_credit_wait_iterations = iterations
+                        sender_diag_observations += 1
+                    previous_us = sender_diag["comm_previous_us"]
+                    if previous_us is not None:
+                        remote_comm_previous_us.append(previous_us)
             else:
                 empty_replies += 1
             # Credit is returned only AFTER complete validated processing.
             peer._send("video_credit", count=1)
 
         elapsed = max(.001, time.monotonic() - started)
+        covered_ms = sum(w["window_elapsed_ms"] for w in producer_windows.values())
+        covered_frames = sum(w["published_count"] for w in producer_windows.values())
         report = {
             "schema": 1, "mode": "external-credit-push-h264",
             "decoded_frames": received_frames, "decoded_distinct_fps": round(
@@ -241,12 +303,30 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             "configured_credits": credits,
             "target_fps": target_fps,
             "producer_windows_observed": len(producer_windows),
+            "producer_frames_covered": covered_frames,
+            "producer_elapsed_ms_covered": round(covered_ms, 3),
+            "producer_renderer_fps_weighted_covered": (
+                round(1000 * covered_frames / covered_ms, 3)
+                if covered_ms else None),
+            **producer_stage_summary(producer_windows),
             "producer_renderer_fps_p50": (
                 round(median(w["renderer_fps"] for w in producer_windows.values()), 3)
                 if producer_windows else None),
             "remote_encode_p50_ms": (
                 round(median(remote_encode_us) / 1000, 3)
                 if remote_encode_us else None),
+            **{f"remote_encode_{key}_ms": value for key, value in
+               pooled_percentiles([v / 1000 for v in remote_encode_us]).items()
+               if key != "p50"},
+            **{f"remote_source_read_{key}_ms": value for key, value in
+               pooled_percentiles([v / 1000 for v in remote_source_read_us]).items()},
+            **{f"remote_comm_previous_send_{key}_ms": value for key, value in
+               pooled_percentiles([v / 1000 for v in remote_comm_previous_us]).items()},
+            "remote_sender_diagnostic_observations": sender_diag_observations,
+            "remote_sender_credit_wait_ms_total_observed": (
+                round(sender_credit_wait_us_total / 1000, 2)
+                if sender_credit_wait_us_total is not None else None),
+            "remote_sender_credit_wait_iterations_observed": sender_credit_wait_iterations,
             "host_receive_interval_p50_ms": (
                 round(median(receive_interval_ms), 2)
                 if receive_interval_ms else None),

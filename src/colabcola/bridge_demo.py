@@ -273,6 +273,18 @@ def create_viewer_layout(root, width: int, height: int):
     return label, status
 
 
+class MeteredFrameQueue(queue.Queue):
+    """Count video frames evicted before Tk configures them."""
+
+    def __init__(self, maxsize: int):
+        super().__init__(maxsize=maxsize)
+        self.coalesced_video_frames = 0
+
+    def note_discarded(self, item) -> None:
+        if isinstance(item, tuple) and item and item[0] in ("frame", "frame-timed"):
+            self.coalesced_video_frames += 1
+
+
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
                worker=None, viewer_stats: bool = False,
@@ -287,7 +299,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     import tkinter as tk
 
     outgoing: queue.Queue = queue.Queue(maxsize=64)
-    frames: queue.Queue = queue.Queue(maxsize=2)
+    frames: queue.Queue = MeteredFrameQueue(maxsize=2)
     stopped = threading.Event()
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
@@ -385,8 +397,9 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     if gui_meter is not None:
         # The full-session result pools actual GUI observations, not
         # reporting-window medians. Never interrupt cleanup on log errors.
-        summary = json.dumps(gui_meter.session_summary(time.monotonic()),
-                             sort_keys=True, allow_nan=False)
+        session = gui_meter.session_summary(time.monotonic())
+        session["gui_queue_coalesced_video_frames"] = frames.coalesced_video_frames
+        summary = json.dumps(session, sort_keys=True, allow_nan=False)
         try:
             print("[colabcola] v35 GUI session " + summary, flush=True)
         except (OSError, UnicodeError):
