@@ -6,6 +6,7 @@ CCB1 frame ring consumed by the authenticated H.264 Comm push sender.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -25,6 +26,11 @@ MAGIC = b"CCB1"
 FRAME_LIMIT = 2 * 1024 * 1024
 SLOTS = 8
 QUEUE_LIMIT = 128
+# Fail closed if the host never grants its initial video credits, or if its
+# authenticated credit heartbeat disappears after first grant. These clocks
+# are remote-only: no comparison against Windows-host timestamps.
+INITIAL_HOST_CREDIT_TIMEOUT_S = 120.0
+ACTIVE_HOST_CREDIT_TIMEOUT_S = 20.0
 P6 = b"P6\n640 360\n255\n"
 NEXT_RECT = (492, 310, 626, 350)
 LOCK_RECT = (167, 268, 472, 315)
@@ -499,6 +505,10 @@ class InputLabSource:
         self._seq=0
         self.state=LabState()
         self._lock=threading.Lock()
+        self._lease_lock=threading.Lock()
+        self._started_at=time.monotonic()
+        self._last_host_credit_at=None
+        self._host_credit_count=0
         self._stop=threading.Event()
         self._thread=None
 
@@ -514,12 +524,29 @@ class InputLabSource:
             self._seq=record["seq"]
             return True
 
-    def _status(self,state,gpu=None,error_type=None):
+    def note_host_credit(self):
+        """Called only after a validated, authenticated video-credit grant."""
+        with self._lease_lock:
+            self._last_host_credit_at=time.monotonic()
+            self._host_credit_count+=1
+
+    def host_credit_lease_expired(self,now=None):
+        now=time.monotonic() if now is None else now
+        with self._lease_lock:
+            latest=self._last_host_credit_at
+            started=self._started_at
+        if latest is None:
+            return now-started>=INITIAL_HOST_CREDIT_TIMEOUT_S
+        return now-latest>=ACTIVE_HOST_CREDIT_TIMEOUT_S
+
+    def _status(self,state,gpu=None,error_type=None,reason=None):
         payload={"state":state,"run_id":self.run_id,"application":"inputlab"}
         if gpu is not None:
             payload.update(device="cuda",gpu=gpu,width=WIDTH,height=HEIGHT)
         if error_type is not None:
             payload["error_type"]=error_type
+        if reason is not None:
+            payload["reason"]=reason
         _atomic_bytes(self.root/"status.json",
                       (json.dumps(payload,sort_keys=True)+"\n").encode())
 
@@ -540,8 +567,12 @@ class InputLabSource:
             compress_times=[]
             publish_times=[]
             count=0
+            stop_reason="normal"
             while not self._stop.is_set() and not (self.root/"stop").exists():
                 tick=time.monotonic()
+                if self.host_credit_lease_expired(tick):
+                    stop_reason="host_credit_lease_expired"
+                    break
                 for _ in range(32):
                     try:
                         e=self.events.get_nowait()
@@ -549,10 +580,14 @@ class InputLabSource:
                         break
                     with self._lock:
                         self.state.apply(e,now=tick)
+                # Snapshot small logical state under lock, then render
+                # outside it; expensive Pillow drawing must never block the
+                # notebook's authenticated Comm input or credit callbacks.
                 with self._lock:
-                    ack=self.state.last_input_seq
-                    compressed,render_ms,compress_ms,_=cache.frame(
-                        painter,self.state,time.monotonic())
+                    state_snapshot=copy.deepcopy(self.state)
+                    ack=state_snapshot.last_input_seq
+                compressed,render_ms,compress_ms,_=cache.frame(
+                    painter,state_snapshot,time.monotonic())
                 packed=HEADER.pack(MAGIC,frame_seq,ack,WIDTH,HEIGHT)+compressed
                 publish_start=time.monotonic()
                 _atomic_bytes(self.root/f"frame-ring-{frame_seq % SLOTS:02d}.bin",packed)
@@ -574,6 +609,9 @@ class InputLabSource:
                         "published_count":count,
                         "window_elapsed_ms":round(elapsed*1000,3),
                         "target_fps":FPS,"rate_seq":0,
+                        "application":"inputlab",
+                        "input_lab_stage":state_snapshot.stage,
+                        "input_lab_credit_count":self._host_credit_count,
                         "renderer_fps":round(count/elapsed,2),
                         "render_copy_ms":round(median(render_times),2),
                         "render_copy_p95_ms":_p95(render_times),
@@ -591,7 +629,7 @@ class InputLabSource:
                     count=0
                 frame_seq+=1
                 self._stop.wait(max(0,1/FPS-(time.monotonic()-tick)))
-            self._status("stopped",gpu=gpu)
+            self._status("stopped",gpu=gpu,reason=stop_reason)
         except Exception as exc:
             if not self._stop.is_set():
                 self._status("failed",error_type=type(exc).__name__)
@@ -625,6 +663,12 @@ def submit_input(event):
     if _CONTROLLER is None:
         raise ValueError("Input Lab not running")
     return _CONTROLLER.submit_input(event)
+
+
+def note_host_credit():
+    if _CONTROLLER is None:
+        raise ValueError("Input Lab source not running")
+    _CONTROLLER.note_host_credit()
 
 
 def stop():

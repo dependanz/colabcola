@@ -143,6 +143,9 @@ class KernelCommBridge:
         self._closed = False
         self.latest_renderer_metrics = None
         self.latest_rate_ack = 0
+        # A successful Comm send does not prove remote receipt. Input Lab
+        # additionally requests a stop via authenticated contents REST.
+        self.remote_stop_marker_uploaded = False
 
     def _send(self, kind: str, **fields: object) -> None:
         if self._closed or not self.comm_id or self.wire is None:
@@ -471,6 +474,22 @@ class KernelCommBridge:
                 self._send("close")
             except Exception:
                 pass
+
+        # Input Lab only: an independent, authenticated stop marker permits
+        # the renderer to terminate even when Jupyter shell->Comm delivery
+        # has stalled. Never retry an ambiguous upload; on failure require
+        # manual review. This never allocates or releases a Colab runtime.
+        stop_marker_error = False
+        if (self.application == "inputlab"
+                and getattr(self, "external_attachment", False)):
+            try:
+                self.provider._upload(
+                    self.session,
+                    f"content/colabcola-bridge/{self.run_id}/stop", b"1")
+                self.remote_stop_marker_uploaded = True
+            except Exception:
+                stop_marker_error = True
+
         self._closed = True
         if self.client:
             try:
@@ -478,6 +497,10 @@ class KernelCommBridge:
             finally:
                 self.client = None
                 self.wire = None
+        if stop_marker_error:
+            raise LifecycleError(
+                "Input Lab stop marker upload unconfirmed; inspect the "
+                "externally owned runtime before reattaching")
 
 
 def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,

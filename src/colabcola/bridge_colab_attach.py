@@ -198,19 +198,27 @@ def run_attached_colab(args, provider) -> int:
                                   else 10 if push else 30),
             )
         finally:
+            stop_fields = (
+                {"remote_stop_marker_uploaded": False}
+                if getattr(args, "application", "synthetic") == "inputlab" else {})
             try:
                 peer.close()
             except Exception:
                 save(args.run_dir, state, "needs_manual_review",
-                     close_status="unconfirmed")
+                     close_status="unconfirmed", **stop_fields)
                 raise LifecycleError(
-                    "external Comm close unconfirmed; user-owned runtime not released"
+                    "external Comm close or stop-marker request unconfirmed; "
+                    "user-owned runtime not released"
                 ) from None
             else:
-                # Host disconnect is not proof that remote worker has stopped.
+                # The independent marker is only a remote stop REQUEST;
+                # a separate read of status.json verifies worker exit.
+                if stop_fields:
+                    stop_fields["remote_stop_marker_uploaded"] = (
+                        getattr(peer, "remote_stop_marker_uploaded", False) is True)
                 save(args.run_dir, state,
                      "detached" if opened else "needs_manual_review",
-                     close_status="host_disconnected")
+                     close_status="host_disconnected", **stop_fields)
                 print("[colabcola] Host bridge detached; "
                       "user-owned Colab runtime NOT released", flush=True)
     return 0

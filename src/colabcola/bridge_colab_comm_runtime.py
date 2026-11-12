@@ -186,7 +186,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             push_impl = runpy.run_path(video_push_source_path)
             push_sender = push_impl["CreditPushSender"](
                 comm=comm, source=video_source, directory=root,
-                run_id=run_id, credits=push_credits)
+                run_id=run_id, credits=push_credits,
+                **({"enable_status_sidecar": True}
+                   if application == "inputlab" else {}))
         except Exception:
             video_failed = True
 
@@ -309,6 +311,10 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                 # Credit grants must be strict and bounded. A video sender
                 # never issues a request-response pull or resets the codec.
                 push_sender.grant(event.get("count"))
+                if application == "inputlab":
+                    # Only a valid, authenticated credit extends the remote
+                    # producer lease. Input events do not extend this lease.
+                    renderer["note_host_credit"]()
             except (ValueError, TypeError):
                 comm.send({"v": 1, "kind": "error", "run_id": run_id,
                            "code": "push_credit_invalid"})
