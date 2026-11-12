@@ -59,7 +59,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
           sequence_buffered: bool = False,
           max_buffer_lag_frames: int = 2,
           video_push: bool = False, video_push_source_path: str | None = None,
-          push_credits: int = 4, producer_zlib_level0: bool = False):
+          push_credits: int = 4, producer_zlib_level0: bool = False,
+          application: str = "synthetic",
+          game_renderer_path: str | None = None):
     global BOOTSTRAP_STAGE
     if (type(video_push) is not bool
             or (video_push and (not sequence_buffered or not preflight_video
@@ -76,6 +78,12 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             or (producer_zlib_level0 and not (
                 fps == 60 and video_push and sequence_buffered and preflight_video))):
         raise ValueError("level0 compression requires 60Hz buffered H.264 push")
+    if (application not in ("synthetic", "freedoom")
+            or (application == "freedoom" and not (
+                fps == 30 and video_push and sequence_buffered and preflight_video
+                and game_renderer_path is not None
+                and push_credits in (4, 6, 8) and not producer_zlib_level0))):
+        raise ValueError("Freedoom requires opt-in 30Hz external H.264 push")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int
@@ -86,7 +94,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         raise ValueError("remote PyAV installation requires video preflight")
     root = Path(directory)
     BOOTSTRAP_STAGE = "loading_renderer"
-    renderer = runpy.run_path(renderer_path)
+    renderer = runpy.run_path(
+        game_renderer_path if application == "freedoom" else renderer_path)
     BOOTSTRAP_STAGE = "starting_renderer"
     if sequence_buffered:
         renderer["start"](directory, fps, run_id, sequence_buffered=True,
@@ -111,6 +120,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         time.sleep(.15)
     else:
         raise RuntimeError("CUDA bridge worker did not become ready")
+    if (application == "freedoom"
+            and details.get("application") != "freedoom"):
+        raise RuntimeError("remote game did not become ready")
     if details.get("device") != "cuda" or "T4" not in details.get("gpu", ""):
         raise RuntimeError("remote bridge did not verify T4 CUDA compute")
 
@@ -160,6 +172,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         ready["video_codec"] = "h264-annexb"
         if video_push:
             ready["video_mode"] = "credit-push"
+            if application == "freedoom":
+                ready["application"] = "freedoom"
             if producer_zlib_level0:
                 ready["producer_zlib_level"] = 0
     comm = _create_kernel_comm(target_name=TARGET, data=ready)
@@ -188,6 +202,27 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             action = event.get("event")
             if type(sequence) is not int or not state["latest_input"] < sequence < 10000000:
                 return
+            if application == "freedoom":
+                # Game controls are explicitly allowlisted and queued by
+                # the selected source; no shell strings or arbitrary commands.
+                record = {"seq": sequence, "event": action}
+                if action in ("key_down", "key_up"):
+                    record["key"] = event.get("key")
+                elif action in ("mouse_button_down", "mouse_button_up"):
+                    record["button"] = event.get("button")
+                elif action == "mouse_delta":
+                    record["dx"], record["dy"] = event.get("dx"), event.get("dy")
+                else:
+                    return
+                try:
+                    if not renderer["submit_input"](record):
+                        raise ValueError("game input queue rejected")
+                except (ValueError, TypeError, KeyError):
+                    comm.send({"v": 1, "kind": "error", "run_id": run_id,
+                               "code": "game_input_rejected"})
+                    return
+                state["latest_input"] = sequence
+                return
             if action == "mouse":
                 x, y = event.get("x"), event.get("y")
                 if (type(x) not in (int, float) or type(y) not in (int, float)
@@ -206,7 +241,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                 root / "input.json", (json.dumps(payload, separators=(",", ":")) + "\n").encode()
             )
             state["latest_input"] = sequence
-        elif kind == "rate":
+        elif kind == "rate" and application == "synthetic":
             request_seq, requested_fps = event.get("seq"), event.get("fps")
             if (type(request_seq) is not int
                     or not state["latest_rate"] < request_seq < 10000
@@ -300,6 +335,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             if push_sender is not None:
                 push_sender.close()
             renderer["atomic_bytes"](root / "stop", b"1")
+            if application == "freedoom":
+                renderer["stop"]()
             comm.close()
 
     BOOTSTRAP_STAGE = "registering_handler"
@@ -321,7 +358,9 @@ if __name__ == "__main__":
               video_push=globals().get("BRIDGE_VIDEO_PUSH", False) is True,
               video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"),
               push_credits=globals().get("BRIDGE_PUSH_CREDITS", 4),
-              producer_zlib_level0=globals().get("BRIDGE_PRODUCER_ZLIB_LEVEL0", False))
+              producer_zlib_level0=globals().get("BRIDGE_PRODUCER_ZLIB_LEVEL0", False),
+              application=globals().get("BRIDGE_APPLICATION", "synthetic"),
+              game_renderer_path=globals().get("BRIDGE_GAME_RENDERER_PATH"))
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise

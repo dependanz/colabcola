@@ -92,7 +92,8 @@ class KernelCommBridge:
                  sequence_buffered: bool = False,
                  max_buffer_lag_frames: int = 2,
                  video_push: bool = False, push_credits: int = 4,
-                 producer_zlib_level0: bool = False):
+                 producer_zlib_level0: bool = False,
+                 application: str = "synthetic"):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -125,6 +126,13 @@ class KernelCommBridge:
                     video_push and sequence_buffered and video_codec == "h264"
                     and fps == 60))):
             raise ValueError("level0 compression requires 60Hz buffered H.264 push")
+        if (application not in ("synthetic", "freedoom") or
+                (application == "freedoom" and not (
+                    fps == 30 and video_push and sequence_buffered
+                    and video_codec == "h264" and push_credits in (4, 6, 8)
+                    and not producer_zlib_level0))):
+            raise ValueError("Freedoom requires explicitly selected 30Hz H.264 push")
+        self.application = application
         self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
         self.push_credits = push_credits
@@ -171,6 +179,8 @@ class KernelCommBridge:
             names.append("bridge_video_colab_source.py")
         if self.video_push:
             names.append("bridge_video_push_runtime.py")
+        if self.application == "freedoom":
+            names.append("bridge_game_freedoom_runtime.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
         if kernel_id is None:
@@ -228,6 +238,8 @@ class KernelCommBridge:
                           if self.video_codec == "h264" else None)
             push_path = (root + "/bridge_video_push_runtime.py"
                          if self.video_push else None)
+            game_path = (root + "/bridge_game_freedoom_runtime.py"
+                         if self.application == "freedoom" else None)
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
@@ -242,7 +254,9 @@ class KernelCommBridge:
                     f"'BRIDGE_VIDEO_PUSH':{self.video_push!r},"
                     f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r},"
                     f"'BRIDGE_PUSH_CREDITS':{self.push_credits!r},"
-                    f"'BRIDGE_PRODUCER_ZLIB_LEVEL0':{self.producer_zlib_level0!r}"
+                    f"'BRIDGE_PRODUCER_ZLIB_LEVEL0':{self.producer_zlib_level0!r},"
+                    f"'BRIDGE_APPLICATION':{self.application!r},"
+                    f"'BRIDGE_GAME_RENDERER_PATH':{game_path!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.
@@ -306,6 +320,9 @@ class KernelCommBridge:
                     if (self.producer_zlib_level0 and
                             details.get("producer_zlib_level") != 0):
                         raise LifecycleError("kernel level0 compression handshake invalid")
+                    if (self.application == "freedoom" and
+                            details.get("application") != "freedoom"):
+                        raise LifecycleError("kernel game handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:

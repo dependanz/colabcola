@@ -289,12 +289,15 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                height: int = HEIGHT, title: str | None = None,
                worker=None, viewer_stats: bool = False,
                timestamp_local_input: bool = False,
-               poll_interval_ms: int = 30) -> None:
+               poll_interval_ms: int = 30,
+               game_controls: bool = False) -> None:
     # Preserve the 30ms viewer default for existing transports; allow only
     # explicit local experiments to request a shorter bounded Tk poll.
     if (type(poll_interval_ms) is not int
             or not 5 <= poll_interval_ms <= 100):
         raise ValueError("Tk poll interval must be an integer between 5 and 100 ms")
+    if type(game_controls) is not bool:
+        raise ValueError("invalid game controls selector")
     # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
@@ -318,8 +321,10 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
         try:
             outgoing.put_nowait(event)
         except queue.Full:
-            # Input events are transient; never block the GUI.
-            pass
+            # Synthetic mouse updates are transient; an unreleased game key is not.
+            if game_controls:
+                stopped.set()
+            # Never block the GUI callback on a full input queue.
 
     def mouse(event) -> None:
         now = time.monotonic()
@@ -373,9 +378,73 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                     pass  # The viewer and video worker must keep running.
         root.after(poll_interval_ms, poll)
 
-    label.bind("<Motion>", mouse)
-    root.bind("<KeyPress>", lambda e: enqueue({"event": "key", "key": e.keysym[:32]}))
-    root.protocol("WM_DELETE_WINDOW", lambda: (stopped.set(), root.destroy()))
+    if game_controls:
+        # Preserve press/release transitions; XTest on the remote side
+        # requires an explicit key-up to avoid a permanently held control.
+        allowed_keys = frozenset((
+            "Up", "Down", "Left", "Right", "Control_L", "Control_R",
+            "space", "Return", "Escape", "Shift_L", "Shift_R", "Tab"))
+        pressed_keys = set()
+        pressed_buttons = set()
+        last_pointer = [None]
+
+        def game_key_down(event):
+            key = event.keysym
+            if key in allowed_keys and key not in pressed_keys:
+                pressed_keys.add(key)
+                enqueue({"event": "key_down", "key": key})
+
+        def game_key_up(event):
+            key = event.keysym
+            if key in pressed_keys:
+                pressed_keys.remove(key)
+                enqueue({"event": "key_up", "key": key})
+
+        def release_local_inputs(_event=None):
+            for key in sorted(pressed_keys):
+                enqueue({"event": "key_up", "key": key})
+            pressed_keys.clear()
+            for button in sorted(pressed_buttons):
+                enqueue({"event": "mouse_button_up", "button": button})
+            pressed_buttons.clear()
+            last_pointer[0] = None
+
+        def game_mouse(event):
+            old = last_pointer[0]
+            last_pointer[0] = (event.x, event.y)
+            now = time.monotonic()
+            if old is None or now - last_motion[0] < .03:
+                return
+            last_motion[0] = now
+            dx = max(-64, min(64, int(event.x - old[0])))
+            dy = max(-64, min(64, int(event.y - old[1])))
+            if dx or dy:
+                enqueue({"event": "mouse_delta", "dx": dx, "dy": dy})
+
+        def game_button_down(event):
+            label.focus_set()
+            if event.num in (1, 3) and event.num not in pressed_buttons:
+                pressed_buttons.add(event.num)
+                enqueue({"event": "mouse_button_down", "button": event.num})
+
+        def game_button_up(event):
+            if event.num in pressed_buttons:
+                pressed_buttons.remove(event.num)
+                enqueue({"event": "mouse_button_up", "button": event.num})
+
+        label.bind("<Motion>", game_mouse)
+        label.bind("<ButtonPress>", game_button_down)
+        label.bind("<ButtonRelease>", game_button_up)
+        root.bind("<KeyPress>", game_key_down)
+        root.bind("<KeyRelease>", game_key_up)
+        root.bind("<FocusOut>", release_local_inputs)
+        root.protocol("WM_DELETE_WINDOW", lambda: (
+            release_local_inputs(), stopped.set(), root.destroy()))
+        root.focus_set()
+    else:
+        label.bind("<Motion>", mouse)
+        root.bind("<KeyPress>", lambda e: enqueue({"event": "key", "key": e.keysym[:32]}))
+        root.protocol("WM_DELETE_WINDOW", lambda: (stopped.set(), root.destroy()))
     failures = []
 
     def dispatch() -> None:
@@ -431,6 +500,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="authorize bridge code upload and execution in the existing notebook kernel")
     remote.add_argument("--sequence-buffered", action="store_true",
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
+    remote.add_argument("--application", choices=("synthetic", "freedoom"),
+                        default="synthetic",
+                        help="v36A external-only opt-in Freedoom app; defaults to CUDA scene")
     remote.add_argument("--push-video", action="store_true",
                         help="v34 opt-in: sender-driven bounded H.264 Comm")
     remote.add_argument("--producer-zlib-level0", action="store_true",
@@ -480,6 +552,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
+            if args.application == "freedoom" and not (
+                    args.attach_existing and args.sequence_buffered
+                    and args.push_video and not args.producer_zlib_level0
+                    and (args.fps, args.poll_hz) == (30, 30)
+                    and args.transport == "comm" and args.video_codec == "h264"
+                    and args.inflight in (None, 1)
+                    and args.push_credits in (4, 6, 8)
+                    and not (args.benchmark_h264_capacity or args.benchmark_h264_credits
+                             or args.benchmark_credits or args.benchmark_sweep
+                             or args.probe_link or args.confirm_allocation)):
+                parser.error("Freedoom requires external 30Hz buffered H.264 push")
             if args.producer_zlib_level0 and not (
                     args.attach_existing and args.sequence_buffered and args.push_video
                     and args.transport == "comm" and args.video_codec == "h264"

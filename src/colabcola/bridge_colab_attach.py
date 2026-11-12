@@ -86,6 +86,17 @@ def validate_attach_options(args) -> None:
             or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (60, 60)
             or getattr(args, "benchmark_h264_capacity", False)):
         raise LifecycleError("level0 intermediate compression requires 60Hz external push")
+    application = getattr(args, "application", "synthetic")
+    if application not in ("synthetic", "freedoom"):
+        raise LifecycleError("unknown application")
+    if application == "freedoom" and not (
+            getattr(args, "push_video", False)
+            and getattr(args, "sequence_buffered", False)
+            and (getattr(args, "fps", None), getattr(args, "poll_hz", None))
+            == (30, 30)
+            and not getattr(args, "benchmark_h264_capacity", False)
+            and not getattr(args, "producer_zlib_level0", False)):
+        raise LifecycleError("Freedoom requires 30Hz external H.264 push")
     credits = getattr(args, "push_credits", 4)
     fps = getattr(args, "fps", None)
     if (type(credits) is not int or credits not in (4, 6, 8, 10, 12)
@@ -136,6 +147,7 @@ def run_attached_colab(args, provider) -> int:
             video_push=getattr(args, "push_video", False),
             push_credits=getattr(args, "push_credits", 4),
             producer_zlib_level0=getattr(args, "producer_zlib_level0", False),
+            application=getattr(args, "application", "synthetic"),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
@@ -152,7 +164,8 @@ def run_attached_colab(args, provider) -> int:
                  video_push=getattr(args, "push_video", False),
                  push_credits=getattr(args, "push_credits", 4),
                  producer_zlib_level=(
-                     0 if getattr(args, "producer_zlib_level0", False) else 1))
+                     0 if getattr(args, "producer_zlib_level0", False) else 1),
+                 application=getattr(args, "application", "synthetic"))
 
             push = getattr(args, "push_video", False)
             if push:
@@ -171,10 +184,13 @@ def run_attached_colab(args, provider) -> int:
 
             run_viewer(
                 "127.0.0.1", 0, "", width=640, height=360,
-                title=("Colab Cola · T4 sender-driven H.264" if push
+                title=("Colab Cola · Freedoom (remote T4 session)"
+                       if getattr(args, "application", "synthetic") == "freedoom"
+                       else "Colab Cola · T4 sender-driven H.264" if push
                        else "Colab Cola · existing T4 H.264 (kernel Comm)"),
                 worker=work, viewer_stats=getattr(args, "viewer_stats", False),
                 timestamp_local_input=push,
+                game_controls=getattr(args, "application", "synthetic") == "freedoom",
                 poll_interval_ms=(5 if push and args.fps == 60
                                   else 10 if push else 30),
             )
