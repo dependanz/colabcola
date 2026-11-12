@@ -215,6 +215,19 @@ class LabPainter:
         self.Image = Image
         self.Draw = ImageDraw
         self.fonts = {}
+        # Website-approved Colab Cola hero banner (exact packaged PNG).
+        # Remote launch uploads it beside this script; local offline tests
+        # read its identical package resource from the source checkout.
+        asset = Path(__file__).with_name("colabcola-banner.png")
+        if not asset.is_file():
+            asset = Path(__file__).parent / "assets" / "colabcola-banner.png"
+        if not asset.is_file():
+            raise RuntimeError("Input Lab official branding asset unavailable")
+        with Image.open(asset) as banner:
+            if banner.format != "PNG" or banner.size != (1584, 396):
+                raise RuntimeError("Input Lab official branding asset invalid")
+            self.brand_banner = banner.convert("RGB").resize(
+                (570, 143), Image.Resampling.LANCZOS)
         for size in (10, 12, 14, 16, 18, 23, 27, 42):
             font = None
             try:
@@ -419,14 +432,14 @@ class LabPainter:
         draw.ellipse((cx-radius,cy-radius,cx+radius,cy+radius),
                      fill="#ffffff")
         if elapsed >= .52:
-            # Colab Cola wordmark lockup — procedural, asset-free remote splash.
-            draw.ellipse((262,105,308,151),outline="#39b6bc",width=8)
-            draw.ellipse((297,105,343,151),outline="#4d81d7",width=8)
-            self.text(draw,(320,184),"COLAB COLA",27,"#10283f","mm")
-            self.text(draw,(320,224),"interactive bridge test finished",
-                      14,"#486376","mm")
-            self.text(draw,(320,271),"Close the viewer when ready",
-                      12,"#879aaa","mm")
+            # The PNG is the exact approved banner displayed at colabcola.com,
+            # not a guess at the visual identity or a hand-drawn linked mark.
+            image.paste(self.brand_banner, (35, 92))
+            draw = ImageDraw.Draw(image)
+            self.text(draw,(320,272),"interactive bridge test finished",
+                      16,"#243647","mm")
+            self.text(draw,(320,307),"Close the viewer when ready",
+                      12,"#63758a","mm")
         return image
 
     def frame(self, state, now):

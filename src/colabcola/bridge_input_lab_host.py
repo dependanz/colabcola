@@ -18,7 +18,8 @@ def _inside(x, y, rect):
 
 class InputLabHostControls:
     def __init__(self, root, label, enqueue, *,
-                 width=WIDTH, height=HEIGHT, pointer_warp=None):
+                 width=WIDTH, height=HEIGHT, pointer_warp=None,
+                 pointer_capture=None):
         if width != WIDTH or height != HEIGHT:
             raise ValueError("Input Lab requires 640x360 viewer")
         self.root = root
@@ -33,6 +34,16 @@ class InputLabHostControls:
         self._next_armed = False
         self._previous_motion_time = 0.0
         self._warp = pointer_warp or self._warp_pointer
+        # Tests that supply a synthetic warp remain completely OS-isolated.
+        # Real Windows sessions need Win32 ClipCursor in addition to hiding
+        # and recentering, or rapid mouse motion can escape the viewer.
+        if pointer_capture is not None:
+            self._capture = pointer_capture
+        elif os.name == "nt" and pointer_warp is None:
+            from .bridge_input_lab_pointer import Win32CenterPointerCapture
+            self._capture = Win32CenterPointerCapture()
+        else:
+            self._capture = None
         self._native_hide_count = 0
 
     def _coords(self, event):
@@ -48,9 +59,12 @@ class InputLabHostControls:
         x = self.label.winfo_rootx() + self.width // 2
         y = self.label.winfo_rooty() + self.height // 2
         if os.name == "nt":
-            import ctypes
-            if ctypes.windll.user32.SetCursorPos(x, y) == 0:
-                raise OSError("Windows pointer recenter failed")
+            if self._capture is not None and self._capture.active:
+                self._capture.recenter()
+            else:
+                import ctypes
+                if ctypes.windll.user32.SetCursorPos(x, y) == 0:
+                    raise OSError("Windows pointer recenter failed")
         else:
             self.label.event_generate(
                 "<Motion>", warp=True, x=self.width // 2, y=self.height // 2)
@@ -80,10 +94,26 @@ class InputLabHostControls:
         for _ in range(count):
             ctypes.windll.user32.ShowCursor(True)
 
+    def _restore_pointer(self):
+        # Release OS-wide clipping even when Tk has been destroyed or cannot
+        # configure the cursor. Always restore native visibility afterward.
+        try:
+            self.label.configure(cursor="")
+        except Exception:
+            pass
+        finally:
+            try:
+                if self._capture is not None:
+                    self._capture.release()
+            finally:
+                self._restore_native_cursor()
+
     def lock_pointer(self):
         if self.locked or self.stage != 3:
             return False
         try:
+            if self._capture is not None:
+                self._capture.acquire(self.label)
             try:
                 self.label.configure(cursor="none")
             except Exception:
@@ -92,11 +122,7 @@ class InputLabHostControls:
                 self._windows_hide_cursor()
             self._warp()
         except Exception:
-            try:
-                self.label.configure(cursor="")
-            except Exception:
-                pass
-            self._restore_native_cursor()
+            self._restore_pointer()
             return False
         self.locked = True
         self.enqueue({"event": "pointer_lock", "enabled": True})
@@ -104,15 +130,15 @@ class InputLabHostControls:
 
     def unlock_pointer(self):
         if not self.locked:
+            # Idempotent recovery after partial acquisition/focus transitions.
+            if self._capture is not None and self._capture.active:
+                self._restore_pointer()
             return
         self.locked = False
         try:
-            self.label.configure(cursor="")
-        except Exception:
-            pass
+            self._restore_pointer()
         finally:
-            self._restore_native_cursor()
-        self.enqueue({"event": "pointer_lock", "enabled": False})
+            self.enqueue({"event": "pointer_lock", "enabled": False})
 
     def motion(self, event):
         x, y = self._coords(event)
@@ -224,6 +250,13 @@ class InputLabHostControls:
         self.buttons.clear()
         self._next_armed = False
 
+    def _on_window_configure(self, event=None):
+        # Ignore Configure events from the image/label child bindtags.
+        # Only actual toplevel movement or resizing invalidates screen bounds.
+        if event is not None and getattr(event, "widget", self.root) is not self.root:
+            return
+        self.unlock_pointer()
+
     def bind(self):
         self.label.bind("<Motion>", self.motion)
         self.label.bind("<ButtonPress-1>", self.button_down)
@@ -238,5 +271,10 @@ class InputLabHostControls:
         self.root.bind("<KeyPress>", self.key_down)
         self.root.bind("<KeyRelease>", self.key_up)
         self.root.bind("<FocusOut>", self.release_all)
+        self.root.bind("<Unmap>", self.release_all)
+        self.root.bind("<Destroy>", self.release_all)
+        # Window move/resize invalidates native screen bounds; fail safely
+        # by releasing capture rather than clipping the wrong desktop area.
+        self.root.bind("<Configure>", self._on_window_configure)
         self.root.focus_set()
         return self.release_all

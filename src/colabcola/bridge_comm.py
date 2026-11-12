@@ -188,6 +188,19 @@ class KernelCommBridge:
             names.append("bridge_input_lab_runtime.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
+        if self.application == "inputlab":
+            # Use the website's approved banner verbatim. This is an
+            # immutable packaged resource, never a runtime web download.
+            import hashlib
+            brand = files.joinpath("assets", "colabcola-banner.png").read_bytes()
+            git_blob = hashlib.sha1(
+                b"blob " + str(len(brand)).encode("ascii") + b"\x00" + brand
+            ).hexdigest()
+            if (len(brand) != 600210
+                    or git_blob != "f15d2f9b68f0678df7f772d399bb11b45f23ebbe"):
+                raise LifecycleError("Input Lab approved branding asset invalid")
+            self.provider._upload(
+                self.session, remote + "/colabcola-banner.png", brand)
         if kernel_id is None:
             kernel_id = self.provider._kernel(self.session)["id"]
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
