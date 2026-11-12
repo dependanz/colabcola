@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "base_commit": "55684329a62899e77a81015542788a9eef92c5f1",
+  "captured_started_at_utc": "2026-11-08T03:22:40.267346+00:00",
+  "captured_finished_at_utc": "2026-11-08T03:22:42.034000+00:00",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "design_sha256": "41065dbfc0b482565f6aa5a6c22c54ba6410b8fe29cc779313e47af8ce512a29",
+  "source_sha256": {
+    "src/colabcola/bridge_video_datagram.py": "1d2ea6da331829d7aa9010ad5b6b5eb1143b1dcf08b02e59a1c59607dd3ca181",
+    "src/colabcola/bridge_video_packet_transport.py": "60f2719046398ff755ec111bb361b3be62425d2bf297aa92d335b49d052eaba4",
+    "src/colabcola/bridge_video_packetization.py": "90aab1d2d87727670ef0c0a661b3de9f37ac1e65139b7210ebae7a2fdfd0ba3c",
+    "src/colabcola/bridge_video_stream.py": "ce5201b02b198c33649191fc9d3ba5a2c1f260b5ffb92f4f3f5f84cf94decc0f",
+    "src/colabcola/bridge_video_impairment.py": "0f00d66bd240cbc2e000695ad0bf76b9c7d893d57a072771d228f124c6b3203d",
+    "src/colabcola/bridge_video_feedback.py": "3374563f1cc1a3166466c5407374c76a879b707267c9797addaefabab4072886",
+    "src/colabcola/bridge_video_controller.py": "75e88f397c916340781be8bfb6b548e31c21cf36b28ab55ce27f00866b72e5f9",
+    "src/colabcola/bridge_video_rate.py": "5d2e8a012177aa6f18b28febf63097cae4502dfb51a416b0774cfceb6b058f5a",
+    "src/colabcola/bridge_video_load.py": "619190abb3c82aec482a20179005cac7ddbaadfbc643205dcc37e326f8aaeb0f",
+    "src/colabcola/bridge_video_sender.py": "81224a0766ecafc609218125b2481fa6dd7b922489a4acd39ed4a051c987736a",
+    "src/colabcola/bridge_video_sender_service.py": "d22a70dcabf7c73fd247f0200d74134be0fd293da4100e4c782c1df2300a2992"
+  },
+  "captured_runs": {
+    "historical.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "fae89b640ba5067128ef0f650e91dfb67f5d4edcb2c3ae922716752ee4d48364",
+      "canonical_sha256": "e85cb67c376642b7df7ade4428cba68a003f811cb29eb077910eaeb19d37bf4d",
+      "report_bytes": 3322742,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "zero-jitter.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--jitter-ms",
+        "0",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "a76812515c05e52a3a92c5b8a87d92c6cbf98094d38ba7c0ed20235ab4fb0a19",
+      "canonical_sha256": "62beaa3e2b19a8d98c2fa2d3df24bd0e5c6f2b7c8eb311786e80e1856a5cb084",
+      "report_bytes": 3289457,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "observable-congestion.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--frames",
+        "120",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps",
+        "0:1200,600:300,2200:1200",
+        "--pilot-max-inflight",
+        "32",
+        "--max-age-ms",
+        "1000",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "e3b22f041b08f1660a288214a4f38df21e07339367fbbecf1a5a3812ed5e7918",
+      "canonical_sha256": "bc6300464bec054213990ef38e4614ae508bdaa64297d83aed610e5a3d7cd68d",
+      "report_bytes": 4255039,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "persistent-collapse.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--frames",
+        "120",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps",
+        "0:1200,600:90",
+        "--buffers-ms",
+        "40,80,160,240,350"
+      ],
+      "report_sha256": "0b0b5dd2d59fb69d72781e6a9b89d7bcb706b6b621bcab1bc9a2d598140a57de",
+      "canonical_sha256": "13d01a146c1462334e3490fafeb3e94bfd730b3cf3aa08f344cb04573b94504e",
+      "report_bytes": 4192601,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clean.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--frames",
+        "36",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps=",
+        "--bandwidth-kbps",
+        "0",
+        "--max-age-ms",
+        "0",
+        "--pilot-max-inflight",
+        "16",
+        "--buffers-ms",
+        "40,80,160"
+      ],
+      "report_sha256": "ca68026b71709b7c54361d58c881e061155314e697cfdffe61c676cc5d28bb86",
+      "canonical_sha256": "d793863d83f0d803668c7491a846513acff5b1352425edb1ba50afc14507a823",
+      "report_bytes": 1703097,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "partial-erasure.json": {
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+        "-m",
+        "colabcola.bridge_video_packetization",
+        "--frames",
+        "36",
+        "--jitter-ms",
+        "0",
+        "--bandwidth-steps=",
+        "--bandwidth-kbps",
+        "0",
+        "--max-age-ms",
+        "0",
+        "--pilot-max-inflight",
+        "16",
+        "--buffers-ms",
+        "40,80,160",
+        "--reassembly-max-age-ms",
+        "350",
+        "--erase-first-seqs",
+        "5"
+      ],
+      "report_sha256": "a63c63ec925330f57c1122647397af5ecb4ff3e17bf3a8e0a2bda2fcc9fe4176",
+      "canonical_sha256": "0e81a999f4530b826c5dac0e3c3a50553b73a47a73954cf7774cc722f6aad2a9",
+      "report_bytes": 1703749,
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "focused_tests": {
+    "passed": 296,
+    "new_tests": 157,
+    "elapsed_seconds": 4.03,
+    "datagram_tests": 102,
+    "transport_tests": 45,
+    "integration_tests": 10
+  },
+  "note": "Six profiles and six controls declared before measurement. Source encoded once per profile and frozen in each replay. Exact parsed report equality is a Linux CI gate. No post-result policy tuning.",
+  "retained_report_audit": {
+    "profile_arm_combinations": 36,
+    "source_frame_records": 2952,
+    "packet_outcomes": 5112,
+    "dispatch_groups": 4032,
+    "terminal_frame_records": 2952,
+    "all_fragment_and_byte_partitions_verified": true,
+    "all_fields_finite": true,
+    "clean_batch_burst_max_completion_difference_ms": 0.0,
+    "five_source_hashes_and_pilot_controller_objects_equal_v32_immediate": true,
+    "partial_erasure_source_equal_v32_clean": true
+  },
+  "measured_policy_limits": {
+    "local_sender_discarded_packets_all_profiles": 0,
+    "receiver_budget_evictions_all_profiles": 0,
+    "service_cap_binding_all_profiles": false,
+    "receiver_peak_stored_body_bytes": 6685,
+    "max_selected_service_kbps": 1084.96,
+    "max_service_cap_kbps": 1314.4,
+    "unused_bounds_covered_by_focused_tests": true
+  }
+}

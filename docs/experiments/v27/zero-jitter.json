@@ -1,0 +1,895 @@
+{
+  "schema": 1,
+  "mode": "causal-h264-receiver-silence-watchdog",
+  "source": {
+    "width": 128,
+    "height": 72,
+    "fps": 30,
+    "frames": 90,
+    "gop": 24,
+    "pattern": "moving-deterministic-texture"
+  },
+  "link": {
+    "delay_ms": 40,
+    "jitter_ms": 0.0,
+    "bandwidth_kbps": 0,
+    "bandwidth_steps": [
+      [
+        0,
+        1200
+      ],
+      [
+        600,
+        90
+      ],
+      [
+        1750,
+        1200
+      ]
+    ],
+    "loss_percent": 0,
+    "max_inflight": 10,
+    "max_age_ms": 350,
+    "seed": 7,
+    "drop_seqs": []
+  },
+  "rates": {
+    "high_kbps": 650,
+    "low_kbps": 95,
+    "congested_age_ms": 110,
+    "recovered_age_ms": 65,
+    "recovery_samples": 8,
+    "congestion_samples": 3,
+    "control_delay_ms": 35,
+    "min_switch_ms": 350,
+    "max_switches": 8,
+    "silence_timeout_ms": 150
+  },
+  "controllers": {
+    "arrival_feedback": {
+      "packets_observed": 54,
+      "observed_sequence_gaps": 3,
+      "requests": [
+        {
+          "request_id": 0,
+          "trigger": "sequence_gap",
+          "observed_seq": 51,
+          "observed_age_ms": 311.37,
+          "gap_detected": true,
+          "generated_at_ms": 2011.37,
+          "reaches_source_ms": 2046.3700000000001,
+          "target_kbps": 95
+        },
+        {
+          "request_id": 1,
+          "trigger": "recovery",
+          "observed_seq": 70,
+          "observed_age_ms": 42.587,
+          "gap_detected": false,
+          "generated_at_ms": 2375.92,
+          "reaches_source_ms": 2410.92,
+          "target_kbps": 650
+        }
+      ],
+      "requests_sent": 2,
+      "switches_applied": 2,
+      "applied": [
+        {
+          "source_seq": 62,
+          "source_ms": 2066.667,
+          "previous_kbps": 650,
+          "target_kbps": 95,
+          "request_ids_coalesced": [
+            0
+          ]
+        },
+        {
+          "source_seq": 73,
+          "source_ms": 2433.333,
+          "previous_kbps": 95,
+          "target_kbps": 650,
+          "request_ids_coalesced": [
+            1
+          ]
+        }
+      ],
+      "unapplied_commands": 0,
+      "silence_timeout_ms": 0,
+      "silence_timeouts": []
+    },
+    "silence_feedback": {
+      "packets_observed": 54,
+      "observed_sequence_gaps": 3,
+      "requests": [
+        {
+          "request_id": 0,
+          "trigger": "receiver_silence",
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "gap_detected": false,
+          "generated_at_ms": 782.46,
+          "reaches_source_ms": 817.4599999999999,
+          "target_kbps": 95,
+          "silence_ms": 150.0,
+          "last_arrival_ms": 632.46
+        },
+        {
+          "request_id": 1,
+          "trigger": "recovery",
+          "observed_seq": 66,
+          "observed_age_ms": 40.727,
+          "gap_detected": false,
+          "generated_at_ms": 2240.727,
+          "reaches_source_ms": 2275.7266666666665,
+          "target_kbps": 650
+        }
+      ],
+      "requests_sent": 2,
+      "switches_applied": 2,
+      "applied": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.333,
+          "previous_kbps": 650,
+          "target_kbps": 95,
+          "request_ids_coalesced": [
+            0
+          ]
+        },
+        {
+          "source_seq": 69,
+          "source_ms": 2300.0,
+          "previous_kbps": 95,
+          "target_kbps": 650,
+          "request_ids_coalesced": [
+            1
+          ]
+        }
+      ],
+      "unapplied_commands": 0,
+      "silence_timeout_ms": 150,
+      "silence_timeouts": [
+        {
+          "observed_seq": 17,
+          "last_arrival_ms": 632.46,
+          "timeout_at_ms": 782.46
+        }
+      ]
+    }
+  },
+  "first_policy_difference_seq": 25,
+  "restart_control": {
+    "restart_seqs": [
+      25,
+      69
+    ],
+    "target_kbps": 650,
+    "note": "offline fixed-high ablation conditioned on the silence-feedback restart schedule; not an independently causal policy"
+  },
+  "quality_comparison": {
+    "common_frame_seqs": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89
+    ],
+    "note": "matched PSNR pools RGB squared error on the same frame IDs decoded by ALL FOUR arms; lost frames excluded, so compare continuity and playout separately"
+  },
+  "fixed_high_rate": {
+    "wire_bytes": 211788,
+    "encoded_idrs": 4,
+    "delivered_frames": 54,
+    "link_drops": 36,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 24,
+      "stale": 12
+    },
+    "actually_decoded_frames": 36,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ],
+      [
+        72,
+        89
+      ]
+    ],
+    "dependency_skipped": 18,
+    "decoder_idr_resynchronizations": 1,
+    "simulated_capture_to_arrival_p50_ms": 63.01,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 36,
+        "undecodable_frames": 54,
+        "held_slots": 0,
+        "initial_blank_slots": 90,
+        "longest_unfresh_run_slots": 90,
+        "longest_unfresh_run_ms": 3000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 29,
+        "late_decoded_frames": 7,
+        "undecodable_frames": 54,
+        "held_slots": 55,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 55,
+        "longest_unfresh_run_ms": 1833.33,
+        "on_time_fraction": 0.3222,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ],
+          [
+            73,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 36,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 54,
+        "held_slots": 54,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 54,
+        "longest_unfresh_run_ms": 1800.0,
+        "on_time_fraction": 0.4,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            72,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 36,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 54,
+        "held_slots": 54,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 54,
+        "longest_unfresh_run_ms": 1800.0,
+        "on_time_fraction": 0.4,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            72,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 36,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 54,
+        "held_slots": 54,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 54,
+        "longest_unfresh_run_ms": 1800.0,
+        "on_time_fraction": 0.4,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            72,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 36,
+    "rgb_mse_on_decoded_frames": 3282.514,
+    "rgb_psnr_on_decoded_frames_db": 12.969,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      48,
+      72
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 48,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 72,
+        "arrival_ms": 2496.64,
+        "drop_reason": null
+      }
+    ],
+    "encoded_payload_bytes": 283176,
+    "encoded_source_kbps": 755.136,
+    "matched_frame_count": 36,
+    "matched_frame_rgb_psnr_db": 12.969
+  },
+  "arrival_feedback": {
+    "wire_bytes": 221881,
+    "encoded_idrs": 5,
+    "delivered_frames": 54,
+    "link_drops": 36,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 24,
+      "stale": 12
+    },
+    "actually_decoded_frames": 46,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ],
+      [
+        62,
+        89
+      ]
+    ],
+    "dependency_skipped": 8,
+    "decoder_idr_resynchronizations": 1,
+    "simulated_capture_to_arrival_p50_ms": 66.61,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 46,
+        "undecodable_frames": 44,
+        "held_slots": 0,
+        "initial_blank_slots": 90,
+        "longest_unfresh_run_slots": 90,
+        "longest_unfresh_run_ms": 3000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 34,
+        "late_decoded_frames": 12,
+        "undecodable_frames": 44,
+        "held_slots": 50,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 45,
+        "longest_unfresh_run_ms": 1500.0,
+        "on_time_fraction": 0.3778,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ],
+          [
+            63,
+            72
+          ],
+          [
+            78,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 46,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 44,
+        "held_slots": 44,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 44,
+        "longest_unfresh_run_ms": 1466.67,
+        "on_time_fraction": 0.5111,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            62,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 46,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 44,
+        "held_slots": 44,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 44,
+        "longest_unfresh_run_ms": 1466.67,
+        "on_time_fraction": 0.5111,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            62,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 46,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 44,
+        "held_slots": 44,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 44,
+        "longest_unfresh_run_ms": 1466.67,
+        "on_time_fraction": 0.5111,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            62,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 46,
+    "rgb_mse_on_decoded_frames": 3430.16,
+    "rgb_psnr_on_decoded_frames_db": 12.778,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      48,
+      62,
+      73
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 48,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 62,
+        "arrival_ms": 2152.143,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 73,
+        "arrival_ms": 2548.487,
+        "drop_reason": null
+      }
+    ],
+    "encoded_payload_bytes": 293269,
+    "encoded_source_kbps": 782.051,
+    "matched_frame_count": 36,
+    "matched_frame_rgb_psnr_db": 12.983
+  },
+  "silence_feedback": {
+    "wire_bytes": 208025,
+    "encoded_idrs": 5,
+    "delivered_frames": 54,
+    "link_drops": 36,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 24,
+      "stale": 12
+    },
+    "actually_decoded_frames": 39,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ],
+      [
+        69,
+        89
+      ]
+    ],
+    "dependency_skipped": 15,
+    "decoder_idr_resynchronizations": 1,
+    "simulated_capture_to_arrival_p50_ms": 66.93,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 39,
+        "undecodable_frames": 51,
+        "held_slots": 0,
+        "initial_blank_slots": 90,
+        "longest_unfresh_run_slots": 90,
+        "longest_unfresh_run_ms": 3000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 27,
+        "late_decoded_frames": 12,
+        "undecodable_frames": 51,
+        "held_slots": 57,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 57,
+        "longest_unfresh_run_ms": 1900.0,
+        "on_time_fraction": 0.3,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ],
+          [
+            75,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 39,
+    "rgb_mse_on_decoded_frames": 3242.677,
+    "rgb_psnr_on_decoded_frames_db": 13.022,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      49,
+      69
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 49,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 69,
+        "arrival_ms": 2416.26,
+        "drop_reason": null
+      }
+    ],
+    "encoded_payload_bytes": 216567,
+    "encoded_source_kbps": 577.512,
+    "matched_frame_count": 36,
+    "matched_frame_rgb_psnr_db": 13.021
+  },
+  "matched_restart_high_rate": {
+    "wire_bytes": 258052,
+    "encoded_idrs": 5,
+    "delivered_frames": 52,
+    "link_drops": 38,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 25,
+      "stale": 13
+    },
+    "actually_decoded_frames": 39,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ],
+      [
+        69,
+        89
+      ]
+    ],
+    "dependency_skipped": 13,
+    "decoder_idr_resynchronizations": 1,
+    "simulated_capture_to_arrival_p50_ms": 66.93,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 39,
+        "undecodable_frames": 51,
+        "held_slots": 0,
+        "initial_blank_slots": 90,
+        "longest_unfresh_run_slots": 90,
+        "longest_unfresh_run_ms": 3000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 27,
+        "late_decoded_frames": 12,
+        "undecodable_frames": 51,
+        "held_slots": 57,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 57,
+        "longest_unfresh_run_ms": 1900.0,
+        "on_time_fraction": 0.3,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ],
+          [
+            75,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 39,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 51,
+        "held_slots": 51,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 51,
+        "longest_unfresh_run_ms": 1700.0,
+        "on_time_fraction": 0.4333,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ],
+          [
+            69,
+            89
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 39,
+    "rgb_mse_on_decoded_frames": 3242.677,
+    "rgb_psnr_on_decoded_frames_db": 13.022,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      49,
+      69
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 49,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 69,
+        "arrival_ms": 2416.26,
+        "drop_reason": null
+      }
+    ],
+    "encoded_payload_bytes": 351912,
+    "encoded_source_kbps": 938.432,
+    "matched_frame_count": 36,
+    "matched_frame_rgb_psnr_db": 13.021
+  },
+  "scope": {
+    "time": "all media arrival, timeout, feedback and playout timestamps are virtual milliseconds",
+    "feedback": "ideal reliable reverse path with a fixed delay; no reverse bandwidth/loss model or control-byte accounting",
+    "watchdog": "armed by first usable arrival; no startup silence detection; disabled after the final source frame; silence is not proof of congestion",
+    "paired_link": "identical parameters and seed, not necessarily identical per-frame jitter/loss draws when admission changes; use zero jitter/random loss for a cleaner ablation",
+    "limits": "two target rates and encoder restarts; no capacity estimator, actual network, Colab/GPU, GUI, physical presentation or bitrate guarantee"
+  }
+}

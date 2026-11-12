@@ -1,0 +1,110 @@
+{
+  "base_commit": "174433207da15208b86df83bddba9e871df7525a",
+  "python": "3.12.14",
+  "platform": "Linux",
+  "pyav": "19.0.2",
+  "numpy": "2.3.5",
+  "ffmpeg_libraries": {
+    "libavutil": [
+      61,
+      1,
+      102
+    ],
+    "libavcodec": [
+      63,
+      1,
+      102
+    ],
+    "libavformat": [
+      63,
+      1,
+      102
+    ],
+    "libavdevice": [
+      63,
+      1,
+      102
+    ],
+    "libavfilter": [
+      12,
+      1,
+      102
+    ],
+    "libswscale": [
+      10,
+      1,
+      102
+    ],
+    "libswresample": [
+      7,
+      1,
+      102
+    ]
+  },
+  "commands": {
+    "historical.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_recovery",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "zero-jitter.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_recovery",
+      "--jitter-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160,240,350"
+    ],
+    "lost-idr.json": [
+      "python",
+      "-m",
+      "colabcola.bridge_video_recovery",
+      "--width",
+      "128",
+      "--height",
+      "72",
+      "--fps",
+      "30",
+      "--frames",
+      "60",
+      "--gop",
+      "24",
+      "--delay-ms",
+      "40",
+      "--jitter-ms",
+      "0",
+      "--bandwidth-steps=",
+      "--bandwidth-kbps",
+      "0",
+      "--max-age-ms",
+      "0",
+      "--max-inflight",
+      "16",
+      "--drop-seqs",
+      "5,8,27",
+      "--control-delay-ms",
+      "20",
+      "--recovery-feedback-ms",
+      "20",
+      "--recovery-retry-ms",
+      "80",
+      "--recovered-age-ms",
+      "0",
+      "--min-switch-ms",
+      "0",
+      "--silence-timeout-ms",
+      "0",
+      "--buffers-ms",
+      "40,80,160"
+    ]
+  },
+  "source_sha256": {
+    "src/colabcola/bridge_video_rate.py": "7e07a45d0941d2c38c47ca1fc098a5d4877de895c2b0d6f3bfc05d6f7349734c",
+    "src/colabcola/bridge_video_watchdog.py": "2df9282295fd6183d45c3364a1e209d4386722b1f3866f7998ae6dc2bf613e71",
+    "src/colabcola/bridge_video_recovery.py": "b5e5a939c8b1c7d0d3f8ec55a4a39cf712441056ccaa2e5ca0dee92a4d887b9a"
+  },
+  "note": "Real local H.264 codec; all media, feedback and playout timing is virtual. Retained reports are observations for these codec versions and configurations."
+}

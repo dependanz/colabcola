@@ -300,6 +300,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         except LifecycleError as exc:
             ConsoleUI().error(exc)
             return 2
+    if arguments and arguments[0] == "bridge":
+        from .bridge_demo import main as bridge_main
+        return bridge_main(prefix + arguments[1:])
     if arguments and arguments[0] == "run":
         from .workflow import main as workflow_main
         return workflow_main(prefix + arguments[1:])

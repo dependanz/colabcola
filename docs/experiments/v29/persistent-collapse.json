@@ -1,0 +1,2270 @@
+{
+  "schema": 1,
+  "mode": "causal-h264-measured-wire-load-control",
+  "source": {
+    "width": 128,
+    "height": 72,
+    "fps": 30,
+    "frames": 120,
+    "gop": 24,
+    "pattern": "moving-deterministic-texture"
+  },
+  "link": {
+    "delay_ms": 40,
+    "jitter_ms": 0.0,
+    "bandwidth_kbps": 0,
+    "bandwidth_steps": [
+      [
+        0,
+        1200
+      ],
+      [
+        600,
+        90
+      ]
+    ],
+    "loss_percent": 0,
+    "max_inflight": 10,
+    "max_age_ms": 350,
+    "seed": 7,
+    "drop_seqs": []
+  },
+  "rates": {
+    "high_kbps": 650,
+    "low_kbps": 95,
+    "congested_age_ms": 110,
+    "recovered_age_ms": 65,
+    "recovery_samples": 8,
+    "congestion_samples": 3,
+    "control_delay_ms": 35,
+    "min_switch_ms": 350,
+    "max_switches": 12,
+    "silence_timeout_ms": 150
+  },
+  "load_control": {
+    "min_kbps": 20,
+    "source_window_ms": 300.0,
+    "receiver_window_ms": 300.0,
+    "min_delivery_span_ms": 200.0,
+    "feedback_freshness_ms": 400.0,
+    "safety_fraction": 0.8,
+    "decrease_factor": 0.5,
+    "increase_factor": 1.25
+  },
+  "recovery": {
+    "feedback_ms": 35,
+    "retry_ms": 150,
+    "max_requests": 8
+  },
+  "controllers": {
+    "two_rate_recovery": {
+      "packets_observed": 18,
+      "observed_sequence_gaps": 0,
+      "requests": [
+        {
+          "request_id": 0,
+          "trigger": "receiver_silence",
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "gap_detected": false,
+          "generated_at_ms": 782.46,
+          "reaches_source_ms": 817.4599999999999,
+          "target_kbps": 95,
+          "silence_ms": 150.0,
+          "last_arrival_ms": 632.46
+        }
+      ],
+      "requests_sent": 1,
+      "switches_applied": 1,
+      "applied": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.333,
+          "previous_kbps": 650,
+          "target_kbps": 95,
+          "request_ids_coalesced": [
+            0
+          ]
+        }
+      ],
+      "unapplied_commands": 0,
+      "silence_timeout_ms": 150,
+      "silence_timeouts": [
+        {
+          "observed_seq": 17,
+          "last_arrival_ms": 632.46,
+          "timeout_at_ms": 782.46
+        }
+      ],
+      "recovery": {
+        "feedback_ms": 35,
+        "retry_ms": 150,
+        "max_requests": 8,
+        "gaps_detected": [],
+        "requests_sent": 0,
+        "requests": [],
+        "idr_restarts_applied": 0,
+        "applied": [],
+        "requests_not_applied_before_source_end": 0
+      },
+      "encoder_restarts": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.333,
+          "previous_kbps": 650,
+          "target_kbps": 95,
+          "rate_change": true,
+          "recovery_request_ids": []
+        }
+      ]
+    },
+    "age_only_recovery": {
+      "packets_observed": 18,
+      "observed_sequence_gaps": 0,
+      "requests": [
+        {
+          "request_id": 0,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 782.4599999999999,
+          "reaches_source_ms": 817.4599999999999,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 150.0
+        },
+        {
+          "request_id": 1,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1132.46,
+          "reaches_source_ms": 1167.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 500.0000000000001
+        },
+        {
+          "request_id": 2,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1482.46,
+          "reaches_source_ms": 1517.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 850.0000000000001
+        },
+        {
+          "request_id": 3,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1832.46,
+          "reaches_source_ms": 1867.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1200.0
+        },
+        {
+          "request_id": 4,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2182.46,
+          "reaches_source_ms": 2217.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1550.0
+        },
+        {
+          "request_id": 5,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2532.46,
+          "reaches_source_ms": 2567.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1900.0
+        },
+        {
+          "request_id": 6,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2882.46,
+          "reaches_source_ms": 2917.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2250.0
+        },
+        {
+          "request_id": 7,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3232.46,
+          "reaches_source_ms": 3267.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2600.0
+        },
+        {
+          "request_id": 8,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3582.46,
+          "reaches_source_ms": 3617.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2950.0
+        },
+        {
+          "request_id": 9,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3932.46,
+          "reaches_source_ms": 3967.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 3300.0
+        }
+      ],
+      "requests_sent": 10,
+      "switches_applied": 5,
+      "applied": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.3333333333334,
+          "previous_kbps": 650,
+          "target_kbps": 325,
+          "request_ids_coalesced": [
+            0
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_kbps": 162,
+          "request_ids_coalesced": [
+            1
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.3333333333333,
+          "previous_kbps": 162,
+          "target_kbps": 81,
+          "request_ids_coalesced": [
+            2
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_kbps": 40,
+          "request_ids_coalesced": [
+            3
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.3333333333335,
+          "previous_kbps": 40,
+          "target_kbps": 20,
+          "request_ids_coalesced": [
+            4
+          ],
+          "trigger": "receiver_silence"
+        }
+      ],
+      "unapplied_commands": 1,
+      "silence_timeout_ms": 150,
+      "silence_timeouts": [
+        {
+          "observed_seq": 17,
+          "last_arrival_ms": 632.4599999999999,
+          "timeout_at_ms": 782.4599999999999
+        }
+      ],
+      "policy": "age_only_multirate",
+      "load_control": {
+        "min_kbps": 20,
+        "source_window_ms": 300.0,
+        "receiver_window_ms": 300.0,
+        "min_delivery_span_ms": 200.0,
+        "feedback_freshness_ms": 400.0,
+        "safety_fraction": 0.8,
+        "decrease_factor": 0.5,
+        "increase_factor": 1.25
+      },
+      "rate_change_budget": 12,
+      "feedback_report_budget": 128,
+      "source_frames_encoded": 120,
+      "source_offered_payload_bytes": 169676,
+      "source_offered_wire_bytes": 173276,
+      "wire_caps_used": 0,
+      "wire_caps_binding": 0,
+      "decisions": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.3333333333334,
+          "previous_kbps": 650,
+          "target_epoch_seq": 0,
+          "selected_request_id": 0,
+          "request_ids_coalesced": [
+            0
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 325,
+          "source_sample_first_seq": 16,
+          "source_sample_last_seq": 24,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 1026.1333333333334,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 325,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_epoch_seq": 25,
+          "selected_request_id": 1,
+          "request_ids_coalesced": [
+            1
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 162,
+          "source_sample_first_seq": 27,
+          "source_sample_last_seq": 35,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 393.3333333333333,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 162,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.3333333333333,
+          "previous_kbps": 162,
+          "target_epoch_seq": 36,
+          "selected_request_id": 2,
+          "request_ids_coalesced": [
+            2
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 81,
+          "source_sample_first_seq": 37,
+          "source_sample_last_seq": 45,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 281.6,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 81,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_epoch_seq": 46,
+          "selected_request_id": 3,
+          "request_ids_coalesced": [
+            3
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 40,
+          "source_sample_first_seq": 48,
+          "source_sample_last_seq": 56,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 66.8,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 40,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.3333333333335,
+          "previous_kbps": 40,
+          "target_epoch_seq": 57,
+          "selected_request_id": 4,
+          "request_ids_coalesced": [
+            4
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 20,
+          "source_sample_first_seq": 59,
+          "source_sample_last_seq": 66,
+          "source_sample_frames": 8,
+          "source_sample_duration_ms": 266.6666666666667,
+          "measured_payload_kbps": 21.209999999999997,
+          "measured_framing_kbps": 7.199999999999999,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 78,
+          "source_ms": 2600.0,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 5,
+          "request_ids_coalesced": [
+            5
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 69,
+          "source_sample_last_seq": 77,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 11.013333333333334,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 88,
+          "source_ms": 2933.3333333333335,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 6,
+          "request_ids_coalesced": [
+            6
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 79,
+          "source_sample_last_seq": 87,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 13.866666666666667,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 99,
+          "source_ms": 3300.0,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 7,
+          "request_ids_coalesced": [
+            7
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 90,
+          "source_sample_last_seq": 98,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 19.173333333333332,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 109,
+          "source_ms": 3633.3333333333335,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 8,
+          "request_ids_coalesced": [
+            8
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 100,
+          "source_sample_last_seq": 108,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 14.906666666666666,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        }
+      ],
+      "scope": "receiver delivery rate is not unused link capacity; healthy reports permit probes; source load includes framing, IDRs and admission-rejected units; all clocks and fixed-delay feedback are virtual",
+      "recovery": {
+        "feedback_ms": 35,
+        "retry_ms": 150,
+        "max_requests": 8,
+        "gaps_detected": [],
+        "requests_sent": 0,
+        "requests": [],
+        "idr_restarts_applied": 0,
+        "applied": [],
+        "requests_not_applied_before_source_end": 0
+      },
+      "encoder_restarts": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.333,
+          "previous_kbps": 650,
+          "target_kbps": 325,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_kbps": 162,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.333,
+          "previous_kbps": 162,
+          "target_kbps": 81,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_kbps": 40,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.333,
+          "previous_kbps": 40,
+          "target_kbps": 20,
+          "rate_change": true,
+          "recovery_request_ids": []
+        }
+      ]
+    },
+    "wire_load_recovery": {
+      "packets_observed": 18,
+      "observed_sequence_gaps": 0,
+      "requests": [
+        {
+          "request_id": 0,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 782.4599999999999,
+          "reaches_source_ms": 817.4599999999999,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 150.0
+        },
+        {
+          "request_id": 1,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1132.46,
+          "reaches_source_ms": 1167.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 500.0000000000001
+        },
+        {
+          "request_id": 2,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1482.46,
+          "reaches_source_ms": 1517.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 850.0000000000001
+        },
+        {
+          "request_id": 3,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 1832.46,
+          "reaches_source_ms": 1867.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1200.0
+        },
+        {
+          "request_id": 4,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2182.46,
+          "reaches_source_ms": 2217.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1550.0
+        },
+        {
+          "request_id": 5,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2532.46,
+          "reaches_source_ms": 2567.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 1900.0
+        },
+        {
+          "request_id": 6,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 2882.46,
+          "reaches_source_ms": 2917.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2250.0
+        },
+        {
+          "request_id": 7,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3232.46,
+          "reaches_source_ms": 3267.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2600.0
+        },
+        {
+          "request_id": 8,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3582.46,
+          "reaches_source_ms": 3617.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 2950.0
+        },
+        {
+          "request_id": 9,
+          "trigger": "receiver_silence",
+          "observed_first_seq": 17,
+          "observed_seq": 17,
+          "observed_age_ms": null,
+          "generated_at_ms": 3932.46,
+          "reaches_source_ms": 3967.46,
+          "delivery_first_seq": 9,
+          "delivery_last_seq": 17,
+          "delivery_packet_count": 9,
+          "delivery_span_ms": 269.3866666666666,
+          "delivery_wire_bytes_after_anchor": 30909,
+          "observed_delivery_kbps": null,
+          "delivery_unavailable_reason": "receiver_silence",
+          "last_arrival_ms": 632.4599999999999,
+          "silence_ms": 3300.0
+        }
+      ],
+      "requests_sent": 10,
+      "switches_applied": 5,
+      "applied": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.3333333333334,
+          "previous_kbps": 650,
+          "target_kbps": 325,
+          "request_ids_coalesced": [
+            0
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_kbps": 162,
+          "request_ids_coalesced": [
+            1
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.3333333333333,
+          "previous_kbps": 162,
+          "target_kbps": 81,
+          "request_ids_coalesced": [
+            2
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_kbps": 40,
+          "request_ids_coalesced": [
+            3
+          ],
+          "trigger": "receiver_silence"
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.3333333333335,
+          "previous_kbps": 40,
+          "target_kbps": 20,
+          "request_ids_coalesced": [
+            4
+          ],
+          "trigger": "receiver_silence"
+        }
+      ],
+      "unapplied_commands": 1,
+      "silence_timeout_ms": 150,
+      "silence_timeouts": [
+        {
+          "observed_seq": 17,
+          "last_arrival_ms": 632.4599999999999,
+          "timeout_at_ms": 782.4599999999999
+        }
+      ],
+      "policy": "wire_load_feedback",
+      "load_control": {
+        "min_kbps": 20,
+        "source_window_ms": 300.0,
+        "receiver_window_ms": 300.0,
+        "min_delivery_span_ms": 200.0,
+        "feedback_freshness_ms": 400.0,
+        "safety_fraction": 0.8,
+        "decrease_factor": 0.5,
+        "increase_factor": 1.25
+      },
+      "rate_change_budget": 12,
+      "feedback_report_budget": 128,
+      "source_frames_encoded": 120,
+      "source_offered_payload_bytes": 169676,
+      "source_offered_wire_bytes": 173276,
+      "wire_caps_used": 0,
+      "wire_caps_binding": 0,
+      "decisions": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.3333333333334,
+          "previous_kbps": 650,
+          "target_epoch_seq": 0,
+          "selected_request_id": 0,
+          "request_ids_coalesced": [
+            0
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 325,
+          "source_sample_first_seq": 16,
+          "source_sample_last_seq": 24,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 1026.1333333333334,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 325,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_epoch_seq": 25,
+          "selected_request_id": 1,
+          "request_ids_coalesced": [
+            1
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 162,
+          "source_sample_first_seq": 27,
+          "source_sample_last_seq": 35,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 393.3333333333333,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 162,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.3333333333333,
+          "previous_kbps": 162,
+          "target_epoch_seq": 36,
+          "selected_request_id": 2,
+          "request_ids_coalesced": [
+            2
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 81,
+          "source_sample_first_seq": 37,
+          "source_sample_last_seq": 45,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 281.6,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 81,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_epoch_seq": 46,
+          "selected_request_id": 3,
+          "request_ids_coalesced": [
+            3
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 40,
+          "source_sample_first_seq": 48,
+          "source_sample_last_seq": 56,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 66.8,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 40,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.3333333333335,
+          "previous_kbps": 40,
+          "target_epoch_seq": 57,
+          "selected_request_id": 4,
+          "request_ids_coalesced": [
+            4
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 20,
+          "source_sample_first_seq": 59,
+          "source_sample_last_seq": 66,
+          "source_sample_frames": 8,
+          "source_sample_duration_ms": 266.6666666666667,
+          "measured_payload_kbps": 21.209999999999997,
+          "measured_framing_kbps": 7.199999999999999,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": false,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "applied"
+        },
+        {
+          "source_seq": 78,
+          "source_ms": 2600.0,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 5,
+          "request_ids_coalesced": [
+            5
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 69,
+          "source_sample_last_seq": 77,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 11.013333333333334,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 88,
+          "source_ms": 2933.3333333333335,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 6,
+          "request_ids_coalesced": [
+            6
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 79,
+          "source_sample_last_seq": 87,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 13.866666666666667,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 99,
+          "source_ms": 3300.0,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 7,
+          "request_ids_coalesced": [
+            7
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 90,
+          "source_sample_last_seq": 98,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 19.173333333333332,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        },
+        {
+          "source_seq": 109,
+          "source_ms": 3633.3333333333335,
+          "previous_kbps": 20,
+          "target_epoch_seq": 67,
+          "selected_request_id": 8,
+          "request_ids_coalesced": [
+            8
+          ],
+          "trigger": "receiver_silence",
+          "cut_base_kbps": 10,
+          "source_sample_first_seq": 100,
+          "source_sample_last_seq": 108,
+          "source_sample_frames": 9,
+          "source_sample_duration_ms": 300.0,
+          "measured_payload_kbps": 14.906666666666666,
+          "measured_framing_kbps": 7.2,
+          "observed_delivery_kbps": null,
+          "wire_budget_kbps": null,
+          "wire_candidate_kbps": null,
+          "wire_cap_used": false,
+          "wire_cap_binding": false,
+          "fallback_reason": "silence_has_no_delivery_sample",
+          "min_target_saturated": true,
+          "overhead_budget_failure": false,
+          "chosen_target_kbps": 20,
+          "action_status": "unchanged_at_bound"
+        }
+      ],
+      "scope": "receiver delivery rate is not unused link capacity; healthy reports permit probes; source load includes framing, IDRs and admission-rejected units; all clocks and fixed-delay feedback are virtual",
+      "recovery": {
+        "feedback_ms": 35,
+        "retry_ms": 150,
+        "max_requests": 8,
+        "gaps_detected": [],
+        "requests_sent": 0,
+        "requests": [],
+        "idr_restarts_applied": 0,
+        "applied": [],
+        "requests_not_applied_before_source_end": 0
+      },
+      "encoder_restarts": [
+        {
+          "source_seq": 25,
+          "source_ms": 833.333,
+          "previous_kbps": 650,
+          "target_kbps": 325,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 36,
+          "source_ms": 1200.0,
+          "previous_kbps": 325,
+          "target_kbps": 162,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 46,
+          "source_ms": 1533.333,
+          "previous_kbps": 162,
+          "target_kbps": 81,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 57,
+          "source_ms": 1900.0,
+          "previous_kbps": 81,
+          "target_kbps": 40,
+          "rate_change": true,
+          "recovery_request_ids": []
+        },
+        {
+          "source_seq": 67,
+          "source_ms": 2233.333,
+          "previous_kbps": 40,
+          "target_kbps": 20,
+          "rate_change": true,
+          "recovery_request_ids": []
+        }
+      ]
+    }
+  },
+  "first_policy_difference_seqs": {
+    "two_rate_vs_age_only": 25,
+    "two_rate_vs_wire_load": 25,
+    "age_only_vs_wire_load": null
+  },
+  "wire_cap_binding_decisions": 0,
+  "restart_control": {
+    "restart_seqs": [
+      25,
+      36,
+      46,
+      57,
+      67
+    ],
+    "target_kbps": 650,
+    "note": "offline fixed-high ablation conditioned on ALL wire-policy restarts"
+  },
+  "quality_comparison": {
+    "common_frame_seqs": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17
+    ],
+    "note": "RGB PSNR on the same frame IDs decoded by ALL FOUR arms; missing frames excluded, so inspect continuity and playout separately"
+  },
+  "two_rate_recovery": {
+    "wire_bytes": 119229,
+    "encoded_idrs": 6,
+    "delivered_frames": 18,
+    "link_drops": 102,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 85,
+      "stale": 17
+    },
+    "actually_decoded_frames": 18,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ]
+    ],
+    "dependency_skipped": 0,
+    "decoder_idr_resynchronizations": 0,
+    "simulated_capture_to_arrival_p50_ms": 66.52,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 18,
+        "undecodable_frames": 102,
+        "held_slots": 0,
+        "initial_blank_slots": 120,
+        "longest_unfresh_run_slots": 120,
+        "longest_unfresh_run_ms": 4000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 12,
+        "late_decoded_frames": 6,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.1,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 18,
+    "rgb_mse_on_decoded_frames": 3239.607,
+    "rgb_psnr_on_decoded_frames_db": 13.026,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      49,
+      73,
+      97
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 49,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 73,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 97,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      }
+    ],
+    "encoded_payload_bytes": 149567,
+    "encoded_source_kbps": 299.134,
+    "matched_frame_count": 18,
+    "matched_frame_rgb_psnr_db": 13.026,
+    "offered_wire_bytes": 153167,
+    "offered_source_kbps": 306.334,
+    "offered_framing_bytes": 3600,
+    "queue_rejected_wire_bytes": 33938,
+    "target_segments": [
+      {
+        "start_seq": 0,
+        "end_seq_exclusive": 25,
+        "target_kbps": 650,
+        "source_frames": 25,
+        "source_duration_ms": 833.333,
+        "payload_bytes": 106130,
+        "framing_bytes": 750,
+        "offered_wire_bytes": 106880,
+        "offered_wire_kbps": 1026.048,
+        "queue_rejected_frames": 0,
+        "encoded_idr_seqs": [
+          0,
+          24
+        ]
+      },
+      {
+        "start_seq": 25,
+        "end_seq_exclusive": 120,
+        "target_kbps": 95,
+        "source_frames": 95,
+        "source_duration_ms": 3166.667,
+        "payload_bytes": 43437,
+        "framing_bytes": 2850,
+        "offered_wire_bytes": 46287,
+        "offered_wire_kbps": 116.936,
+        "queue_rejected_frames": 85,
+        "encoded_idr_seqs": [
+          25,
+          49,
+          73,
+          97
+        ]
+      }
+    ],
+    "load_note": "all encoded framed units per source time, including queue admission rejects; same-target recovery IDRs remain in the same target segment"
+  },
+  "age_only_recovery": {
+    "wire_bytes": 124861,
+    "encoded_idrs": 9,
+    "delivered_frames": 18,
+    "link_drops": 102,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 85,
+      "stale": 17
+    },
+    "actually_decoded_frames": 18,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ]
+    ],
+    "dependency_skipped": 0,
+    "decoder_idr_resynchronizations": 0,
+    "simulated_capture_to_arrival_p50_ms": 66.52,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 18,
+        "undecodable_frames": 102,
+        "held_slots": 0,
+        "initial_blank_slots": 120,
+        "longest_unfresh_run_slots": 120,
+        "longest_unfresh_run_ms": 4000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 12,
+        "late_decoded_frames": 6,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.1,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 18,
+    "rgb_mse_on_decoded_frames": 3239.607,
+    "rgb_psnr_on_decoded_frames_db": 13.026,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      36,
+      46,
+      57,
+      67,
+      91,
+      115
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 36,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 46,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 57,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 67,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 91,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 115,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      }
+    ],
+    "encoded_payload_bytes": 169676,
+    "encoded_source_kbps": 339.352,
+    "matched_frame_count": 18,
+    "matched_frame_rgb_psnr_db": 13.026,
+    "offered_wire_bytes": 173276,
+    "offered_source_kbps": 346.552,
+    "offered_framing_bytes": 3600,
+    "queue_rejected_wire_bytes": 48415,
+    "target_segments": [
+      {
+        "start_seq": 0,
+        "end_seq_exclusive": 25,
+        "target_kbps": 650,
+        "source_frames": 25,
+        "source_duration_ms": 833.333,
+        "payload_bytes": 106130,
+        "framing_bytes": 750,
+        "offered_wire_bytes": 106880,
+        "offered_wire_kbps": 1026.048,
+        "queue_rejected_frames": 0,
+        "encoded_idr_seqs": [
+          0,
+          24
+        ]
+      },
+      {
+        "start_seq": 25,
+        "end_seq_exclusive": 36,
+        "target_kbps": 325,
+        "source_frames": 11,
+        "source_duration_ms": 366.667,
+        "payload_bytes": 26397,
+        "framing_bytes": 330,
+        "offered_wire_bytes": 26727,
+        "offered_wire_kbps": 583.135,
+        "queue_rejected_frames": 7,
+        "encoded_idr_seqs": [
+          25
+        ]
+      },
+      {
+        "start_seq": 36,
+        "end_seq_exclusive": 46,
+        "target_kbps": 162,
+        "source_frames": 10,
+        "source_duration_ms": 333.333,
+        "payload_bytes": 17352,
+        "framing_bytes": 300,
+        "offered_wire_bytes": 17652,
+        "offered_wire_kbps": 423.648,
+        "queue_rejected_frames": 9,
+        "encoded_idr_seqs": [
+          36
+        ]
+      },
+      {
+        "start_seq": 46,
+        "end_seq_exclusive": 57,
+        "target_kbps": 81,
+        "source_frames": 11,
+        "source_duration_ms": 366.667,
+        "payload_bytes": 9450,
+        "framing_bytes": 330,
+        "offered_wire_bytes": 9780,
+        "offered_wire_kbps": 213.382,
+        "queue_rejected_frames": 10,
+        "encoded_idr_seqs": [
+          46
+        ]
+      },
+      {
+        "start_seq": 57,
+        "end_seq_exclusive": 67,
+        "target_kbps": 40,
+        "source_frames": 10,
+        "source_duration_ms": 333.333,
+        "payload_bytes": 4757,
+        "framing_bytes": 300,
+        "offered_wire_bytes": 5057,
+        "offered_wire_kbps": 121.368,
+        "queue_rejected_frames": 8,
+        "encoded_idr_seqs": [
+          57
+        ]
+      },
+      {
+        "start_seq": 67,
+        "end_seq_exclusive": 120,
+        "target_kbps": 20,
+        "source_frames": 53,
+        "source_duration_ms": 1766.667,
+        "payload_bytes": 5590,
+        "framing_bytes": 1590,
+        "offered_wire_bytes": 7180,
+        "offered_wire_kbps": 32.513,
+        "queue_rejected_frames": 51,
+        "encoded_idr_seqs": [
+          67,
+          91,
+          115
+        ]
+      }
+    ],
+    "load_note": "all encoded framed units per source time, including queue admission rejects; same-target recovery IDRs remain in the same target segment"
+  },
+  "wire_load_recovery": {
+    "wire_bytes": 124861,
+    "encoded_idrs": 9,
+    "delivered_frames": 18,
+    "link_drops": 102,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 85,
+      "stale": 17
+    },
+    "actually_decoded_frames": 18,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ]
+    ],
+    "dependency_skipped": 0,
+    "decoder_idr_resynchronizations": 0,
+    "simulated_capture_to_arrival_p50_ms": 66.52,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 18,
+        "undecodable_frames": 102,
+        "held_slots": 0,
+        "initial_blank_slots": 120,
+        "longest_unfresh_run_slots": 120,
+        "longest_unfresh_run_ms": 4000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 12,
+        "late_decoded_frames": 6,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.1,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 18,
+    "rgb_mse_on_decoded_frames": 3239.607,
+    "rgb_psnr_on_decoded_frames_db": 13.026,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      36,
+      46,
+      57,
+      67,
+      91,
+      115
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 36,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 46,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 57,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 67,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 91,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 115,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      }
+    ],
+    "encoded_payload_bytes": 169676,
+    "encoded_source_kbps": 339.352,
+    "matched_frame_count": 18,
+    "matched_frame_rgb_psnr_db": 13.026,
+    "offered_wire_bytes": 173276,
+    "offered_source_kbps": 346.552,
+    "offered_framing_bytes": 3600,
+    "queue_rejected_wire_bytes": 48415,
+    "target_segments": [
+      {
+        "start_seq": 0,
+        "end_seq_exclusive": 25,
+        "target_kbps": 650,
+        "source_frames": 25,
+        "source_duration_ms": 833.333,
+        "payload_bytes": 106130,
+        "framing_bytes": 750,
+        "offered_wire_bytes": 106880,
+        "offered_wire_kbps": 1026.048,
+        "queue_rejected_frames": 0,
+        "encoded_idr_seqs": [
+          0,
+          24
+        ]
+      },
+      {
+        "start_seq": 25,
+        "end_seq_exclusive": 36,
+        "target_kbps": 325,
+        "source_frames": 11,
+        "source_duration_ms": 366.667,
+        "payload_bytes": 26397,
+        "framing_bytes": 330,
+        "offered_wire_bytes": 26727,
+        "offered_wire_kbps": 583.135,
+        "queue_rejected_frames": 7,
+        "encoded_idr_seqs": [
+          25
+        ]
+      },
+      {
+        "start_seq": 36,
+        "end_seq_exclusive": 46,
+        "target_kbps": 162,
+        "source_frames": 10,
+        "source_duration_ms": 333.333,
+        "payload_bytes": 17352,
+        "framing_bytes": 300,
+        "offered_wire_bytes": 17652,
+        "offered_wire_kbps": 423.648,
+        "queue_rejected_frames": 9,
+        "encoded_idr_seqs": [
+          36
+        ]
+      },
+      {
+        "start_seq": 46,
+        "end_seq_exclusive": 57,
+        "target_kbps": 81,
+        "source_frames": 11,
+        "source_duration_ms": 366.667,
+        "payload_bytes": 9450,
+        "framing_bytes": 330,
+        "offered_wire_bytes": 9780,
+        "offered_wire_kbps": 213.382,
+        "queue_rejected_frames": 10,
+        "encoded_idr_seqs": [
+          46
+        ]
+      },
+      {
+        "start_seq": 57,
+        "end_seq_exclusive": 67,
+        "target_kbps": 40,
+        "source_frames": 10,
+        "source_duration_ms": 333.333,
+        "payload_bytes": 4757,
+        "framing_bytes": 300,
+        "offered_wire_bytes": 5057,
+        "offered_wire_kbps": 121.368,
+        "queue_rejected_frames": 8,
+        "encoded_idr_seqs": [
+          57
+        ]
+      },
+      {
+        "start_seq": 67,
+        "end_seq_exclusive": 120,
+        "target_kbps": 20,
+        "source_frames": 53,
+        "source_duration_ms": 1766.667,
+        "payload_bytes": 5590,
+        "framing_bytes": 1590,
+        "offered_wire_bytes": 7180,
+        "offered_wire_kbps": 32.513,
+        "queue_rejected_frames": 51,
+        "encoded_idr_seqs": [
+          67,
+          91,
+          115
+        ]
+      }
+    ],
+    "load_note": "all encoded framed units per source time, including queue admission rejects; same-target recovery IDRs remain in the same target segment"
+  },
+  "matched_restart_high_rate": {
+    "wire_bytes": 153759,
+    "encoded_idrs": 9,
+    "delivered_frames": 18,
+    "link_drops": 102,
+    "link_drop_reasons": {
+      "erased": 0,
+      "queue_full": 85,
+      "stale": 17
+    },
+    "actually_decoded_frames": 18,
+    "decoded_runs": [
+      [
+        0,
+        17
+      ]
+    ],
+    "dependency_skipped": 0,
+    "decoder_idr_resynchronizations": 0,
+    "simulated_capture_to_arrival_p50_ms": 66.52,
+    "playout": [
+      {
+        "buffer_ms": 40,
+        "on_time_frames": 0,
+        "late_decoded_frames": 18,
+        "undecodable_frames": 102,
+        "held_slots": 0,
+        "initial_blank_slots": 120,
+        "longest_unfresh_run_slots": 120,
+        "longest_unfresh_run_ms": 4000.0,
+        "on_time_fraction": 0.0,
+        "presented_sequence_runs": [],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 80,
+        "on_time_frames": 12,
+        "late_decoded_frames": 6,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 6,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.1,
+        "presented_sequence_runs": [
+          [
+            6,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 160,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 240,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      },
+      {
+        "buffer_ms": 350,
+        "on_time_frames": 18,
+        "late_decoded_frames": 0,
+        "undecodable_frames": 102,
+        "held_slots": 102,
+        "initial_blank_slots": 0,
+        "longest_unfresh_run_slots": 102,
+        "longest_unfresh_run_ms": 3400.0,
+        "on_time_fraction": 0.15,
+        "presented_sequence_runs": [
+          [
+            0,
+            17
+          ]
+        ],
+        "scope": "virtual fixed-rate playout of verified decoded frames, not GUI presentation"
+      }
+    ],
+    "quality_decoded_frames": 18,
+    "rgb_mse_on_decoded_frames": 3239.607,
+    "rgb_psnr_on_decoded_frames_db": 13.026,
+    "quality_sample_note": "RGB error on correctly decoded frames only; lost frames excluded",
+    "encoded_idr_seqs": [
+      0,
+      24,
+      25,
+      36,
+      46,
+      57,
+      67,
+      91,
+      115
+    ],
+    "idr_delivery": [
+      {
+        "source_seq": 0,
+        "arrival_ms": 115.4,
+        "drop_reason": null
+      },
+      {
+        "source_seq": 24,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 25,
+        "arrival_ms": null,
+        "drop_reason": "stale"
+      },
+      {
+        "source_seq": 36,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 46,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 57,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 67,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 91,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      },
+      {
+        "source_seq": 115,
+        "arrival_ms": null,
+        "drop_reason": "queue_full"
+      }
+    ],
+    "encoded_payload_bytes": 491205,
+    "encoded_source_kbps": 982.41,
+    "matched_frame_count": 18,
+    "matched_frame_rgb_psnr_db": 13.026,
+    "offered_wire_bytes": 494805,
+    "offered_source_kbps": 989.61,
+    "offered_framing_bytes": 3600,
+    "queue_rejected_wire_bytes": 341046,
+    "target_segments": [
+      {
+        "start_seq": 0,
+        "end_seq_exclusive": 120,
+        "target_kbps": 650,
+        "source_frames": 120,
+        "source_duration_ms": 4000.0,
+        "payload_bytes": 491205,
+        "framing_bytes": 3600,
+        "offered_wire_bytes": 494805,
+        "offered_wire_kbps": 989.61,
+        "queue_rejected_frames": 85,
+        "encoded_idr_seqs": [
+          0,
+          24,
+          25,
+          36,
+          46,
+          57,
+          67,
+          91,
+          115
+        ]
+      }
+    ],
+    "load_note": "all encoded framed units per source time, including queue admission rejects; same-target recovery IDRs remain in the same target segment"
+  },
+  "scope": {
+    "time": "real local H.264 codecs; all media, control and playout timestamps are virtual",
+    "measurement": "receiver observed delivery is not a guaranteed capacity estimate; sender observes actual framed bytes before admission",
+    "control": "bounded multiplicative cuts/probes; valid age feedback can impose a measured wire budget; silence uses fallback cuts without inventing throughput",
+    "ablation": "compare age_only_recovery and wire_load_recovery to isolate wire conversion; changes versus two_rate_recovery also include more targets and repeated silence",
+    "feedback": "ideal reliable fixed-delay reverse path; no control bandwidth or cancellation",
+    "limits": "no sustainable-rate guarantee, packet transport, pacing, Colab/GPU or display; minimum target and finite change budget can prevent further reduction",
+    "paired_link": "same parameters/seed; admission differences can shift jitter/loss draws; zero jitter/random loss is the cleaner comparison"
+  }
+}
