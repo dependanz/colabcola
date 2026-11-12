@@ -290,7 +290,8 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                worker=None, viewer_stats: bool = False,
                timestamp_local_input: bool = False,
                poll_interval_ms: int = 30,
-               game_controls: bool = False) -> None:
+               game_controls: bool = False,
+               input_lab: bool = False) -> None:
     # Preserve the 30ms viewer default for existing transports; allow only
     # explicit local experiments to request a shorter bounded Tk poll.
     if (type(poll_interval_ms) is not int
@@ -298,6 +299,8 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
         raise ValueError("Tk poll interval must be an integer between 5 and 100 ms")
     if type(game_controls) is not bool:
         raise ValueError("invalid game controls selector")
+    if type(input_lab) is not bool or (input_lab and game_controls):
+        raise ValueError("invalid input lab selector")
     # Tk stays on the main thread; transport I/O stays on a dedicated thread.
     import tkinter as tk
 
@@ -322,7 +325,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
             outgoing.put_nowait(event)
         except queue.Full:
             # Synthetic mouse updates are transient; an unreleased game key is not.
-            if game_controls:
+            if game_controls or input_lab:
                 stopped.set()
             # Never block the GUI callback on a full input queue.
 
@@ -378,7 +381,14 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                     pass  # The viewer and video worker must keep running.
         root.after(poll_interval_ms, poll)
 
-    if game_controls:
+    lab_cleanup = None
+    if input_lab:
+        from .bridge_input_lab_host import InputLabHostControls
+        lab = InputLabHostControls(root, label, enqueue, width=width, height=height)
+        lab_cleanup = lab.bind()
+        root.protocol("WM_DELETE_WINDOW", lambda: (
+            lab_cleanup(), stopped.set(), root.destroy()))
+    elif game_controls:
         # Preserve press/release transitions; XTest on the remote side
         # requires an explicit key-up to avoid a permanently held control.
         allowed_keys = frozenset((
@@ -460,8 +470,12 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     thread = threading.Thread(target=dispatch, daemon=True)
     thread.start()
     root.after(poll_interval_ms, poll)
-    root.mainloop()
-    stopped.set()
+    try:
+        root.mainloop()
+    finally:
+        if lab_cleanup is not None:
+            lab_cleanup()
+        stopped.set()
     thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
     if gui_meter is not None:
         # The full-session result pools actual GUI observations, not
@@ -500,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="authorize bridge code upload and execution in the existing notebook kernel")
     remote.add_argument("--sequence-buffered", action="store_true",
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
-    remote.add_argument("--application", choices=("synthetic", "freedoom"),
+    remote.add_argument("--application", choices=("synthetic", "freedoom", "inputlab"),
                         default="synthetic",
                         help="v36A external-only opt-in Freedoom app; defaults to CUDA scene")
     remote.add_argument("--push-video", action="store_true",
@@ -552,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
-            if args.application == "freedoom" and not (
+            if args.application in ("freedoom", "inputlab") and not (
                     args.attach_existing and args.sequence_buffered
                     and args.push_video and not args.producer_zlib_level0
                     and (args.fps, args.poll_hz) == (30, 30)
@@ -562,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
                     and not (args.benchmark_h264_capacity or args.benchmark_h264_credits
                              or args.benchmark_credits or args.benchmark_sweep
                              or args.probe_link or args.confirm_allocation)):
-                parser.error("Freedoom requires external 30Hz buffered H.264 push")
+                parser.error("game/input lab requires external 30Hz buffered H.264 push")
             if args.producer_zlib_level0 and not (
                     args.attach_existing and args.sequence_buffered and args.push_video
                     and args.transport == "comm" and args.video_codec == "h264"

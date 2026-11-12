@@ -167,7 +167,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
         while not stopped.is_set() and time.monotonic() < deadline:
             # Synthetic input coalesces; gameplay preserves all key transitions.
             pending = []
-            if getattr(peer, "application", "synthetic") == "freedoom":
+            if getattr(peer, "application", "synthetic") in ("freedoom", "inputlab"):
                 for _ in range(16):
                     try:
                         pending.append(outgoing.get_nowait())

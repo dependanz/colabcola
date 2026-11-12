@@ -126,12 +126,12 @@ class KernelCommBridge:
                     video_push and sequence_buffered and video_codec == "h264"
                     and fps == 60))):
             raise ValueError("level0 compression requires 60Hz buffered H.264 push")
-        if (application not in ("synthetic", "freedoom") or
-                (application == "freedoom" and not (
+        if (application not in ("synthetic", "freedoom", "inputlab") or
+                (application in ("freedoom", "inputlab") and not (
                     fps == 30 and video_push and sequence_buffered
                     and video_codec == "h264" and push_credits in (4, 6, 8)
                     and not producer_zlib_level0))):
-            raise ValueError("Freedoom requires explicitly selected 30Hz H.264 push")
+            raise ValueError("game/input lab requires explicitly selected 30Hz H.264 push")
         self.application = application
         self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
@@ -181,6 +181,8 @@ class KernelCommBridge:
             names.append("bridge_video_push_runtime.py")
         if self.application == "freedoom":
             names.append("bridge_game_freedoom_runtime.py")
+        elif self.application == "inputlab":
+            names.append("bridge_input_lab_runtime.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
         if kernel_id is None:
@@ -239,7 +241,9 @@ class KernelCommBridge:
             push_path = (root + "/bridge_video_push_runtime.py"
                          if self.video_push else None)
             game_path = (root + "/bridge_game_freedoom_runtime.py"
-                         if self.application == "freedoom" else None)
+                         if self.application == "freedoom" else
+                         root + "/bridge_input_lab_runtime.py"
+                         if self.application == "inputlab" else None)
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
@@ -320,9 +324,9 @@ class KernelCommBridge:
                     if (self.producer_zlib_level0 and
                             details.get("producer_zlib_level") != 0):
                         raise LifecycleError("kernel level0 compression handshake invalid")
-                    if (self.application == "freedoom" and
-                            details.get("application") != "freedoom"):
-                        raise LifecycleError("kernel game handshake invalid")
+                    if (self.application in ("freedoom", "inputlab") and
+                            details.get("application") != self.application):
+                        raise LifecycleError("kernel application handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:
