@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ import stat
 import sys
 
 from .console import ConsoleUI, emit_json
-from .lifecycle_io import LifecycleError, atomic
+from .lifecycle_io import LifecycleError, atomic, encoded
 from . import profiles
 
 class OnboardingError(LifecycleError):
@@ -180,6 +181,11 @@ def load_profile(required=False):
     value = _read_config(PROFILE_FILE, required=required)
     if value is None:
         return None
+    if (isinstance(value, dict) and type(value.get("schema")) is int
+            and value["schema"] != 1):
+        raise OnboardingError(
+            f"Incompatible Colabcola profile schema {value['schema']}; supported schema: 1"
+        )
     if (not isinstance(value, dict) or set(value) != {"schema", "drive_parent"}
             or type(value["schema"]) is not int or value["schema"] != 1
             or not isinstance(value["drive_parent"], str)
@@ -193,12 +199,72 @@ def _helper_argv():
             "--config-home", str(config_home())]
 
 
-def execution_defaults():
-    """Resolve host settings for running; does not access OAuth or the network."""
+def _validate_helper_record(value):
+    """Validate legacy argv schema 1 without executing an untrusted helper."""
+    if isinstance(value, dict) and type(value.get("schema")) is int:
+        raise OnboardingError(
+            f"Incompatible Colabcola Drive helper schema {value['schema']}; supported schema: 1"
+        )
+    if (not isinstance(value, list) or len(value) != 6
+            or any(type(item) is not str for item in value)
+            or value[1:5] != ["-m", "colabcola", "_drive-token", "--config-home"]
+            or value[5] != str(config_home()) or not Path(value[0]).is_absolute()):
+        raise OnboardingError(
+            "Invalid Colabcola Drive helper (supported schema: 1); "
+            "restore the original helper or configure a fresh profile"
+        )
+
+
+def _install_helper_path():
+    """Separate installations must never rewrite each other's token commands."""
+    interpreter = str(Path(sys.executable).absolute())
+    identity = hashlib.sha256(interpreter.encode("utf-8")).hexdigest()
+    return config_home() / ("drive-helper-install-" + identity + ".json")
+
+
+def execution_defaults(*, materialize=True):
+    """Resolve install-specific host settings without OAuth/network access.
+
+    Preserve the original helper for older releases. A new interpreter gets a
+    separate fixed argv record; a prepared journal pins that record unchanged.
+    Status can validate without writing by passing materialize=False.
+    """
     profile = load_profile(required=True)
-    if _read_config(HELPER_FILE) != _helper_argv():
-        raise OnboardingError("Colabcola login helper changed or Python moved; run colabcola login")
-    return {"drive_parent": profile["drive_parent"], "token_command": config_home() / HELPER_FILE}
+    argv = _helper_argv()
+    if not Path(argv[0]).is_file():
+        raise OnboardingError(
+            "Colabcola Python interpreter is missing or moved; "
+            "repair this installation before running"
+        )
+    legacy = _read_config(HELPER_FILE)
+    _validate_helper_record(legacy)
+    if legacy == argv:
+        helper = config_home() / HELPER_FILE
+    else:
+        helper = _install_helper_path()
+        _no_links(helper)
+        if materialize and not helper.exists():
+            # Exclusive creation preserves another install's helper on races.
+            # Incomplete or tampered records fail validation rather than being
+            # silently repaired. No credential or network call is involved.
+            try:
+                with os.fdopen(os.open(helper, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                    stream.write(encoded(argv))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except FileExistsError:
+                pass
+        if helper.exists():
+            saved = _read_config(helper.name)
+            _validate_helper_record(saved)
+            if saved != argv:
+                raise OnboardingError(
+                    "This installation's Drive helper changed; restore it or "
+                    "use a fresh profile (no credential was read)"
+                )
+        elif materialize:
+            raise OnboardingError("Could not create this installation's Drive helper")
+    return {"drive_parent": profile["drive_parent"], "token_command": helper}
 
 
 def _check_host():
@@ -396,7 +462,7 @@ def main(argv=None):
             if args.status:
                 profile = load_profile()
                 if profile is not None:
-                    execution_defaults()
+                    execution_defaults(materialize=False)
                 from . import project_setup
                 try:
                     setup_status = project_setup.status(root)
@@ -451,7 +517,12 @@ def main(argv=None):
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             _no_links(root / HELPER_FILE)
             _no_links(root / PROFILE_FILE)
-            atomic(root / HELPER_FILE, _helper_argv())
+            # An older release may still use this profile. Never silently
+            # re-point its saved interpreter to the current installation.
+            if (root / HELPER_FILE).exists():
+                _validate_helper_record(_read_config(HELPER_FILE))
+            else:
+                atomic(root / HELPER_FILE, _helper_argv())
             atomic(root / PROFILE_FILE, {"schema": 1, "drive_parent": parent})
             emit_json({"state": "configured", "config_home": str(root), "profile": profiles.profile_name(root), "drive_parent": parent,
                               "colab_access_verified": True, "active_assignments": assignments,
@@ -478,7 +549,7 @@ def token_main(argv=None):
     args = parser.parse_args(argv)
     try:
         with _selected_home(args.config_home):
-            execution_defaults()
+            execution_defaults(materialize=False)
             from . import drive_oauth
             _no_links(config_home() / "drive-oauth.json")
             with _drive_setup_stage("Drive token renewal"):
