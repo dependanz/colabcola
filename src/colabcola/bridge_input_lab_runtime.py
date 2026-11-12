@@ -251,15 +251,21 @@ class LabPainter:
                   f"Press keys to light them up  -  {len(state.seen_keys)} registered",
                   12, "#adbdcd")
         rows = [
-            FUNCTIONS,
-            tuple("1234567890") + ("minus", "equal", "BackSpace"),
-            ("Tab",) + tuple("qwertyuiop") + ("bracketleft", "bracketright"),
+            ("Escape",) + FUNCTIONS + ("Print", "Pause"),
+            ("grave",) + tuple("1234567890") + ("minus", "equal", "BackSpace"),
+            ("Tab",) + tuple("qwertyuiop") + (
+                "bracketleft", "bracketright", "backslash"),
             ("Caps_Lock",) + tuple("asdfghjkl") + (
                 "semicolon", "apostrophe", "Return"),
             ("Shift_L",) + tuple("zxcvbnm") + (
                 "comma", "period", "slash", "Shift_R"),
-            ("Control_L", "Alt_L", "space", "Alt_R",
-             "Left", "Down", "Up", "Right"),
+            ("Control_L", "Super_L", "Alt_L", "space", "Alt_R",
+             "Super_R", "Control_R", "Left", "Down", "Up", "Right"),
+            ("Insert", "Delete", "Home", "End", "Prior", "Next",
+             "KP_7", "KP_8", "KP_9", "KP_Add"),
+            ("KP_4", "KP_5", "KP_6", "KP_Subtract", "KP_1",
+             "KP_2", "KP_3", "KP_Multiply", "KP_0", "KP_Decimal",
+             "KP_Divide", "KP_Enter"),
         ]
         labels = {
             "BackSpace": "Bksp", "Caps_Lock": "Caps", "Shift_L": "Shift",
@@ -268,22 +274,28 @@ class LabPainter:
             "space": "SPACE", "bracketleft": "[", "bracketright": "]",
             "minus": "-", "equal": "=", "semicolon": ";",
             "apostrophe": "'", "comma": ",", "period": ".", "slash": "/",
+            "grave": "`", "backslash": "\\", "Escape": "Esc",
+            "Super_L": "Win", "Super_R": "Win", "Pause": "Pause",
+            "Print": "PrtSc", "Prior": "PgUp", "Next": "PgDn",
+            "Insert": "Ins", "Delete": "Del", "Home": "Home", "End": "End",
+            "KP_Enter": "N-Ent", "KP_Decimal": "N-.",
         }
         for row_index, row in enumerate(rows):
-            y = 122 + row_index * 27
+            y = 111 + row_index * 23
             slot = 596 / len(row)
             for col, key in enumerate(row):
                 x1 = int(22 + col * slot)
                 x2 = int(22 + (col + 1) * slot - 3)
                 active = key in state.seen_keys
                 draw.rounded_rectangle(
-                    (x1, y, x2, y + 23), radius=5,
+                    (x1, y, x2, y + 20), radius=5,
                     fill=("#31d6a7" if active else "#293b52"))
                 val = labels.get(key, key.upper() if len(key) == 1 else key)
-                self.text(draw, ((x1+x2)//2, y+12), val, 10,
+                self.text(draw, ((x1+x2)//2, y+10), val, 10,
                           "#052223" if active else "#d8e3f1", "mm")
         extra = len(state.seen_keys - set(k for row in rows for k in row))
-        self.text(draw, (24, 300), f"Extra keys detected: {extra}   |   Some OS shortcuts cannot be captured",
+        self.text(draw, (24, 305),
+                  f"Mapped: {len(KEYS)} keys  |  OS-reserved shortcuts may not register",
                   10, "#93aac1")
         self.button(draw, NEXT_RECT, "NEXT TEST")
 

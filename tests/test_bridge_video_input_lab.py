@@ -305,3 +305,77 @@ def test_lab_cli_is_explicit_external_30hz(monkeypatch):
     assert main(args)==0 and seen[-1].application=="inputlab"
     with pytest.raises(SystemExit):
         main([x for x in args if x!="--attach-existing"])
+
+
+def test_input_lab_remote_worker_produces_acknowledged_ccb1_frames(
+        monkeypatch, tmp_path):
+    pytest.importorskip("PIL")
+    import sys
+    import time
+    from types import SimpleNamespace
+    from colabcola.bridge_video_colab_source import read_latest_rgb
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(
+        is_available=lambda: True,
+        get_device_name=lambda index: "Tesla T4"))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    src = InputLabSource(tmp_path / "lab-run", RUN)
+    worker = src.start()
+    deadline = time.monotonic() + 3
+    status_path = src.root / "status.json"
+    try:
+        while time.monotonic() < deadline and not status_path.exists():
+            time.sleep(.01)
+        assert status_path.exists(), "remote lab never reported ready"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert status["state"] == "ready", status
+        assert status["application"] == "inputlab"
+        assert src.submit_input(evt(1, "key_down", key="space"))
+
+        ack = 0
+        while time.monotonic() < deadline:
+            seq, ack, pixels = read_latest_rgb(src.root / "frame.bin")
+            if ack == 1:
+                assert len(pixels) == WIDTH * HEIGHT * 3
+                break
+            time.sleep(.02)
+        assert ack == 1, "keyboard event was not acknowledged in video"
+    finally:
+        src.close()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    final = json.loads(status_path.read_text(encoding="utf-8"))
+    assert final["state"] == "stopped"
+
+
+def test_windows_cursor_hide_fallback_is_paired(monkeypatch):
+    from colabcola import bridge_input_lab_host as host_mod
+    events = []
+    order = []
+
+    class Label:
+        def configure(self, *, cursor):
+            order.append(("cursor", cursor))
+            if cursor == "none":
+                raise RuntimeError("Tk Windows does not support none cursor")
+
+    monkeypatch.setattr(host_mod, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(
+        host_mod.InputLabHostControls, "_windows_hide_cursor",
+        lambda self: order.append(("hide",)))
+    monkeypatch.setattr(
+        host_mod.InputLabHostControls, "_restore_native_cursor",
+        lambda self: order.append(("restore",)))
+    host = host_mod.InputLabHostControls(
+        object(), Label(), events.append, pointer_warp=lambda: order.append(("warp",)))
+    host.stage = 3
+    assert host.lock_pointer() is True
+    host.unlock_pointer()
+    assert order == [
+        ("cursor", "none"), ("hide",), ("warp",),
+        ("cursor", ""), ("restore",),
+    ]
+    assert events == [
+        {"event": "pointer_lock", "enabled": True},
+        {"event": "pointer_lock", "enabled": False},
+    ]
