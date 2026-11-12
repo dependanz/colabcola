@@ -31,6 +31,9 @@ IWAD_CANDIDATES = (
     "/usr/share/games/doom/freedoom2.wad",
 )
 BINARY_NAMES = ("Xvfb", "chocolate-doom", "ffmpeg", "xdotool")
+# Ubuntu's chocolate-doom package installs the game under /usr/games,
+# which minimal Colab/Jupyter PATH values often omit.
+PACKAGED_CHOCOLATE_DOOM = "/usr/games/chocolate-doom"
 KEY_MAP = {
     "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
     "Control_L": "Control_L", "Control_R": "Control_R",
@@ -94,6 +97,9 @@ def binary_inventory(which=shutil.which) -> dict[str, str]:
     result = {}
     for name in BINARY_NAMES:
         executable = which(name)
+        if executable is None and name == "chocolate-doom":
+            # Standard Ubuntu package location, not a dynamic executable path.
+            executable = PACKAGED_CHOCOLATE_DOOM
         if (not isinstance(executable, str) or not os.path.isabs(executable)
                 or not os.path.isfile(executable) or not os.access(executable, os.X_OK)):
             raise RuntimeError("freedoom dependency missing: " + name)

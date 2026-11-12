@@ -337,3 +337,42 @@ def test_host_game_input_does_not_coalesce_key_releases(monkeypatch):
         ("input", 2, {"event": "key_up", "key": "Up"}),
     ]
     assert result["decoded_frames"] == 0
+
+
+def test_chocolate_doom_packaged_path_is_used_when_path_omits_games(
+        monkeypatch, tmp_path):
+    from colabcola import bridge_game_freedoom_runtime as game
+    binaries = {}
+    for name in game.BINARY_NAMES:
+        fake = tmp_path / name
+        fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        binaries[name] = str(fake)
+
+    monkeypatch.setattr(game, "PACKAGED_CHOCOLATE_DOOM",
+                        binaries["chocolate-doom"])
+
+    def which(name):
+        # Mimic Colab PATH without /usr/games.
+        return None if name == "chocolate-doom" else binaries[name]
+
+    discovered = game.binary_inventory(which=which)
+    assert discovered == binaries
+
+
+def test_packaged_chocolate_doom_must_be_executable_and_regular(
+        monkeypatch, tmp_path):
+    from colabcola import bridge_game_freedoom_runtime as game
+    missing = tmp_path / "missing-chocolate-doom"
+    monkeypatch.setattr(game, "PACKAGED_CHOCOLATE_DOOM", str(missing))
+    with pytest.raises(RuntimeError, match="dependency missing: chocolate-doom"):
+        game.binary_inventory(which=lambda name: (
+            None if name == "chocolate-doom" else __import__("sys").executable))
+
+    # A directory cannot be executed as the game binary on any platform.
+    invalid = tmp_path / "chocolate-doom"
+    invalid.mkdir()
+    monkeypatch.setattr(game, "PACKAGED_CHOCOLATE_DOOM", str(invalid))
+    with pytest.raises(RuntimeError, match="dependency missing: chocolate-doom"):
+        game.binary_inventory(which=lambda name: (
+            None if name == "chocolate-doom" else __import__("sys").executable))

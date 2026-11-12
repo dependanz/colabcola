@@ -10,7 +10,7 @@ Remote kernel bootstrap chooses this source **only** when CLI explicitly request
 
 ## Remote environment and installation
 
-No automatic apt, pip, game asset download, or arbitrary program execution is performed. The remote runtime must already contain the OS binaries Xvfb, chocolate-doom, ffmpeg, and xdotool. The adapter checks absolute executable paths and accepts a **fixed** Freedoom package IWAD path only: /usr/share/games/doom/freedoom1.wad, otherwise /usr/share/games/doom/freedoom2.wad. Both must be regular, non-symlink files with a valid IWAD signature and bounded size. Ubuntu's freedoom package normally installs these files. A separate explicit, disposable notebook provisioning step may install packages after the user reviews it; never run it silently. User remains responsible for the browser-connected runtime's credits and manual disconnect.
+No automatic apt, pip, game asset download, or arbitrary program execution is performed. The remote runtime must already contain the OS binaries Xvfb, chocolate-doom, ffmpeg, and xdotool. The adapter checks absolute executable paths, including the standard Ubuntu Chocolate Doom location `/usr/games/chocolate-doom` when Colab's `PATH` omits `/usr/games`, and accepts a **fixed** Freedoom package IWAD path only: /usr/share/games/doom/freedoom1.wad, otherwise /usr/share/games/doom/freedoom2.wad. Both must be regular, non-symlink files with a valid IWAD signature and bounded size. Ubuntu's freedoom package normally installs these files. A separate explicit, disposable notebook provisioning step may install packages after the user reviews it; never run it silently. User remains responsible for the browser-connected runtime's credits and manual disconnect.
 
 ## Input and responsiveness
 
