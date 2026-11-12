@@ -19,6 +19,7 @@ No automatic apt, pip, game asset download, or arbitrary program execution is pe
 - The kernel validates event names, values, sequence numbers, and identity, then enqueues them into a bounded 64-item game-source input queue. Queue overflow fails closed with a bounded error, not silent dropping of key releases.
 - The game source applies input via fixed xdotool XTEST commands with no shell and no arbitrary key strings, and reports the last applied input seq in the CCB1 frame ACK. Held keys/buttons are released on loss of Tk focus and on application shutdown.
 - Mouse motion may be limited at the edge of the Tk window in this first proof; keyboard turning (Left/Right) is the primary way to verify first gameplay controls. This is a non-physical input-to-Tk metric, not input-to-photon.
+- The inherited render_copy_ms telemetry in this game mode measures blocking RGB capture-pipe reading, **not** CUDA render/copy. It must not be compared as the same stage with synthetic GPU scenes.
 - Rendering at 30 FPS is an application experiment only; do not claim 60FPS or GPU acceleration from Chocolate Doom.
 
 ## Remote lifecycle constraints

@@ -118,6 +118,15 @@ def select_freedoom_iwad(candidates=IWAD_CANDIDATES) -> str:
     raise RuntimeError("freedoom IWAD unavailable; install package explicitly")
 
 
+def doom_warp_arguments(iwad: str) -> tuple[str, ...]:
+    """Chocolate Doom's Doom I and Doom II warp syntax differs."""
+    if iwad == IWAD_CANDIDATES[0]:
+        return ("-warp", "1", "1")
+    if iwad == IWAD_CANDIDATES[1]:
+        return ("-warp", "1")
+    raise ValueError("game IWAD is not allowlisted")
+
+
 def _read_exact(pipe, size: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < size:
@@ -271,7 +280,8 @@ class FreedoomSource:
             doom = self._launch([
                 binaries["chocolate-doom"], "-iwad", iwad, "-window",
                 "-geometry", f"{WIDTH}x{HEIGHT}", "-nograbmouse",
-                "-nosound", "-skill", "3", "-warp", "1", "1",
+                "-nosound", "-skill", "3",
+                *doom_warp_arguments(iwad),
             ])
             window_id = None
             for _ in range(100):

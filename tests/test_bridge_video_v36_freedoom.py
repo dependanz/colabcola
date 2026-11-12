@@ -278,3 +278,62 @@ def test_game_capture_pipe_read_is_exact_and_fails_on_truncation():
 def test_game_source_rejects_arbitrary_key_types():
     with pytest.raises(ValueError):
         validate_event({"seq": 1, "event": "key_down", "key": ["Up"]})
+
+
+def test_doom_warp_arguments_match_freedoom_episode_or_map():
+    from colabcola.bridge_game_freedoom_runtime import (
+        IWAD_CANDIDATES, doom_warp_arguments)
+    assert doom_warp_arguments(IWAD_CANDIDATES[0]) == ("-warp", "1", "1")
+    assert doom_warp_arguments(IWAD_CANDIDATES[1]) == ("-warp", "1")
+    with pytest.raises(ValueError):
+        doom_warp_arguments("/home/user/custom.wad")
+
+
+def test_host_game_input_does_not_coalesce_key_releases(monkeypatch):
+    import threading
+    import time
+    from colabcola import bridge_video_push_session as mod
+    done = threading.Event()
+    connected = threading.Event()
+    connected.set()
+    sent = []
+
+    class EmptyChannel:
+        def get_msg(self, timeout=0):
+            raise queue.Empty
+
+    class Peer:
+        fps = 30
+        application = "freedoom"
+        video_push = True
+        video_codec = "h264"
+        push_credits = 6
+        run_id = RUN
+        comm_id = "owned"
+        wire = SimpleNamespace(connection_ready=connected,
+                               iopub_channel=EmptyChannel())
+        def _send(self, kind, **data):
+            sent.append((kind, data))
+        def send_input(self, seq, event):
+            sent.append(("input", seq, event))
+            if seq == 2:
+                done.set()
+
+    class FakeDecoder:
+        pass
+
+    monkeypatch.setattr(mod, "make_host_decoder",
+                        lambda: (None, FakeDecoder()))
+    events = queue.Queue()
+    events.put({"event": "key_down", "key": "Up"})
+    events.put({"event": "key_up", "key": "Up"})
+    result = mod.run_push_comm_h264(
+        Peer(), "Tesla T4", events, queue.Queue(),
+        done, time.monotonic() + 0.5, credits=6)
+    assert result["application"] == "freedoom"
+    assert sent[:3] == [
+        ("video_credit", {"count": 6}),
+        ("input", 1, {"event": "key_down", "key": "Up"}),
+        ("input", 2, {"event": "key_up", "key": "Up"}),
+    ]
+    assert result["decoded_frames"] == 0
