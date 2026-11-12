@@ -67,7 +67,19 @@ def make_producer_window(*, run_id: str, last_seq: int, window_seq: int,
     }
 
 
-def start(directory: str, fps: int, run_id: str, *, sequence_buffered: bool = False):
+def encode_intermediate_ppm(ppm: bytes, *, zlib_level: int = 1) -> bytes:
+    """Bounded, lossless intermediate frame; not a network codec."""
+    if type(zlib_level) is not int or zlib_level not in (0, 1):
+        raise ValueError("intermediate compression level must be 0 or 1")
+    prefix = f"P6\n{WIDTH} {HEIGHT}\n255\n".encode("ascii")
+    if (type(ppm) is not bytes or len(ppm) != len(prefix) + WIDTH * HEIGHT * 3
+            or not ppm.startswith(prefix)):
+        raise ValueError("invalid intermediate frame size")
+    return zlib.compress(ppm, level=zlib_level)
+
+
+def start(directory: str, fps: int, run_id: str, *, sequence_buffered: bool = False,
+          zlib_level: int = 1):
     import torch
 
     directory = Path(directory)
@@ -76,6 +88,9 @@ def start(directory: str, fps: int, run_id: str, *, sequence_buffered: bool = Fa
         raise ValueError("fps outside accepted range")
     if type(sequence_buffered) is not bool:
         raise ValueError("invalid sequence-buffered selector")
+    if (type(zlib_level) is not int or zlib_level not in (0, 1)
+            or (zlib_level == 0 and (fps != 60 or not sequence_buffered))):
+        raise ValueError("level0 compression requires 60Hz sequence-buffered renderer")
 
     def worker():
         try:
@@ -155,7 +170,7 @@ def start(directory: str, fps: int, run_id: str, *, sequence_buffered: bool = Fa
                 render_copy_ms = (time.monotonic() - render_start) * 1000
                 ppm = f"P6\n{WIDTH} {HEIGHT}\n255\n".encode() + pixels
                 compress_start = time.monotonic()
-                compressed = zlib.compress(ppm, level=1)
+                compressed = encode_intermediate_ppm(ppm, zlib_level=zlib_level)
                 compress_ms = (time.monotonic() - compress_start) * 1000
                 if len(compressed) > 2 * 1024 * 1024:
                     raise RuntimeError("frame exceeds bridge transport bound")

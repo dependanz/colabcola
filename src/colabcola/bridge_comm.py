@@ -91,7 +91,8 @@ class KernelCommBridge:
                  video_codec: str = "ppm", *, install_remote_pyav: bool = False,
                  sequence_buffered: bool = False,
                  max_buffer_lag_frames: int = 2,
-                 video_push: bool = False, push_credits: int = 4):
+                 video_push: bool = False, push_credits: int = 4,
+                 producer_zlib_level0: bool = False):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -119,6 +120,12 @@ class KernelCommBridge:
                      or (fps == 60 and push_credits not in (8, 10, 12))
                      or fps not in (30, 60)))):
             raise ValueError("push credit window requires matching 30/60 FPS mode")
+        if (type(producer_zlib_level0) is not bool
+                or (producer_zlib_level0 and not (
+                    video_push and sequence_buffered and video_codec == "h264"
+                    and fps == 60))):
+            raise ValueError("level0 compression requires 60Hz buffered H.264 push")
+        self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
         self.push_credits = push_credits
         self.max_buffer_lag_frames = max_buffer_lag_frames
@@ -234,7 +241,8 @@ class KernelCommBridge:
                     f"'BRIDGE_MAX_BUFFER_LAG_FRAMES':{self.max_buffer_lag_frames!r},"
                     f"'BRIDGE_VIDEO_PUSH':{self.video_push!r},"
                     f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r},"
-                    f"'BRIDGE_PUSH_CREDITS':{self.push_credits!r}"
+                    f"'BRIDGE_PUSH_CREDITS':{self.push_credits!r},"
+                    f"'BRIDGE_PRODUCER_ZLIB_LEVEL0':{self.producer_zlib_level0!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
             # after any ambiguous submission outcome.
@@ -295,6 +303,9 @@ class KernelCommBridge:
                         raise LifecycleError("kernel bridge H.264 handshake invalid")
                     if self.video_push and details.get("video_mode") != "credit-push":
                         raise LifecycleError("kernel push video handshake invalid")
+                    if (self.producer_zlib_level0 and
+                            details.get("producer_zlib_level") != 0):
+                        raise LifecycleError("kernel level0 compression handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:

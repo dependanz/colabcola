@@ -433,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="v33v opt-in: bounded eight-frame producer ring; no duplicate H.264 snapshots")
     remote.add_argument("--push-video", action="store_true",
                         help="v34 opt-in: sender-driven bounded H.264 Comm")
+    remote.add_argument("--producer-zlib-level0", action="store_true",
+                        help="v35C opt-in: 60Hz external push uses zlib level 0 for internal snapshots")
     remote.add_argument("--push-credits", type=int,
                         choices=(4, 6, 8, 10, 12), default=4,
                         help="push credit window; 30Hz: 4/6/8, opt-in 60Hz: 8/10/12")
@@ -478,6 +480,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
+            if args.producer_zlib_level0 and not (
+                    args.attach_existing and args.sequence_buffered and args.push_video
+                    and args.transport == "comm" and args.video_codec == "h264"
+                    and (args.fps, args.poll_hz) == (60, 60)
+                    and args.inflight in (None, 1)
+                    and not (args.benchmark_h264_capacity or args.benchmark_h264_credits
+                             or args.benchmark_credits or args.benchmark_sweep
+                             or args.probe_link or args.confirm_allocation)):
+                parser.error("--producer-zlib-level0 requires 60Hz external buffered H.264 push")
             if args.attach_existing:
                 if (args.transport != "comm" or args.video_codec != "h264"
                         or not (args.benchmark_h264_capacity or args.push_video)

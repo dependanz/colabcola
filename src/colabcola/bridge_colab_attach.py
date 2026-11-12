@@ -80,6 +80,12 @@ def validate_attach_options(args) -> None:
             or getattr(args, "benchmark_h264_capacity", False)
             or getattr(args, "benchmark_h264_credits", False)):
         raise LifecycleError("push video requires external buffered H.264 without pull benchmarks")
+    if getattr(args, "producer_zlib_level0", False) and (
+            not getattr(args, "push_video", False)
+            or not getattr(args, "sequence_buffered", False)
+            or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (60, 60)
+            or getattr(args, "benchmark_h264_capacity", False)):
+        raise LifecycleError("level0 intermediate compression requires 60Hz external push")
     credits = getattr(args, "push_credits", 4)
     fps = getattr(args, "fps", None)
     if (type(credits) is not int or credits not in (4, 6, 8, 10, 12)
@@ -129,6 +135,7 @@ def run_attached_colab(args, provider) -> int:
             max_buffer_lag_frames=getattr(args, "renderer_lag_frames", 2),
             video_push=getattr(args, "push_video", False),
             push_credits=getattr(args, "push_credits", 4),
+            producer_zlib_level0=getattr(args, "producer_zlib_level0", False),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
@@ -143,7 +150,9 @@ def run_attached_colab(args, provider) -> int:
                  renderer_lag_frames=getattr(args, "renderer_lag_frames", 2),
                  target_fps=args.fps,
                  video_push=getattr(args, "push_video", False),
-                 push_credits=getattr(args, "push_credits", 4))
+                 push_credits=getattr(args, "push_credits", 4),
+                 producer_zlib_level=(
+                     0 if getattr(args, "producer_zlib_level0", False) else 1))
 
             push = getattr(args, "push_video", False)
             if push:

@@ -59,7 +59,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
           sequence_buffered: bool = False,
           max_buffer_lag_frames: int = 2,
           video_push: bool = False, video_push_source_path: str | None = None,
-          push_credits: int = 4):
+          push_credits: int = 4, producer_zlib_level0: bool = False):
     global BOOTSTRAP_STAGE
     if (type(video_push) is not bool
             or (video_push and (not sequence_buffered or not preflight_video
@@ -72,6 +72,10 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                  or (fps == 60 and push_credits not in (8, 10, 12))
                  or fps not in (30, 60)))):
         raise ValueError("invalid sender FPS/credit pairing")
+    if (type(producer_zlib_level0) is not bool
+            or (producer_zlib_level0 and not (
+                fps == 60 and video_push and sequence_buffered and preflight_video))):
+        raise ValueError("level0 compression requires 60Hz buffered H.264 push")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int
@@ -85,7 +89,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
     renderer = runpy.run_path(renderer_path)
     BOOTSTRAP_STAGE = "starting_renderer"
     if sequence_buffered:
-        renderer["start"](directory, fps, run_id, sequence_buffered=True)
+        renderer["start"](directory, fps, run_id, sequence_buffered=True,
+                          **({"zlib_level": 0} if producer_zlib_level0 else {}))
     else:
         renderer["start"](directory, fps, run_id)
     BOOTSTRAP_STAGE = "waiting_cuda"
@@ -155,6 +160,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         ready["video_codec"] = "h264-annexb"
         if video_push:
             ready["video_mode"] = "credit-push"
+            if producer_zlib_level0:
+                ready["producer_zlib_level"] = 0
     comm = _create_kernel_comm(target_name=TARGET, data=ready)
     state = {"latest_input": 0, "latest_rate": 0, "last_frame": -1,
              "last_video_pull": 0, "closed": False}
@@ -313,7 +320,8 @@ if __name__ == "__main__":
               max_buffer_lag_frames=globals().get("BRIDGE_MAX_BUFFER_LAG_FRAMES", 2),
               video_push=globals().get("BRIDGE_VIDEO_PUSH", False) is True,
               video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"),
-              push_credits=globals().get("BRIDGE_PUSH_CREDITS", 4))
+              push_credits=globals().get("BRIDGE_PUSH_CREDITS", 4),
+              producer_zlib_level0=globals().get("BRIDGE_PRODUCER_ZLIB_LEVEL0", False))
     except BaseException as exc:
         _record_bootstrap_failure(BRIDGE_DIRECTORY, BRIDGE_RUN_ID, exc)
         raise

@@ -302,6 +302,8 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             "renderer_frames_skipped_total": renderer_skipped,
             "configured_credits": credits,
             "target_fps": target_fps,
+            "producer_zlib_level": (
+                0 if getattr(peer, "producer_zlib_level0", False) else 1),
             "producer_windows_observed": len(producer_windows),
             "producer_frames_covered": covered_frames,
             "producer_elapsed_ms_covered": round(covered_ms, 3),
