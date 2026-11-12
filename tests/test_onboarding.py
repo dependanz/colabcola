@@ -516,7 +516,9 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(self.run_login(), 0)
         with mock.patch.object(onboarding.sys, "executable", str(second)):
             helper = onboarding.execution_defaults()["token_command"]
-            atomic(helper, ["unexpected", "-m", "colabcola", "_drive-token",
+            another = self.root / "other-interpreter"
+            another.touch()
+            atomic(helper, [str(another), "-m", "colabcola", "_drive-token",
                             "--config-home", str(self.home)])
             before = helper.read_bytes()
             with self.assertRaisesRegex(onboarding.OnboardingError, "Drive helper changed"):
