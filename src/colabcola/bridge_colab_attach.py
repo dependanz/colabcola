@@ -87,16 +87,16 @@ def validate_attach_options(args) -> None:
             or getattr(args, "benchmark_h264_capacity", False)):
         raise LifecycleError("level0 intermediate compression requires 60Hz external push")
     application = getattr(args, "application", "synthetic")
-    if application not in ("synthetic", "freedoom"):
+    if application not in ("synthetic", "freedoom", "inputlab"):
         raise LifecycleError("unknown application")
-    if application == "freedoom" and not (
+    if application in ("freedoom", "inputlab") and not (
             getattr(args, "push_video", False)
             and getattr(args, "sequence_buffered", False)
             and (getattr(args, "fps", None), getattr(args, "poll_hz", None))
             == (30, 30)
             and not getattr(args, "benchmark_h264_capacity", False)
             and not getattr(args, "producer_zlib_level0", False)):
-        raise LifecycleError("Freedoom requires 30Hz external H.264 push")
+        raise LifecycleError("game/input lab requires 30Hz external H.264 push")
     credits = getattr(args, "push_credits", 4)
     fps = getattr(args, "fps", None)
     if (type(credits) is not int or credits not in (4, 6, 8, 10, 12)
@@ -184,30 +184,41 @@ def run_attached_colab(args, provider) -> int:
 
             run_viewer(
                 "127.0.0.1", 0, "", width=640, height=360,
-                title=("Colab Cola · Freedoom (remote T4 session)"
+                title=("Colab Cola · Interactive Input Lab"
+                       if getattr(args, "application", "synthetic") == "inputlab"
+                       else "Colab Cola · Freedoom (remote T4 session)"
                        if getattr(args, "application", "synthetic") == "freedoom"
                        else "Colab Cola · T4 sender-driven H.264" if push
                        else "Colab Cola · existing T4 H.264 (kernel Comm)"),
                 worker=work, viewer_stats=getattr(args, "viewer_stats", False),
                 timestamp_local_input=push,
                 game_controls=getattr(args, "application", "synthetic") == "freedoom",
+                input_lab=getattr(args, "application", "synthetic") == "inputlab",
                 poll_interval_ms=(5 if push and args.fps == 60
                                   else 10 if push else 30),
             )
         finally:
+            stop_fields = (
+                {"remote_stop_marker_uploaded": False}
+                if getattr(args, "application", "synthetic") == "inputlab" else {})
             try:
                 peer.close()
             except Exception:
                 save(args.run_dir, state, "needs_manual_review",
-                     close_status="unconfirmed")
+                     close_status="unconfirmed", **stop_fields)
                 raise LifecycleError(
-                    "external Comm close unconfirmed; user-owned runtime not released"
+                    "external Comm close or stop-marker request unconfirmed; "
+                    "user-owned runtime not released"
                 ) from None
             else:
-                # Host disconnect is not proof that remote worker has stopped.
+                # The independent marker is only a remote stop REQUEST;
+                # a separate read of status.json verifies worker exit.
+                if stop_fields:
+                    stop_fields["remote_stop_marker_uploaded"] = (
+                        getattr(peer, "remote_stop_marker_uploaded", False) is True)
                 save(args.run_dir, state,
                      "detached" if opened else "needs_manual_review",
-                     close_status="host_disconnected")
+                     close_status="host_disconnected", **stop_fields)
                 print("[colabcola] Host bridge detached; "
                       "user-owned Colab runtime NOT released", flush=True)
     return 0

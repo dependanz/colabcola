@@ -78,12 +78,12 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             or (producer_zlib_level0 and not (
                 fps == 60 and video_push and sequence_buffered and preflight_video))):
         raise ValueError("level0 compression requires 60Hz buffered H.264 push")
-    if (application not in ("synthetic", "freedoom")
-            or (application == "freedoom" and not (
+    if (application not in ("synthetic", "freedoom", "inputlab")
+            or (application in ("freedoom", "inputlab") and not (
                 fps == 30 and video_push and sequence_buffered and preflight_video
                 and game_renderer_path is not None
                 and push_credits in (4, 6, 8) and not producer_zlib_level0))):
-        raise ValueError("Freedoom requires opt-in 30Hz external H.264 push")
+        raise ValueError("game/input lab requires opt-in 30Hz external H.264 push")
     if type(sequence_buffered) is not bool or (sequence_buffered and not preflight_video):
         raise ValueError("sequence buffer requires video preflight")
     if (type(max_buffer_lag_frames) is not int
@@ -95,7 +95,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
     root = Path(directory)
     BOOTSTRAP_STAGE = "loading_renderer"
     renderer = runpy.run_path(
-        game_renderer_path if application == "freedoom" else renderer_path)
+        game_renderer_path if application in ("freedoom", "inputlab") else renderer_path)
     BOOTSTRAP_STAGE = "starting_renderer"
     if sequence_buffered:
         renderer["start"](directory, fps, run_id, sequence_buffered=True,
@@ -120,8 +120,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         time.sleep(.15)
     else:
         raise RuntimeError("CUDA bridge worker did not become ready")
-    if (application == "freedoom"
-            and details.get("application") != "freedoom"):
+    if (application in ("freedoom", "inputlab")
+            and details.get("application") != application):
         raise RuntimeError("remote game did not become ready")
     if details.get("device") != "cuda" or "T4" not in details.get("gpu", ""):
         raise RuntimeError("remote bridge did not verify T4 CUDA compute")
@@ -172,8 +172,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         ready["video_codec"] = "h264-annexb"
         if video_push:
             ready["video_mode"] = "credit-push"
-            if application == "freedoom":
-                ready["application"] = "freedoom"
+            if application in ("freedoom", "inputlab"):
+                ready["application"] = application
             if producer_zlib_level0:
                 ready["producer_zlib_level"] = 0
     comm = _create_kernel_comm(target_name=TARGET, data=ready)
@@ -186,7 +186,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             push_impl = runpy.run_path(video_push_source_path)
             push_sender = push_impl["CreditPushSender"](
                 comm=comm, source=video_source, directory=root,
-                run_id=run_id, credits=push_credits)
+                run_id=run_id, credits=push_credits,
+                **({"enable_status_sidecar": True}
+                   if application == "inputlab" else {}))
         except Exception:
             video_failed = True
 
@@ -202,16 +204,24 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             action = event.get("event")
             if type(sequence) is not int or not state["latest_input"] < sequence < 10000000:
                 return
-            if application == "freedoom":
-                # Game controls are explicitly allowlisted and queued by
-                # the selected source; no shell strings or arbitrary commands.
+            if application in ("freedoom", "inputlab"):
+                # Both applications validate a small, explicit input schema.
+                # Never forward unrestricted command or filesystem fields.
                 record = {"seq": sequence, "event": action}
                 if action in ("key_down", "key_up"):
                     record["key"] = event.get("key")
                 elif action in ("mouse_button_down", "mouse_button_up"):
                     record["button"] = event.get("button")
+                    if application == "inputlab":
+                        record["x"], record["y"] = event.get("x"), event.get("y")
                 elif action == "mouse_delta":
                     record["dx"], record["dy"] = event.get("dx"), event.get("dy")
+                elif application == "inputlab" and action == "mouse_move":
+                    record["x"], record["y"] = event.get("x"), event.get("y")
+                elif application == "inputlab" and action == "mouse_wheel":
+                    record["ticks"] = event.get("ticks")
+                elif application == "inputlab" and action == "pointer_lock":
+                    record["enabled"] = event.get("enabled")
                 else:
                     return
                 try:
@@ -219,7 +229,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                         raise ValueError("game input queue rejected")
                 except (ValueError, TypeError, KeyError):
                     comm.send({"v": 1, "kind": "error", "run_id": run_id,
-                               "code": "game_input_rejected"})
+                               "code": "application_input_rejected"})
                     return
                 state["latest_input"] = sequence
                 return
@@ -301,6 +311,10 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                 # Credit grants must be strict and bounded. A video sender
                 # never issues a request-response pull or resets the codec.
                 push_sender.grant(event.get("count"))
+                if application == "inputlab":
+                    # Only a valid, authenticated credit extends the remote
+                    # producer lease. Input events do not extend this lease.
+                    renderer["note_host_credit"]()
             except (ValueError, TypeError):
                 comm.send({"v": 1, "kind": "error", "run_id": run_id,
                            "code": "push_credit_invalid"})
@@ -335,7 +349,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
             if push_sender is not None:
                 push_sender.close()
             renderer["atomic_bytes"](root / "stop", b"1")
-            if application == "freedoom":
+            if application in ("freedoom", "inputlab"):
                 renderer["stop"]()
             comm.close()
 

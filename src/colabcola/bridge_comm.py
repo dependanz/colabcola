@@ -126,12 +126,12 @@ class KernelCommBridge:
                     video_push and sequence_buffered and video_codec == "h264"
                     and fps == 60))):
             raise ValueError("level0 compression requires 60Hz buffered H.264 push")
-        if (application not in ("synthetic", "freedoom") or
-                (application == "freedoom" and not (
+        if (application not in ("synthetic", "freedoom", "inputlab") or
+                (application in ("freedoom", "inputlab") and not (
                     fps == 30 and video_push and sequence_buffered
                     and video_codec == "h264" and push_credits in (4, 6, 8)
                     and not producer_zlib_level0))):
-            raise ValueError("Freedoom requires explicitly selected 30Hz H.264 push")
+            raise ValueError("game/input lab requires explicitly selected 30Hz H.264 push")
         self.application = application
         self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
@@ -143,6 +143,9 @@ class KernelCommBridge:
         self._closed = False
         self.latest_renderer_metrics = None
         self.latest_rate_ack = 0
+        # A successful Comm send does not prove remote receipt. Input Lab
+        # additionally requests a stop via authenticated contents REST.
+        self.remote_stop_marker_uploaded = False
 
     def _send(self, kind: str, **fields: object) -> None:
         if self._closed or not self.comm_id or self.wire is None:
@@ -181,8 +184,23 @@ class KernelCommBridge:
             names.append("bridge_video_push_runtime.py")
         if self.application == "freedoom":
             names.append("bridge_game_freedoom_runtime.py")
+        elif self.application == "inputlab":
+            names.append("bridge_input_lab_runtime.py")
         for name in names:
             self.provider._upload(self.session, remote + "/" + name, files.joinpath(name).read_bytes())
+        if self.application == "inputlab":
+            # Use the website's approved banner verbatim. This is an
+            # immutable packaged resource, never a runtime web download.
+            import hashlib
+            brand = files.joinpath("assets", "colabcola-banner.png").read_bytes()
+            git_blob = hashlib.sha1(
+                b"blob " + str(len(brand)).encode("ascii") + b"\x00" + brand
+            ).hexdigest()
+            if (len(brand) != 600210
+                    or git_blob != "f15d2f9b68f0678df7f772d399bb11b45f23ebbe"):
+                raise LifecycleError("Input Lab approved branding asset invalid")
+            self.provider._upload(
+                self.session, remote + "/colabcola-banner.png", brand)
         if kernel_id is None:
             kernel_id = self.provider._kernel(self.session)["id"]
         base = getattr(jkc, "KernelClient", None) or jkc.JupyterKernelClient
@@ -239,7 +257,9 @@ class KernelCommBridge:
             push_path = (root + "/bridge_video_push_runtime.py"
                          if self.video_push else None)
             game_path = (root + "/bridge_game_freedoom_runtime.py"
-                         if self.application == "freedoom" else None)
+                         if self.application == "freedoom" else
+                         root + "/bridge_input_lab_runtime.py"
+                         if self.application == "inputlab" else None)
             code = ("import runpy\n"
                     f"runpy.run_path({root + '/bridge_colab_comm_runtime.py'!r}, "
                     "run_name='__main__', init_globals={"
@@ -320,9 +340,9 @@ class KernelCommBridge:
                     if (self.producer_zlib_level0 and
                             details.get("producer_zlib_level") != 0):
                         raise LifecycleError("kernel level0 compression handshake invalid")
-                    if (self.application == "freedoom" and
-                            details.get("application") != "freedoom"):
-                        raise LifecycleError("kernel game handshake invalid")
+                    if (self.application in ("freedoom", "inputlab") and
+                            details.get("application") != self.application):
+                        raise LifecycleError("kernel application handshake invalid")
                     return details
             raise LifecycleError("kernel bridge bootstrap timeout")
         except BaseException:
@@ -467,6 +487,22 @@ class KernelCommBridge:
                 self._send("close")
             except Exception:
                 pass
+
+        # Input Lab only: an independent, authenticated stop marker permits
+        # the renderer to terminate even when Jupyter shell->Comm delivery
+        # has stalled. Never retry an ambiguous upload; on failure require
+        # manual review. This never allocates or releases a Colab runtime.
+        stop_marker_error = False
+        if (self.application == "inputlab"
+                and getattr(self, "external_attachment", False)):
+            try:
+                self.provider._upload(
+                    self.session,
+                    f"content/colabcola-bridge/{self.run_id}/stop", b"1")
+                self.remote_stop_marker_uploaded = True
+            except Exception:
+                stop_marker_error = True
+
         self._closed = True
         if self.client:
             try:
@@ -474,6 +510,10 @@ class KernelCommBridge:
             finally:
                 self.client = None
                 self.wire = None
+        if stop_marker_error:
+            raise LifecycleError(
+                "Input Lab stop marker upload unconfirmed; inspect the "
+                "externally owned runtime before reattaching")
 
 
 def stream_comm(peer: KernelCommBridge, gpu: str, outgoing: queue.Queue,
