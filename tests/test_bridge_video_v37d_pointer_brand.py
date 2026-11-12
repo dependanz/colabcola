@@ -151,6 +151,10 @@ def test_pointer_capture_restores_on_cursor_hide_failure():
         if kwargs.get("cursor") == "none":
             raise RuntimeError("cursor cannot be hidden")
     label.configure = fail_hide
+    # On Windows, Tk's missing cursor="none" is expected to fall back to
+    # Win32 ShowCursor. Simulate failure of BOTH hide mechanisms.
+    host._windows_hide_cursor = lambda: (_ for _ in ()).throw(
+        OSError("native pointer hide failed"))
     assert host.lock_pointer() is False
     assert not host.locked and not capture.active
     assert api.current_clip == api.old
