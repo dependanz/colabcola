@@ -73,3 +73,152 @@ its generated journal and artifacts live beneath it.
 These commands run in the installed controller environment. Native Windows
 PowerShell and Ubuntu WSL have both been exercised; they do not migrate or
 upgrade an older controller.
+
+## Named environments and ordered steps
+
+A recipe can declare several workload environments and select one for each step.
+Use `environments` and `steps` together. The existing `commands` format continues
+to use one workload environment. Named steps run sequentially in the shared job
+directory; a failed step stops the sequence.
+
+```toml
+project = "."
+inputs = []
+
+[environments.prepare]
+python = "3.10"
+
+[environments.evaluate]
+python = "3.12"
+
+[[steps]]
+name = "prepare"
+environment = "prepare"
+command = ["python", "prepare.py"]
+
+[[steps]]
+name = "evaluate"
+environment = "evaluate"
+command = ["python", "evaluate.py", "--input", "../outputs/data.json"]
+cwd = "analysis"
+```
+
+Step names and environment names are unique lowercase hyphen-separated slugs.
+Each step names a declared environment. `command` is a literal argument array;
+Python scripts, Python modules and commands installed in that environment are
+supported. Scripts must be inside the packaged project. Arguments added to the
+generated job at launch time are refused: put each step's arguments in the recipe.
+Shell command strings and shell programs are not supported by this feature.
+
+`cwd` defaults to `.` and is relative to the project root. Script paths and ordinary
+file arguments are relative to that step's working directory. The working directory
+must exist in the packaged project. Requirement file paths below are always relative
+to the project root, independently of a step's `cwd`.
+
+The controller still uses its own Python installation. The environments' `python`
+values choose workload interpreter versions, such as `3.10` or an exact patch
+version. Package resolution happens on the allocated Linux x86_64 runtime using a
+checksum-pinned micromamba executable; conda need not be installed on the packaging
+machine or in the runtime image. All declared environments are built before the
+first step starts. A build or dependency check failure prevents workload execution.
+
+### Declare dependencies per environment
+
+```toml
+[environments.evaluate]
+python = "3.12"
+
+[environments.evaluate.conda]
+channels = ["conda-forge"]
+packages = ["ffmpeg"]
+
+[environments.evaluate.pip]
+packages = ["numpy==2.2.6"]
+requirements = ["requirements/base.txt", "requirements/extensions.txt"]
+no_build_isolation = true
+
+[environments.evaluate.env]
+PYTHONUNBUFFERED = "1"
+MAX_JOBS = "2"
+```
+
+Conda channels are explicit and default to `conda-forge`. Pip installs the declared
+package list first, then each requirement file in order. This lets an extension
+requirement use dependencies installed by an earlier file. Use
+`no_build_isolation = true` only when the build needs that environment's already
+installed dependencies. A bounded `pip check` runs before the environment is ready.
+
+Pip supports ordinary package requirements, project-relative local packages beginning
+with `./`, and named `git+https` direct references pinned to a full 40-character
+commit. A Git reference can include a project-relative `#subdirectory=...` fragment.
+Local package sources and requirement files must be included in the project
+selection; excluded or missing files fail packaging.
+Requirement files are bounded UTF-8 files and cannot include another requirements
+or constraints file, editable installs, or arbitrary pip options. Index requirements
+can include SHA-256 hashes. Use `pip.index_url` and `pip.extra_index_urls` for HTTPS
+package indexes; credential-bearing URLs and query strings are refused.
+
+Declared environment variables can set application options and build limits. Relative
+`PYTHONPATH` entries are interpreted from the job root. Interpreter, activation,
+package-manager and library-search overrides are reserved for colabcola; credentials
+do not belong in a recipe. An executable missing from the selected environment fails
+instead of falling through to a command from the runtime image.
+
+For named jobs, dependency and isolation settings belong inside each environment.
+Global `environment.dependencies`, requirements, wheels, runtime requirements and
+`isolated_python` cannot be combined with named environments. The optional global
+`environment.python` constraint describes the controller interpreter in Colab, and
+ordinary global `environment.env` values still apply to every step.
+
+### CUDA toolkits and native builds
+
+Declare toolkit packages in the environment that builds or runs the extension.
+For example, a CUDA 12.8 environment can select a matching toolkit explicitly:
+
+```toml
+[environments.gpu]
+python = "3.10"
+cuda = "12.8"
+
+[environments.gpu.conda]
+channels = ["nvidia", "conda-forge"]
+packages = ["cuda-toolkit=12.8"]
+```
+
+`cuda` is a validation expectation; it does not install a toolkit or choose a
+PyTorch build. Declare compatible framework packages in that environment's pip or
+conda specification. Colabcola locates `nvcc` inside the environment, checks its
+major/minor version against `cuda`, and checks a CUDA-enabled PyTorch installation
+against that compiler. A missing or mismatched compiler fails during environment
+setup, before a step can accidentally use the host toolkit.
+
+The runtime adds the toolkit's target include directory and installed NVIDIA wheel
+include/library directories to the build environment. It excludes stub libraries
+from runtime library search. This supports extensions whose framework headers also
+include CUDA library headers. GPU driver support and the extension's own source
+compatibility remain separate requirements; verify those with a small compilation
+test on the intended GPU.
+
+### Evidence, deadlines and recovery
+
+The frozen manifest and prepared plan contain all environment declarations and the
+ordered steps. Preflight verifies that those declarations match the packaged job.
+Environment setup is recorded as its own stage. Resolved interpreter paths, versions,
+installed packages, toolkit facts and setup timing are retained in
+`environments.json` and `result.json`; per-step timing and exit evidence are retained
+in `steps.json` and `result.json`. These metadata files accompany live log snapshots,
+including partial setup or execution failures.
+
+`limits.timeout_seconds` bounds the workload sequence. `limits.max_seconds` is the
+shared managed budget, including allocation, transfer, environment setup and work.
+Named jobs reserve 30 seconds of that budget for finalization. Choose a total budget
+that allows package downloads and native builds; exhausting setup time prevents the
+steps from starting. The existing supervisor and recovery limits still apply.
+
+Each run currently builds fresh environments. Persistent environment and native-wheel
+caching is a separate feature. Completed output groups work across the ordered steps:
+write each marker only after its declared files are complete. A later failed step
+does not turn unfinished outputs into completed artifacts.
+
+The [two-environment worked example](../examples/multi_environment/README.md) has a
+complete CPU recipe and expected recovered results. Its CUDA acceptance is separate.

@@ -194,8 +194,20 @@ def package(args):
         raise SpecError('--timeout must be positive and below --max-seconds to leave time for recovery')
     if args.resume_arg and (not args.checkpoint or not args.resume_arg.startswith('--')):
         raise SpecError('--resume-arg requires --checkpoint and an option beginning with --')
+    from .environments import normalize_environments, normalize_steps
+    named = bool(getattr(args, 'environments', None))
+    environments = normalize_environments(args.environments) if named else {}
+    steps = normalize_steps(args.steps, environments) if named else []
+    if named and (args.requirements or args.wheel or args.runtime_requirement or args.isolated_python or getattr(args, 'extra_requirements', [])):
+        raise SpecError('named environments cannot be combined with global dependency, wheel or isolation settings')
+    if named and args.resume_arg:
+        raise SpecError('named steps read COLABCOLA_RESUME_MANIFEST; resume-arg is not supported')
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
-    if getattr(args, 'command_arrays', None):
+    if named and (command or args.commands or args.command_strings):
+        raise SpecError('named steps cannot be overridden by command arguments')
+    if named:
+        commands = [step['command'] for step in steps]
+    elif getattr(args, 'command_arrays', None):
         commands = args.command_arrays
     elif args.commands:
         if command: raise SpecError('use either --commands or a command, not both')
@@ -203,29 +215,33 @@ def package(args):
     else: commands = [command]
     if not isinstance(commands,list) or not commands or len(commands)>128:
         raise SpecError('commands must be a nonempty array of at most 128 argv arrays')
-    normalized = []; console_commands = []
-    for cmd in commands:
-        if not isinstance(cmd,list) or not cmd or any(not isinstance(a,str) or '\0' in a for a in cmd):
-            raise SpecError('each command must be a nonempty string argv array without NUL bytes')
-        cmd = list(cmd)
-        python_command = bool(re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?', cmd[0]))
-        if python_command: cmd.pop(0)
-        if not cmd: raise SpecError('Python command needs a script or -m MODULE')
-        console = not python_command and cmd[0] != '-m' and not cmd[0].endswith('.py')
-        if console:
-            if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', cmd[0]) or cmd[0] in ('bash','sh','cmd','powershell','pwsh'):
-                raise SpecError('use a portable installed console command; shell programs are not supported')
-        elif cmd[0] != '-m' and not cmd[0].endswith('.py'):
-            raise SpecError('Python commands must run a .py script or -m MODULE')
-        if cmd[0]=='-m' and (len(cmd)<2 or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*',cmd[1])):
-            raise SpecError('python -m needs a dotted module name')
-        console_commands.append(console)
-        normalized.append(cmd)
+    if named:
+        normalized = [list(command) for command in commands]
+        console_commands = [False] * len(commands)
+    else:
+        normalized = []; console_commands = []
+        for cmd in commands:
+            if not isinstance(cmd,list) or not cmd or any(not isinstance(a,str) or '\0' in a for a in cmd):
+                raise SpecError('each command must be a nonempty string argv array without NUL bytes')
+            cmd = list(cmd)
+            python_command = bool(re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?', cmd[0]))
+            if python_command: cmd.pop(0)
+            if not cmd: raise SpecError('Python command needs a script or -m MODULE')
+            console = not python_command and cmd[0] != '-m' and not cmd[0].endswith('.py')
+            if console:
+                if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', cmd[0]) or cmd[0] in ('bash','sh','cmd','powershell','pwsh'):
+                    raise SpecError('use a portable installed console command; shell programs are not supported')
+            elif cmd[0] != '-m' and not cmd[0].endswith('.py'):
+                raise SpecError('Python commands must run a .py script or -m MODULE')
+            if cmd[0]=='-m' and (len(cmd)<2 or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*',cmd[1])):
+                raise SpecError('python -m needs a dotted module name')
+            console_commands.append(console)
+            normalized.append(cmd)
     if len(normalized)>1 and args.resume_arg:
         raise SpecError('resume-arg currently supports one command; sequences restart from their first command')
     project = _safe_input(args.project) if args.project else None
     if project and not project.is_dir(): raise SpecError('--project must be a directory')
-    if not project and (len(normalized)>1 or normalized[0][0]=='-m'):
+    if not project and (named or len(normalized)>1 or normalized[0][0]=='-m'):
         raise SpecError('module and sequence packaging requires --project')
     files = {}
     def add(source,target,role):
@@ -247,7 +263,7 @@ def package(args):
             if source in (args.commands,): continue
             if getattr(args, 'include', []) and not any(fnmatch.fnmatchcase(rel, pat) for pat in args.include): continue
             add(source,rel,'source')
-    for cmd, console in zip(normalized, console_commands):
+    for cmd, console in ([] if named else zip(normalized, console_commands)):
         if console: continue
         if cmd[0]=='-m':
             module = cmd[1].replace('.','/')
@@ -315,11 +331,19 @@ def package(args):
             dest=temporary/target;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,dest)
             payload.append({'role':role,'source':assets.name+'/'+target,'target':target})
         generated=temporary/'_colabcola';generated.mkdir()
-        (generated/'launch.py').write_text(_LAUNCHER,encoding='utf-8',newline='\n')
-        command_config={'commands':normalized,'resume_arg':args.resume_arg}
-        if any(console_commands): command_config['console_commands']=console_commands
+        if named:
+            module_root = Path(__file__).parent
+            shutil.copyfile(module_root/'step_launcher.py', generated/'launch.py')
+            shutil.copyfile(module_root/'environment_runtime.py', generated/'environment_runtime.py')
+            command_config = {'steps': steps}
+            generated_files = ('launch.py', 'environment_runtime.py', 'commands.json')
+        else:
+            (generated/'launch.py').write_text(_LAUNCHER,encoding='utf-8',newline='\n')
+            command_config={'commands':normalized,'resume_arg':args.resume_arg}
+            if any(console_commands): command_config['console_commands']=console_commands
+            generated_files = ('launch.py', 'commands.json')
         (generated/'commands.json').write_text(json.dumps(command_config,sort_keys=True)+'\n',encoding='utf-8',newline='\n')
-        for filename in ('launch.py','commands.json'):
+        for filename in generated_files:
             payload.append({'role':'source','source':assets.name+'/_colabcola/'+filename,'target':'_colabcola/'+filename})
         if argv is not None: (generated/'drive-helper.json').write_text(json.dumps(argv)+'\n',encoding='utf-8')
         job={'schema_version':1,'name':name,'payload':payload,
@@ -331,6 +355,9 @@ def package(args):
             'outputs':[{'pattern':pat,'required':bool(args.artifact),'maximum_bytes':args.artifact_max_bytes} for pat in (args.artifact or ['outputs/**'])],
             'limits':{'maximum_file_count':max(100,len(payload)+len(remote_inputs)+10)},
             'managed_recovery':{'checkpoint_pattern':args.checkpoint or 'outputs/_colabcola/disabled-*.json','log_patterns':args.log}}
+        if named:
+            job['environments'] = environments
+            job['steps'] = steps
         if args.artifact_group: job['managed_recovery']['artifact_groups']=args.artifact_group
         if remote_inputs: job['remote_inputs']=remote_inputs
         if args.isolated_python:
@@ -353,7 +380,8 @@ def package(args):
                 'execution_config':str(config_path) if config else None,
                 'requested_gpu':args.gpu,'runtime_version':args.runtime_version,
                 'provider_backend':args.provider_backend,'high_mem':args.high_mem,
-                'dependency_policy':'remote index resolution; use hashed install requirements for locked dependencies' if pip_requirements else 'declared runtime constraints / hashed installs',
+                'dependency_policy':('named environment conda/pip resolution on the runtime' if named else
+                    'remote index resolution; use hashed install requirements for locked dependencies' if pip_requirements else 'declared runtime constraints / hashed installs'),
                 'recovery':'checkpoint manifest plus resume argument' if args.resume_arg else 'restart commands from the beginning; no in-memory state capture'}
     finally:
         if not committed:

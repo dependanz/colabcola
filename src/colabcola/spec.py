@@ -144,6 +144,27 @@ class ManagedRecoverySpec:
 
 
 @dataclass(frozen=True, slots=True)
+class EnvironmentSpec:
+    name: str
+    definition_json: str
+
+    def mapping(self):
+        return json.loads(self.definition_json)
+
+
+@dataclass(frozen=True, slots=True)
+class StepSpec:
+    name: str
+    environment: str
+    command: tuple[str, ...]
+    cwd: str
+
+    def mapping(self):
+        return {"name": self.name, "environment": self.environment,
+                "command": list(self.command), "cwd": self.cwd}
+
+
+@dataclass(frozen=True, slots=True)
 class JobSpec:
     schema_version: int
     name: str
@@ -158,6 +179,8 @@ class JobSpec:
     durable_checkpoints: DurableCheckpointSpec | None = None
     remote_inputs: tuple[RemoteInputSpec, ...] = ()
     managed_recovery: ManagedRecoverySpec | None = None
+    environments: tuple[EnvironmentSpec, ...] = ()
+    steps: tuple[StepSpec, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -178,7 +201,7 @@ class JobSpec:
                 "outputs",
                 "limits",
             },
-            optional={"durable_checkpoints", "remote_inputs", "managed_recovery"},
+            optional={"durable_checkpoints", "remote_inputs", "managed_recovery", "environments", "steps"},
             where="JobSpec",
         )
 
@@ -214,6 +237,22 @@ class JobSpec:
         runtime = _parse_runtime(root["runtime"])
         resources = _parse_resources(root["resources"])
         run = _parse_run(root["run"])
+        environments = ()
+        steps = ()
+        if ("environments" in root) != ("steps" in root):
+            raise SpecError("environments and steps must be declared together")
+        if "environments" in root:
+            from .environments import normalize_environments, normalize_steps, normalize_environment_variables
+            definitions = normalize_environments(root["environments"])
+            ordered = normalize_steps(root["steps"], definitions)
+            environments = tuple(EnvironmentSpec(key, json.dumps(item, sort_keys=True)) for key, item in definitions.items())
+            steps = tuple(StepSpec(item["name"], item["environment"], tuple(item["command"]), item["cwd"]) for item in ordered)
+            if (python.isolation is not None or python.runtime_requirements or python.install_requirements
+                    or python.pip_requirements or python.embedded_wheels):
+                raise SpecError("named environments cannot be combined with global Python dependency or isolation settings")
+            normalize_environment_variables(dict(run.environment), "run.environment")
+            if entrypoint.path != "_colabcola/launch.py" or entrypoint.cwd != "." or entrypoint.argv:
+                raise SpecError("named steps require the generated _colabcola/launch.py entrypoint with cwd '.' and no argv")
         if python.isolation is not None:
             forbidden = [key for key, _ in run.environment
                          if (key.startswith(("PYTHON", "PIP_")) and key != "PYTHONUNBUFFERED")
@@ -249,6 +288,8 @@ class JobSpec:
             limits=limits,
             durable_checkpoints=durable_checkpoints,
             remote_inputs=remote_inputs,
+            environments=environments,
+            steps=steps,
             managed_recovery=(
                 _parse_managed_recovery(root["managed_recovery"])
                 if "managed_recovery" in root else None

@@ -1582,8 +1582,182 @@ if _COLABCOLA_TERMINAL_STATE is None and COLABCOLA_MANIFEST["python"].get("isola
 '''
 
 
-def runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+_NAMED_ENVIRONMENT_INITIALIZATION = r'''
+_COLABCOLA_NAMED_ENVIRONMENT_STAGE = {"state": "not_run", "duration_seconds": 0.0}
+_COLABCOLA_NAMED_SHARED_DEADLINE = None
+_COLABCOLA_NAMED_CONFIG_PATH = COLABCOLA_RESULT_ROOT / "environments-runtime.json"
+_COLABCOLA_STEP_FACTS = {"state": "not_run", "steps": [], "failed_step": None}
+'''
+
+
+_NAMED_ENVIRONMENT_SETUP = r'''
+# Build all declared environments as a separate stage before any workload step.
+if _COLABCOLA_TERMINAL_STATE is None:
+    environment_started = time.monotonic()
+    _COLABCOLA_NAMED_ENVIRONMENT_STAGE = {
+        "state": "running", "started_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "duration_seconds": 0.0,
+    }
+    try:
+        lifecycle_deadline = globals().get("COLABCOLA_LIFECYCLE_DEADLINE")
+        if lifecycle_deadline is not None:
+            # The lifecycle limit is an absolute epoch time. Preserve time for
+            # output packaging, upload and owned-runtime cleanup.
+            _COLABCOLA_NAMED_SHARED_DEADLINE = float(lifecycle_deadline) - 30.0
+            environment_deadline = _COLABCOLA_NAMED_SHARED_DEADLINE
+        else:
+            # Standalone notebooks also bound setup; workload execution gets a
+            # separate timeout_seconds allowance after setup finishes.
+            environment_deadline = time.time() + COLABCOLA_MANIFEST["run"]["timeout_seconds"]
+        if time.time() >= environment_deadline:
+            raise TimeoutError("environment setup has no time remaining before finalization reserve")
+        environment_root = COLABCOLA_CONTENT_ROOT / "colabcola" / "environments" / COLABCOLA_JOB_ID
+        if environment_root.exists():
+            shutil.rmtree(environment_root)
+        descriptors, environment_facts = _colabcola_prepare_environments(
+            COLABCOLA_MANIFEST["environments"], COLABCOLA_MANIFEST["environment_manager"],
+            COLABCOLA_JOB_ROOT, environment_root, COLABCOLA_RESULT_ROOT,
+            deadline=environment_deadline,
+        )
+        _COLABCOLA_ENVIRONMENT_FACTS["environments"] = environment_facts
+        if time.time() >= environment_deadline:
+            raise TimeoutError("environment setup exhausted the time available before finalization reserve")
+        config = {
+            "schema": 1, "job_id": COLABCOLA_JOB_ID,
+            "job_root": str(COLABCOLA_JOB_ROOT), "result_root": str(COLABCOLA_RESULT_ROOT),
+            "environments": descriptors, "env": COLABCOLA_MANIFEST["run"]["environment"],
+            "steps": COLABCOLA_MANIFEST["steps"], "deadline": None,
+        }
+        config_temporary = _COLABCOLA_NAMED_CONFIG_PATH.with_suffix(".json.tmp")
+        config_temporary.write_text(json.dumps(config, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(config_temporary, _COLABCOLA_NAMED_CONFIG_PATH)
+        _COLABCOLA_NAMED_ENVIRONMENT_STAGE["state"] = "success"
+    except Exception as exc:
+        _COLABCOLA_NAMED_ENVIRONMENT_STAGE["state"] = "failed"
+        _COLABCOLA_NAMED_ENVIRONMENT_STAGE["error"] = _colabcola_sanitize_exception(exc)
+        try:
+            evidence_path = COLABCOLA_RESULT_ROOT / "environments.json"
+            if evidence_path.is_file() and not evidence_path.is_symlink() and evidence_path.stat().st_size <= 8 * 1024 * 1024:
+                partial = json.loads(evidence_path.read_text(encoding="utf-8"))
+                if isinstance(partial, dict) and partial.get("schema") == 1:
+                    _COLABCOLA_ENVIRONMENT_FACTS["environments"] = partial
+        except Exception:
+            pass
+        _colabcola_fail("environment", "environment_failed", exc)
+        failed_environment = _COLABCOLA_ENVIRONMENT_FACTS.get("environments", {}).get("failed_environment")
+        if failed_environment in COLABCOLA_MANIFEST["environments"]:
+            _COLABCOLA_FAILURE["environment"] = failed_environment
+            _COLABCOLA_NAMED_ENVIRONMENT_STAGE["failed_environment"] = failed_environment
+    finally:
+        _COLABCOLA_NAMED_ENVIRONMENT_STAGE["duration_seconds"] = max(0.0, time.monotonic() - environment_started)
+        _COLABCOLA_NAMED_ENVIRONMENT_STAGE["ended_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+'''
+
+
+_NAMED_EXECUTION_PREPARE = r'''
+        workload_deadline = time.time() + COLABCOLA_MANIFEST["run"]["timeout_seconds"]
+        if _COLABCOLA_NAMED_SHARED_DEADLINE is not None:
+            workload_deadline = min(workload_deadline, _COLABCOLA_NAMED_SHARED_DEADLINE)
+        if time.time() >= workload_deadline:
+            raise TimeoutError("no workload time remains before finalization reserve")
+        named_config = json.loads(_COLABCOLA_NAMED_CONFIG_PATH.read_text(encoding="utf-8"))
+        named_config["deadline"] = workload_deadline
+        config_temporary = _COLABCOLA_NAMED_CONFIG_PATH.with_suffix(".json.tmp")
+        config_temporary.write_text(json.dumps(named_config, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(config_temporary, _COLABCOLA_NAMED_CONFIG_PATH)
+        environment["COLABCOLA_ENVIRONMENTS_CONFIG"] = str(_COLABCOLA_NAMED_CONFIG_PATH)
+'''
+
+
+_NAMED_EXECUTION_EVIDENCE = r'''
+# A zero launcher exit alone does not prove that every declared step ran.
+if _COLABCOLA_PROCESS_EXIT_CODE is not None:
+    try:
+        evidence_path = COLABCOLA_RESULT_ROOT / "steps.json"
+        if (not evidence_path.is_file() or evidence_path.is_symlink()
+                or evidence_path.stat().st_size > 8 * 1024 * 1024):
+            raise RuntimeError("ordered-step evidence is missing or unsafe")
+        step_document = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if (not isinstance(step_document, dict) or type(step_document.get("schema")) is not int or step_document["schema"] != 1
+                or step_document.get("job_id") != COLABCOLA_JOB_ID):
+            raise RuntimeError("ordered-step evidence has an unexpected identity")
+        if (step_document.get("state") not in {"running", "success", "failed"}
+                or step_document.get("failed_step") not in {None, *(step["name"] for step in COLABCOLA_MANIFEST["steps"])}):
+            raise RuntimeError("ordered-step evidence has an unexpected execution state")
+        records = step_document.get("steps")
+        if not isinstance(records, list) or len(records) != len(COLABCOLA_MANIFEST["steps"]):
+            raise RuntimeError("ordered-step evidence does not cover the declared steps")
+        for declared, record in zip(COLABCOLA_MANIFEST["steps"], records, strict=True):
+            if (not isinstance(record, dict)
+                    or any(record.get(key) != declared[key] for key in ("name", "environment", "command", "cwd"))
+                    or record.get("state") not in {"pending", "running", "success", "failed", "not_run"}):
+                raise RuntimeError("ordered-step evidence disagrees with the frozen recipe")
+        _COLABCOLA_STEP_FACTS = step_document
+        if _COLABCOLA_STEP_FACTS.get("failed_step") is None and _COLABCOLA_TERMINAL_STATE is not None:
+            _COLABCOLA_STEP_FACTS["failed_step"] = next(
+                (record["name"] for record in records if record["state"] in {"running", "failed"}), None)
+        if _COLABCOLA_TERMINAL_STATE is None and (
+                step_document.get("state") != "success" or step_document.get("failed_step") is not None
+                or any(record["state"] != "success" or type(record.get("exit_code")) is not int
+                       or record["exit_code"] != 0 for record in records)):
+            raise RuntimeError("ordered-step execution did not finish successfully")
+    except Exception as exc:
+        _COLABCOLA_STEP_FACTS["evidence_error"] = _colabcola_sanitize_exception(exc)
+        _colabcola_fail("execution", "job_failed", exc)
+if _COLABCOLA_FAILURE is not None and _COLABCOLA_STEP_FACTS.get("failed_step"):
+    _COLABCOLA_FAILURE["step"] = _COLABCOLA_STEP_FACTS["failed_step"]
+
+'''
+
+
+def _named_execution_source() -> str:
+    """Add named-step orchestration without changing legacy generated cells."""
+    source = _EXECUTION_SOURCE.replace(
+        '        environment["COLABCOLA_SEED"] = str(COLABCOLA_MANIFEST["run"]["seed"])\n',
+        '        environment["COLABCOLA_SEED"] = str(COLABCOLA_MANIFEST["run"]["seed"])\n'
+        + _NAMED_EXECUTION_PREPARE,
+        1,
+    )
+    legacy_deadline = '''            deadline = time.monotonic() + COLABCOLA_MANIFEST["run"][
+                "timeout_seconds"
+            ]
+            lifecycle_deadline = globals().get("COLABCOLA_LIFECYCLE_DEADLINE")
+            if lifecycle_deadline is not None:
+                deadline = min(deadline, time.monotonic() + max(0, lifecycle_deadline - time.time() - 2))'''
+    source = source.replace(legacy_deadline,
+        "            deadline = time.monotonic() + max(0.0, workload_deadline - time.time())", 1)
+    source = source.replace("if _COLABCOLA_DRIVE_AUTH_CONTEXT is not None:\n",
+        _NAMED_EXECUTION_EVIDENCE + "if _COLABCOLA_DRIVE_AUTH_CONTEXT is not None:\n", 1)
+    source = source.replace('    if _COLABCOLA_DURABLE_CHECKPOINT_FACTS is not None:\n',
+        '    value["stages"] = {"environment": _COLABCOLA_NAMED_ENVIRONMENT_STAGE}\n'
+        '    value["steps"] = _COLABCOLA_STEP_FACTS["steps"]\n'
+        '    value["failed_step"] = _COLABCOLA_STEP_FACTS.get("failed_step")\n'
+        '    if _COLABCOLA_STEP_FACTS.get("evidence_error"):\n'
+        '        value["step_evidence_error"] = _COLABCOLA_STEP_FACTS["evidence_error"]\n'
+        '    if _COLABCOLA_DURABLE_CHECKPOINT_FACTS is not None:\n', 1)
+    return source
+
+
+def _named_runtime_sources(*, drive: bool, remote_inputs: bool) -> tuple[tuple[str, str], ...]:
+    helper = Path(__file__).with_name("environment_runtime.py").read_text(encoding="utf-8-sig")
+    remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
+    cells = [
+        ("preflight", (_GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE + "\n" + _NAMED_ENVIRONMENT_INITIALIZATION).strip()),
+    ]
+    if drive:
+        cells.append(("acquisition", _DRIVE_ACQUISITION_SOURCE.strip()))
+    cells.extend([
+        ("extraction", ((_DRIVE_EXTRACTION_SOURCE if drive else _EXTRACTION_SOURCE) + "\n" + remote).strip()),
+        ("environment", (helper + "\n" + _NAMED_ENVIRONMENT_SETUP).strip()),
+        ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _named_execution_source()).strip()),
+    ])
+    return tuple(cells)
+
+
+def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False) -> tuple[tuple[str, str], ...]:
     """Preserve cell groups while omitting unused remote-input code."""
+    if named_environments:
+        return _named_runtime_sources(drive=False, remote_inputs=remote_inputs)
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
@@ -1593,8 +1767,10 @@ def runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[s
     )
 
 
-def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True) -> tuple[tuple[str, str], ...]:
+def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False) -> tuple[tuple[str, str], ...]:
     """Preserve controller cell groups while omitting unused download code."""
+    if named_environments:
+        return _named_runtime_sources(drive=True, remote_inputs=remote_inputs)
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),

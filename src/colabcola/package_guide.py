@@ -18,7 +18,7 @@ from .errors import SpecError
 
 _FIELDS = {
     '': {'commands','project','include','exclude','name','output','inputs','remote_input_files',
-         'environment','compute','outputs','limits','execution'},
+         'environment','environments','steps','compute','outputs','limits','execution'},
     'environment': {'python','requirements','dependencies','runtime_requirements','wheels','isolated_python','env'},
     'compute': {'gpu','minimum_gpu_memory_gib','minimum_gpu_memory_bytes','high_mem'},
     'outputs': {'include','maximum_bytes','checkpoints','resume_arg','logs','completed'},
@@ -52,6 +52,13 @@ def _validate(data):
             if extra: raise SpecError(f'unknown answer key: {section + "." if section else ""}{sorted(extra)[0]}')
     for key in ('include','exclude','remote_input_files'):
         if key in data: _strings(data[key],key)
+    if ('environments' in data) != ('steps' in data):
+        raise SpecError('environments and steps must be declared together')
+    if 'environments' in data:
+        from .environments import normalize_environments, normalize_steps
+        normalize_steps(data['steps'], normalize_environments(data['environments']))
+        if 'commands' in data:
+            raise SpecError('use named steps or commands, not both')
     env=data.get('environment',{})
     for key in ('requirements','dependencies','runtime_requirements','wheels'):
         if key in env: _strings(env[key],'environment.'+key)
@@ -164,10 +171,17 @@ def guide(args, arguments, cli_parser):
         try: value=input(f'{label} [{default}]: ').strip()
         except EOFError: raise SpecError('missing answer: '+label+'; stdin ended. Supply --colaml or use an interactive terminal') from None
         return value or str(default)
+    from .environments import normalize_environments, normalize_steps
+    named = 'environments' in data
+    args.environments = normalize_environments(data['environments']) if named else {}
+    args.steps = normalize_steps(data['steps'], args.environments) if named else []
     command=args.command[1:] if args.command[:1]==['--'] else args.command
+    if named and (command or args.commands or args.command_strings):
+        raise SpecError('named steps cannot be overridden by command arguments')
     if args.command_strings and (command or args.commands): raise SpecError('use --command, --commands or trailing argv, not a combination')
     if command and args.commands: raise SpecError('use --commands or trailing argv, not both')
-    if args.command_strings: commands=[_split_command(v) for v in args.command_strings]
+    if named: commands=[step['command'] for step in args.steps]
+    elif args.command_strings: commands=[_split_command(v) for v in args.command_strings]
     elif command: commands=[command]
     elif args.commands: commands=json.loads(args.commands.read_text(encoding='utf-8-sig'))
     else: commands=get('','commands',None)
@@ -221,24 +235,29 @@ def guide(args, arguments, cli_parser):
         args.data.append(str(source)+'='+target);input_records.append({'source':str(source),'target':target})
     # Rewrite only actual path arguments covered by an explicit input mapping.
     # Command executables and script paths are handled by the general packager.
-    for cmd in commands:
+    for command_index, cmd in enumerate(commands):
+        step_cwd = args.steps[command_index]['cwd'] if named else '.'
+        command_root = root/step_cwd
         start=3 if len(cmd)>2 and cmd[1]=='-m' else 2 if re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?',cmd[0]) else 1
         for i in range(start,len(cmd)):
             token=cmd[i]
             flag,separator,value=token.partition('=') if token.startswith('--') else ('','','')
             candidate=value if separator else token
             if candidate.startswith('-'): continue
-            path=_path(candidate,root)
+            path=_path(candidate,command_root)
             if Path(candidate).is_absolute() and path.exists():
                 try: relative=path.relative_to(root)
                 except ValueError: pass
                 else:
-                    value=relative.as_posix()
+                    import posixpath
+                    value=posixpath.relpath(relative.as_posix(), step_cwd)
                     cmd[i]=flag+'='+value if separator else value
             for item in sorted(input_records,key=lambda x:len(x['source']),reverse=True):
                 try: relative=path.relative_to(item['source'])
                 except ValueError: continue
                 target=item['target']+('/'+relative.as_posix() if relative.parts else '')
+                import posixpath
+                target=posixpath.relpath(target, step_cwd)
                 cmd[i]=flag+'='+target if separator else target
                 break
     assign('requirements','environment','requirements',lambda v:[_path(x,base) for x in _strings(v,'environment.requirements')])
@@ -247,7 +266,7 @@ def guide(args, arguments, cli_parser):
     assign('remote_inputs','','remote_input_files',lambda v:[_path(x,base) for x in _strings(v,'remote_input_files')])
     declared=bool({'requirements','runtime_requirement'} & explicit) or any(k in data.get('environment',{}) for k in ('requirements','dependencies','runtime_requirements'))
     dependencies=_strings(get('environment','dependencies',[]),'environment.dependencies')
-    if not declared:
+    if not declared and not named:
         if info['requirements']:
             selected=info['requirements'][0]
             # Multiple declarations require a choice rather than merging incompatible locks.
@@ -268,13 +287,13 @@ def guide(args, arguments, cli_parser):
         if req.url: raise SpecError('URL dependencies are not supported; use remote inputs or an embedded wheel')
     args.extra_requirements=dependencies
     assign('requires_python','environment','python')
-    if 'requires_python' not in explicit and get('environment','python') is _MISSING:
+    if not named and 'requires_python' not in explicit and get('environment','python') is _MISSING:
         args.requires_python=info['project_metadata'].get('requires-python',args.requires_python)
     assign('isolated_python','environment','isolated_python')
     if args.isolated_python not in (None,'3.12'): raise SpecError('isolated Python currently supports 3.12 only')
     assign('env','environment','env',lambda v:[k+'='+value for k,value in v.items()])
     env=dict(v.split('=',1) for v in args.env)
-    if info['pythonpath'] and 'PYTHONPATH' not in env: env['PYTHONPATH']=':'.join(info['pythonpath'])
+    if not named and info['pythonpath'] and 'PYTHONPATH' not in env: env['PYTHONPATH']=':'.join(info['pythonpath'])
     args.env=[key+'='+value for key,value in env.items()]
     args.allow_installed_modules=True
     if 'gpu' not in explicit:
@@ -323,6 +342,9 @@ def guide(args, arguments, cli_parser):
     args.output=_path(args.output,cwd)
     if args.token_command: args.token_command=_path(args.token_command,cwd)
     args.command_arrays=commands
+    if named:
+        for step, command in zip(args.steps, commands):
+            step['command'] = command
     # Persist fully resolved answers. No host credential or executable inspection.
     resolved={'commands':commands,'project':str(root),'include':args.include,'exclude':args.exclude,
               'output':str(_path(args.output,cwd)),'inputs':input_records,'remote_input_files':[str(p) for p in args.remote_inputs],
@@ -333,6 +355,10 @@ def guide(args, arguments, cli_parser):
                  'checkpoints':[args.checkpoint] if args.checkpoint else [],'logs':args.log},
               'limits':{'timeout_seconds':args.timeout,'max_seconds':args.max_seconds,'max_runtimes':args.max_runtimes,'seed':args.seed},
               'execution':{'runtime_version':args.runtime_version,'provider_backend':args.provider_backend}}
+    if named:
+        del resolved['commands']
+        resolved['environments'] = args.environments
+        resolved['steps'] = args.steps
     if args.artifact_group: resolved['outputs']['completed']=args.artifact_group
     if args.name: resolved['name']=args.name
     if args.isolated_python: resolved['environment']['isolated_python']=args.isolated_python

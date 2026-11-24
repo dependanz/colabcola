@@ -80,6 +80,7 @@ def build_bundle(invocation: JobInvocation) -> Bundle:
 
     expanded = _expand_payload(invocation.spec)
     _validate_runtime_targets(invocation.spec, expanded)
+    _validate_environment_targets(invocation.spec, expanded)
     _reject_remote_input_conflicts(invocation.spec, expanded)
     archive_bytes, records = _write_archive(expanded)
     bundle_warnings = archive_size_warnings(
@@ -203,6 +204,50 @@ def verify_bundle(bundle: Bundle) -> None:
         raise
     except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
         raise BundleError(f"archive is not a valid deterministic ZIP: {exc}") from exc
+
+
+def _validate_environment_targets(spec, expanded):
+    if not spec.environments:
+        return
+    from .environments import REQUIREMENT_FILE_BYTES, requirement_file_packages, step_script_path
+    files = {entry.path: entry for entry in expanded}
+    for target in ("_colabcola/launch.py", "_colabcola/environment_runtime.py", "_colabcola/commands.json"):
+        if target not in files:
+            raise SpecError("named environments require packaged generated file: " + target)
+    config_file = files["_colabcola/commands.json"].source
+    if config_file.stat().st_size > 1024 * 1024:
+        raise SpecError("generated step configuration is too large")
+    try:
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise SpecError("invalid generated step configuration") from exc
+    if config != {"steps": [step.mapping() for step in spec.steps]}:
+        raise SpecError("generated commands.json does not match the declared ordered steps")
+    for step in spec.steps:
+        target = step_script_path(step.mapping())
+        if target is not None and target not in files:
+            raise SpecError("step script is not in the packaged project: " + target)
+        if step.cwd != "." and not any(p.startswith(step.cwd + "/") for p in files):
+            raise SpecError("step cwd is not in the packaged project: " + step.cwd)
+    for environment in spec.environments:
+        definition = environment.mapping()
+        packages = list(definition["pip"]["packages"])
+        for target in definition["pip"]["requirements"]:
+            if target not in files:
+                raise SpecError("environment requirements file is not packaged: " + target)
+            source = files[target].source
+            if source.stat().st_size > REQUIREMENT_FILE_BYTES:
+                raise SpecError("environment requirements file exceeds the 1 MiB limit: " + target)
+            try:
+                text = source.read_text(encoding="utf-8-sig")
+            except UnicodeError as exc:
+                raise SpecError("environment requirements must be UTF-8: " + target) from exc
+            packages.extend(requirement_file_packages(text, target))
+        for package in packages:
+            if package.startswith("./"):
+                target = package[2:]
+                if not any(path == target or path.startswith(target + "/") for path in files):
+                    raise SpecError("environment local dependency is not packaged: " + target)
 
 
 def _expand_payload(spec: JobSpec) -> tuple[_ExpandedFile, ...]:
@@ -514,6 +559,11 @@ def _portable_manifest(
             "timeout_seconds": spec.run.timeout_seconds,
         },
     }
+    if spec.environments:
+        from .environment_profiles import MICROMAMBA
+        manifest["environments"] = {environment.name: environment.mapping() for environment in spec.environments}
+        manifest["steps"] = [step.mapping() for step in spec.steps]
+        manifest["environment_manager"] = dict(MICROMAMBA)
     if spec.python.isolation is not None:
         from dataclasses import asdict
         manifest["python"]["isolation"] = asdict(spec.python.isolation)

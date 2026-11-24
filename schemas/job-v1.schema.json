@@ -122,6 +122,25 @@
           }
         }
       }
+    },
+    "environments": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/environmentName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/environment"
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
     }
   },
   "additionalProperties": false,
@@ -512,6 +531,175 @@
         }
       },
       "additionalProperties": false
+    },
+    "environmentName": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "python"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "python": {
+          "type": "string",
+          "pattern": "^3\\.(?:[89]|[1-9][0-9])(?:\\.[0-9]+)?$"
+        },
+        "cuda": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*\\.[0-9]+$"
+        },
+        "conda": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channels": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1024,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "packages": {
+              "$ref": "#/$defs/nonemptyStringArray"
+            }
+          }
+        },
+        "pip": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "packages": {
+              "$ref": "#/$defs/nonemptyStringArray"
+            },
+            "requirements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/portablePath"
+              }
+            },
+            "index_url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "extra_index_urls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            },
+            "no_build_isolation": {
+              "type": "boolean"
+            }
+          }
+        },
+        "env": {
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "name",
+        "environment",
+        "command"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/environmentName"
+        },
+        "environment": {
+          "$ref": "#/$defs/environmentName"
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "const": "."
+            },
+            {
+              "$ref": "#/$defs/portablePath"
+            }
+          ]
+        }
+      }
     }
-  }
+  },
+  "dependentRequired": {
+    "environments": [
+      "steps"
+    ],
+    "steps": [
+      "environments"
+    ]
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "environments"
+        ]
+      },
+      "then": {
+        "properties": {
+          "entrypoint": {
+            "properties": {
+              "path": {
+                "const": "_colabcola/launch.py"
+              },
+              "cwd": {
+                "const": "."
+              },
+              "argv": {
+                "maxItems": 0
+              }
+            }
+          },
+          "python": {
+            "not": {
+              "required": [
+                "isolation"
+              ]
+            },
+            "properties": {
+              "runtime_requirements": {
+                "maxItems": 0
+              },
+              "install_requirements": {
+                "maxItems": 0
+              },
+              "embedded_wheels": {
+                "maxItems": 0
+              },
+              "pip_requirements": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
