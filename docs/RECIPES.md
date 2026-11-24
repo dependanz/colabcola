@@ -221,4 +221,8 @@ write each marker only after its declared files are complete. A later failed ste
 does not turn unfinished outputs into completed artifacts.
 
 The [two-environment worked example](../examples/multi_environment/README.md) has a
-complete CPU recipe and expected recovered results. Its CUDA acceptance is separate.
+complete CPU recipe and expected recovered results. The separate
+[CUDA environment example](../examples/cuda_environment/README.md) builds and runs
+a small PyTorch CUDA extension with an environment-local toolkit, records compiler
+and header selection, and verifies the recovered results. Its acceptance check
+also confirms that the runtime's host toolkit is newer than the selected toolkit.

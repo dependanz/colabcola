@@ -1,0 +1,56 @@
+name = "cuda-environment-example"
+project = "."
+include = ["check_cuda.py", "extension.cu"]
+inputs = []
+
+[environments.cuda]
+python = "3.12"
+cuda = "12.8"
+
+[environments.cuda.conda]
+channels = ["nvidia/label/cuda-12.8.1", "conda-forge"]
+packages = [
+    "cuda-nvcc=12.8.93",
+    "cuda-cudart-dev=12.8.90",
+    "cuda-cccl=12.8.90",
+    "gxx_linux-64=13.3.0",
+    "ninja=1.12.1",
+]
+
+[environments.cuda.pip]
+index_url = "https://download.pytorch.org/whl/cu128"
+packages = ["torch==2.7.1+cu128"]
+
+[environments.cuda.env]
+MAX_JOBS = "1"
+PYTHONUNBUFFERED = "1"
+
+[[steps]]
+name = "build-and-check"
+environment = "cuda"
+command = ["python", "check_cuda.py"]
+
+[compute]
+gpu = "T4"
+high_mem = false
+
+[outputs]
+include = ["outputs/**"]
+maximum_bytes = 1048576
+checkpoints = []
+logs = []
+
+[[outputs.completed]]
+marker = "outputs/cuda/complete.json"
+files = ["acceptance.json"]
+ready_when = { state = "complete" }
+
+[limits]
+timeout_seconds = 600
+max_seconds = 1800
+max_runtimes = 1
+seed = 2026
+
+[execution]
+runtime_version = "latest"
+provider_backend = "legacy"
