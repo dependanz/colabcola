@@ -188,6 +188,7 @@ def _controller_document(
         for group, source in drive_runtime_cell_sources(
             isolated=bool(manifest["python"].get("isolation")),
             remote_inputs=bool(manifest.get("remote_inputs")),
+            named_environments=bool(manifest.get("environments")),
         )
     )
     return {

@@ -253,8 +253,15 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
 
 
 def _manifest_identity(directory, plan):
-    frozen_job(directory,plan)
-    return {"job_id":plan["job_id"]}
+    manifest = frozen_job(directory, plan)
+    for key in ("environments", "steps", "environment_manager"):
+        if plan.get(key) != manifest.get(key):
+            raise LifecycleError("prepared " + key + " differ from the frozen job")
+    detail = {"job_id": plan["job_id"]}
+    if manifest.get("environments"):
+        detail.update({key: manifest[key] for key in
+                       ("environments", "steps", "environment_manager")})
+    return detail
 
 
 _REMEDIATION = {

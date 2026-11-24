@@ -663,6 +663,10 @@ def prepare(args):
             "loss_grace_seconds": 90, "hardware_policy": "gpu-model-v1"}
     if backend == "legacy":
         plan["execution_mode"] = "kernel-v1"
+    if spec.environments:
+        manifest = json.loads(compiled.artifact.bundle.canonical_manifest_bytes)
+        for key in ("environments", "steps", "environment_manager"):
+            plan[key] = manifest[key]
     if spec.managed_recovery.artifact_groups:
         plan["artifact_groups"] = [g.mapping() for g in spec.managed_recovery.artifact_groups]
         plan["artifact_output_rules"] = [{"pattern": o.pattern, "maximum_bytes": o.maximum_bytes} for o in spec.outputs]

@@ -1,0 +1,45 @@
+name = "multi-environment-example"
+project = "."
+include = ["stage.py"]
+inputs = []
+
+[environments.prepare]
+python = "3.10"
+
+[environments.evaluate]
+python = "3.12"
+
+[[steps]]
+name = "prepare"
+environment = "prepare"
+command = ["python", "stage.py", "prepare"]
+
+[[steps]]
+name = "evaluate"
+environment = "evaluate"
+command = ["python", "stage.py", "evaluate"]
+
+[compute]
+gpu = "NONE"
+high_mem = false
+
+[outputs]
+include = ["outputs/**"]
+maximum_bytes = 1048576
+checkpoints = []
+logs = []
+
+[[outputs.completed]]
+marker = "outputs/prepare/complete.json"
+files = ["data.json"]
+ready_when = { state = "complete" }
+
+[limits]
+timeout_seconds = 120
+max_seconds = 1200
+max_runtimes = 1
+seed = 2026
+
+[execution]
+runtime_version = "latest"
+provider_backend = "legacy"

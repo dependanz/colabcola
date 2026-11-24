@@ -144,6 +144,7 @@ def _notebook_document(bundle: Bundle, chunks: tuple[str, ...]) -> dict[str, obj
         for group, source in runtime_cell_sources(
             isolated=bool(manifest["python"].get("isolation")),
             remote_inputs=bool(manifest.get("remote_inputs")),
+            named_environments=bool(manifest.get("environments")),
         )
     )
 

@@ -38,6 +38,8 @@ def bind_job_arguments(
 
     if isinstance(job_args, str):
         raise SpecError("job arguments must be a sequence of strings, not one string")
+    if spec.steps and job_args:
+        raise SpecError("named steps bind each command in the recipe; invocation arguments are not supported")
 
     normalized: list[str] = []
     for index, argument in enumerate(job_args):

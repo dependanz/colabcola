@@ -358,6 +358,12 @@ def run_managed(command, invocation):
     progress.say(f"Provider: Google Colab ({plan.get('provider_backend', 'legacy')}) | "
                  f"runtime {plan.get('runtime_version', 'latest')} | "
                  f"high-memory {'on' if plan.get('high_mem', False) else 'off'}")
+    if plan.get("environments"):
+        progress.say("Environments: " + ", ".join(
+            name + " (Python " + definition["python"] + ")"
+            for name, definition in sorted(plan["environments"].items())))
+        progress.say("Steps: " + " -> ".join(
+            step["name"] + " [" + step["environment"] + "]" for step in plan["steps"]))
     progress.say("Workspace: " + str(directory))
     if command.prepare_only:
         validate_prepared(plan)
