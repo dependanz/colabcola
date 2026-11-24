@@ -83,7 +83,7 @@ class EnvironmentPreflightTests(unittest.TestCase):
         steps = {"steps": [{"name": "prepare", "state": "success", "exit_code": 0}]}
         atomic(result / "environments.json", environments)
         atomic(result / "steps.json", steps)
-        (result / "environment.log").write_text("setup evidence\n", encoding="utf-8")
+        (result / "environment.log").write_bytes(b"setup evidence\n")
         logs = log_members(result, job, [])
         self.assertEqual(json.loads(logs["runtime/environments.json"]), environments)
         self.assertEqual(json.loads(logs["runtime/steps.json"]), steps)
