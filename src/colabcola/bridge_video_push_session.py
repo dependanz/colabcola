@@ -11,6 +11,8 @@ import queue
 from statistics import median
 import time
 
+from .bridge_pipeline_trace import PipelineTrace, validated_credit_snapshot
+
 from .bridge_colab import offer_update
 from .bridge_viewer_stats import LocalFrameTiming, pooled_percentiles
 from .bridge_video_comm_pipeline import validated_remote_video_diagnostics
@@ -121,7 +123,7 @@ def producer_stage_summary(windows: dict) -> dict:
 
 
 def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
-                       *, credits: int = PUSH_CREDITS):
+                       *, credits: int = PUSH_CREDITS, trace_path=None):
     """One host event loop, bounded credits, no per-frame pull or replay."""
     if type(credits) is not int or credits not in PUSH_CREDIT_CHOICES:
         raise ValueError("invalid sender-driven credit configuration")
@@ -136,6 +138,10 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             or getattr(peer, "video_codec", None) != "h264"
             or peer.wire is None or not peer.wire.connection_ready.is_set()):
         raise LifecycleError("push video requires an attached opted-in Comm")
+    if trace_path is not None and target_fps != 30:
+        raise ValueError("pipeline trace requires 30Hz push")
+    trace = (PipelineTrace(trace_path, run_id=peer.run_id)
+             if trace_path is not None else None)
     av, decoder = make_host_decoder()
     gate = VideoSequenceGate()
     input_seq = last_ack = 0
@@ -162,10 +168,17 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
     print(f"[colabcola] v34 sender-driven H.264 Comm; {credits}-credit receive window",
           flush=True)
     offer_update(frames, ("status", f"Push H.264 Comm · {gpu}"))
-    peer._send("video_credit", count=credits)
+    outcome = "failed"
+    phase = "initial_credit"
     try:
+        credit_start = time.perf_counter_ns() if trace else None
+        peer._send("video_credit", count=credits)
+        if trace:
+            trace.add("initial_credit", count=credits, start_ns=credit_start,
+                      end_ns=time.perf_counter_ns())
         while not stopped.is_set() and time.monotonic() < deadline:
             # Synthetic input coalesces; gameplay preserves all key transitions.
+            phase = "host_input"
             pending = []
             if getattr(peer, "application", "synthetic") in ("freedoom", "inputlab"):
                 for _ in range(16):
@@ -189,17 +202,24 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                         (type(callback_ns) is not int or callback_ns <= 0)):
                     raise LifecycleError("invalid local UI event clock")
                 input_seq += 1
+                send_start = time.perf_counter_ns() if trace else None
                 peer.send_input(input_seq, event)
+                if trace:
+                    trace.add("input_sent", input_seq=input_seq, callback_ns=callback_ns,
+                              send_start_ns=send_start, send_end_ns=time.perf_counter_ns(),
+                              outgoing_queue_depth=outgoing.qsize())
                 if callback_ns is not None:
                     input_callback_ns[input_seq] = callback_ns
                 if len(input_callback_ns) > MAX_INPUT_PENDING:
                     for old in sorted(input_callback_ns)[:-MAX_INPUT_PENDING]:
                         del input_callback_ns[old]
 
+            phase = "host_receive"
             try:
                 # Avoid coarse Windows Queue.get(timeout) scheduling (often
                 # approximately 15.6 ms) in the latency-sensitive mode.
                 message = peer.wire.iopub_channel.get_msg(timeout=0)
+                dequeue_ns = time.perf_counter_ns() if trace else None
             except queue.Empty:
                 message = None
                 time.sleep(.001)
@@ -211,15 +231,25 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                 message, comm_id=peer.comm_id, run_id=peer.run_id)
             if payload is None:
                 if time.monotonic() - last_frame_at > PUSH_RECEIVE_WATCHDOG_S:
+                    phase = "freshness_watchdog"
                     raise LifecycleError("push video freshness watchdog fired")
                 continue
 
             received_ns = time.perf_counter_ns()
+            phase = "video_validation"
             unit, ack, renderer_seq = decode_push_message(
                 payload, expected_seq=expected_seq, run_id=peer.run_id,
                 last_ack=last_ack, last_renderer_seq=last_renderer_seq,
                 gate=gate)
             expected_seq += 1
+            if trace:
+                trace.add("video_received", video_seq=expected_seq - 1,
+                          renderer_seq=renderer_seq if unit is not None else None,
+                          input_ack=ack, host_dequeue_ns=dequeue_ns,
+                          host_matched_ns=received_ns, host_validated_ns=time.perf_counter_ns(),
+                          access_unit_bytes=len(unit.data) if unit is not None else 0)
+            decoded_ns = None
+            diag = sender_diag = None
             newly_acked_callback_ns = None
             if ack > last_ack:
                 matched = [seq for seq in input_callback_ns if last_ack < seq <= ack]
@@ -242,6 +272,8 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                     receive_interval_ms.append(
                         (received_ns - previous_received_ns) / 1_000_000)
                 previous_received_ns = received_ns
+                phase = "host_decode"
+                decode_start_ns = time.perf_counter_ns() if trace else None
                 try:
                     packet = av.Packet(unit.data)
                     packet.pts = unit.seq
@@ -260,11 +292,18 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                 if newly_acked_callback_ns is not None:
                     first_decode_input_ms.append(
                         (decoded_ns - newly_acked_callback_ns) / 1_000_000)
+                if trace:
+                    trace.add("frame_offered", video_seq=expected_seq - 1,
+                              renderer_seq=renderer_seq, input_ack=ack,
+                              decode_start_ns=decode_start_ns, decoded_ns=decoded_ns,
+                              offer_start_ns=time.perf_counter_ns())
                 offer_update(frames, ("frame-timed", (
                     header + pixels,
                     LocalFrameTiming(
                         captured_ns=received_ns, decoded_ns=decoded_ns,
-                        input_callback_ns=latest_acked_callback_ns))))
+                        input_callback_ns=latest_acked_callback_ns,
+                        **({"video_seq": expected_seq - 1, "renderer_seq": renderer_seq,
+                            "input_ack": ack} if trace else {})))))
                 received_frames += 1
                 last_frame_at = time.monotonic()
                 diag = validated_remote_video_diagnostics(payload)
@@ -279,6 +318,9 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                         previous = producer_windows.get(wid)
                         if previous is None:
                             producer_windows[wid] = window
+                            if trace:
+                                trace.add("producer_window", video_seq=expected_seq - 1,
+                                          host_dequeue_ns=dequeue_ns, window=window)
                         elif previous != window:
                             raise LifecycleError("conflicting push producer windows")
                 sender_diag = validated_sender_diagnostics(payload)
@@ -297,8 +339,21 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             else:
                 empty_replies += 1
             # Credit is returned only AFTER complete validated processing.
+            phase = "credit_return"
+            credit_start = time.perf_counter_ns() if trace else None
             peer._send("video_credit", count=1)
+            if trace:
+                trace.add("video_processed", video_seq=expected_seq - 1,
+                          renderer_seq=renderer_seq if unit is not None else None,
+                          input_ack=ack, host_decoded_ns=decoded_ns,
+                          credit_return_start_ns=credit_start,
+                          credit_return_end_ns=time.perf_counter_ns(),
+                          remote_video=({k: v for k, v in diag.items()
+                                         if k != "producer_window"} if diag else None),
+                          remote_sender=sender_diag,
+                          remote_credit=validated_credit_snapshot(payload, credits, expected_seq - 1))
 
+        phase = "session_summary"
         elapsed = max(.001, time.monotonic() - started)
         covered_ms = sum(w["window_elapsed_ms"] for w in producer_windows.values())
         covered_frames = sum(w["published_count"] for w in producer_windows.values())
@@ -359,6 +414,10 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
         }
         print("[colabcola] v34 push result "
               + json.dumps(report, sort_keys=True), flush=True)
+        outcome = "completed"
         return report
     finally:
         stopped.set()
+        if trace:
+            trace.finish(outcome=outcome, phase=phase, decoded_frames=received_frames,
+                         last_video_seq=expected_seq - 1, last_input_ack=last_ack)

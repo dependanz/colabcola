@@ -1,0 +1,19 @@
+# v38A.3 — host WebSocket ingress and Tk frame correlation
+
+Base A.2 `7335f3b0b4e0fe15fd2be006d935157593856c5d`: DANZIEPC 72 passed/1 skipped focused, 905 passed/5 skipped full. CI workflow 45710534939 passed on Ubuntu and Windows including retained v33 reports. A.3 is offline-first, not a live performance claim.
+
+## Opt-in evidence
+
+The existing `--trace-pipeline` option retains two additional local files under the same fresh run directory. No vendor file is modified, no new traffic, no changed codec, credits, input ordering, pointer lock or external ownership.
+
+- `host-wire-trace.jsonl`: per-instance wrapping of the pinned private Jupyter client's WebSocket message callback and IOPub queue put, installed before connection startup. For matching run/Comm/version and candidate video sequence, record callback entry, enqueue-attempt and return timestamps, approximate IOPub depth before insertion. The original callback deserializes once; its original queue method inserts exactly once; message contents are not retained or mutated. A candidate is not a validated frame. Callback entry is after WebSocket library message assembly, not a TCP packet arrival or physical wire timestamp.
+- `pipeline-trace.jsonl`: now includes run ID in the header, actual host dequeue return distinct from matching and validation timestamps, decode start/end, and a frame-offer record prior to GUI insertion. Host-only `LocalFrameTiming` carries the validated video/renderer/ACK IDs when tracing is enabled, with defaults unchanged otherwise.
+- `host-viewer-trace.jsonl`: accepted/rejected local callback queue events (timestamp only), viewer readiness, Tk poll gaps greater than 50 ms, frame dequeue and successful Tk image-label configuration, frame queue discards and pending correlated frames after media worker join. Discard includes either an evicted existing frame or a rejected new frame as the existing queue observer does; pending is not a discard. Tk configuration is not compositor presentation.
+
+All three host clocks are `perf_counter_ns`; the two A.2 remote clocks are remote `monotonic_ns`. Join by run ID and sequence numbers, never subtract across machines. Queue depths are approximate snapshots. Ingress callback entry to host dequeue includes vendor decode and queueing; enqueue-attempt to dequeue approximates queue residence and includes insertion overhead. Do not subtract enqueue-return from dequeue if the consumer dequeued concurrently. Callback entry timestamps do not measure network one-way delay.
+
+Independent host event traces each retain at most 65,536 records and flush after host detach, including exceptional cleanup paths. No hot-path file I/O; no raw input, frame contents, exceptions, tokens or endpoints. Bounded tails report lost and retained counts; abrupt process termination, storage error or a worker that never exits may leave incomplete evidence. Trace overhead needs a controlled comparison. The media file is still finalized at worker exit and can be absent on early bootstrap failure; two host-event traces can retain partial evidence. Viewer final queue snapshot exists only after its worker join.
+
+## Gates and next experiment
+
+Run all focused and full bridge regressions on Windows and Ubuntu. Before any paid trial, predeclare the fixed 640x360, 30Hz, C6, lag 1 Input Lab workload, trace-on and trace-off controls with defined phases and stop criteria. Use only one disposable browser-owned T4, read-only preflight then explicit approval, and exact-run evidence retention. Preserve all five trace files, console and lifecycle state, verify remote producer/sender stopped and stop marker, then manually disconnect. No automatic release of an external runtime. No release-branch merge. Real WebSocket and GUI timing attribution, trace overhead, and performance targets remain live gates.

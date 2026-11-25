@@ -86,6 +86,11 @@ def validate_attach_options(args) -> None:
             or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (60, 60)
             or getattr(args, "benchmark_h264_capacity", False)):
         raise LifecycleError("level0 intermediate compression requires 60Hz external push")
+    trace_pipeline = getattr(args, "trace_pipeline", False)
+    if (type(trace_pipeline) is not bool or (trace_pipeline and not (
+            getattr(args, "push_video", False) and getattr(args, "sequence_buffered", False)
+            and (getattr(args, "fps", None), getattr(args, "poll_hz", None)) == (30, 30)))):
+        raise LifecycleError("pipeline trace requires 30Hz external buffered H.264 push")
     application = getattr(args, "application", "synthetic")
     if application not in ("synthetic", "freedoom", "inputlab"):
         raise LifecycleError("unknown application")
@@ -148,10 +153,21 @@ def run_attached_colab(args, provider) -> int:
             push_credits=getattr(args, "push_credits", 4),
             producer_zlib_level0=getattr(args, "producer_zlib_level0", False),
             application=getattr(args, "application", "synthetic"),
+            **({"trace_pipeline": True} if getattr(args, "trace_pipeline", False) else {}),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
+        wire_trace = viewer_trace = None
+        if getattr(args, "trace_pipeline", False):
+            from .bridge_pipeline_trace import HostEventTrace
+            wire_trace = HostEventTrace(args.run_dir / "host-wire-trace.jsonl",
+                                        state["run_id"], "websocket-ingress")
+            viewer_trace = HostEventTrace(args.run_dir / "host-viewer-trace.jsonl",
+                                          state["run_id"], "tk-viewer")
+            peer.ingress_trace = wire_trace
         opened = False
+        viewer_returned = False
+        close_status = "unconfirmed"
         try:
             # The expected kernel is reverified before remote file upload.
             details = peer.open(expected_kernel_id=kernel_id)
@@ -165,7 +181,8 @@ def run_attached_colab(args, provider) -> int:
                  push_credits=getattr(args, "push_credits", 4),
                  producer_zlib_level=(
                      0 if getattr(args, "producer_zlib_level0", False) else 1),
-                 application=getattr(args, "application", "synthetic"))
+                 application=getattr(args, "application", "synthetic"),
+                 **({"trace_pipeline": True} if getattr(args, "trace_pipeline", False) else {}))
 
             push = getattr(args, "push_video", False)
             if push:
@@ -173,7 +190,9 @@ def run_attached_colab(args, provider) -> int:
                 def work(outgoing, frames, stopped):
                     run_push_comm_h264(
                         peer, details["gpu"], outgoing, frames, stopped,
-                        deadline, credits=peer.push_credits)
+                        deadline, credits=peer.push_credits,
+                        **({"trace_path": args.run_dir / "pipeline-trace.jsonl"}
+                           if getattr(args, "trace_pipeline", False) else {}))
             else:
                 def work(outgoing, frames, stopped):
                     run_h264_capacity_sweep(
@@ -196,7 +215,9 @@ def run_attached_colab(args, provider) -> int:
                 input_lab=getattr(args, "application", "synthetic") == "inputlab",
                 poll_interval_ms=(5 if push and args.fps == 60
                                   else 10 if push else 30),
+                **({"presentation_trace": viewer_trace} if viewer_trace is not None else {}),
             )
+            viewer_returned = True
         finally:
             stop_fields = (
                 {"remote_stop_marker_uploaded": False}
@@ -221,4 +242,11 @@ def run_attached_colab(args, provider) -> int:
                      close_status="host_disconnected", **stop_fields)
                 print("[colabcola] Host bridge detached; "
                       "user-owned Colab runtime NOT released", flush=True)
+                close_status = "host_disconnected"
+            finally:
+                for trace in (wire_trace, viewer_trace):
+                    if trace is not None:
+                        trace.finish(outcome=("completed" if viewer_returned and
+                                             close_status == "host_disconnected" else "failed"),
+                                     opened=opened, close_status=close_status)
     return 0

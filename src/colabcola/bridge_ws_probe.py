@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import threading
+import time
 
 _ERROR_TYPES = frozenset({
     "WebSocketBadStatusException", "WebSocketTimeoutException",
@@ -73,3 +75,61 @@ class KernelWebSocketProbe:
             f"closed={int(self.closed)}, thread_alive={int(self.thread_alive)}, "
             f"close_code={code}, error_type={self.error_type}"
         )
+
+
+def matched_video_sequence(message, run_id, comm_id):
+    """Return a candidate video sequence, not protocol acceptance."""
+    if not isinstance(message, dict) or not isinstance(comm_id, str) or not comm_id:
+        return None
+    header, content = message.get("header"), message.get("content")
+    if (not isinstance(header, dict) or header.get("msg_type") != "comm_msg"
+            or not isinstance(content, dict) or content.get("comm_id") != comm_id):
+        return None
+    payload = content.get("data")
+    if (not isinstance(payload, dict) or payload.get("run_id") != run_id
+            or type(payload.get("v")) is not int or payload["v"] != 1
+            or payload.get("kind") not in ("video_access_unit", "video_no_new")):
+        return None
+    seq = payload.get("pull_seq")
+    if type(seq) is int and 1 <= seq <= 100_000_000:
+        return seq
+    return None
+
+
+def install_video_ingress(wire, *, trace, run_id, comm_id_getter):
+    """Observe the pinned vendor callback and its IOPub enqueue on this instance.
+
+    Wrap BEFORE start_channels. Preserve the vendor's single deserialization
+    and original queue insertion; no payload mutation or extra network traffic.
+    The timestamp is application callback entry, not TCP or hardware arrival.
+    """
+    original_callback = wire._on_message
+    channel_queue = wire._iopub_msg_queue
+    original_put = channel_queue.put_nowait
+    local = threading.local()
+
+    def on_message(socket, message):
+        previous = getattr(local, "callback_ns", None)
+        local.callback_ns = time.perf_counter_ns()
+        try:
+            return original_callback(socket, message)
+        finally:
+            local.callback_ns = previous
+
+    def put_nowait(message):
+        callback_ns = getattr(local, "callback_ns", None)
+        seq = (matched_video_sequence(message, run_id, comm_id_getter())
+               if callback_ns is not None else None)
+        if seq is None:
+            return original_put(message)
+        depth = channel_queue.qsize()
+        enqueue_start_ns = time.perf_counter_ns()
+        result = original_put(message)
+        trace.add("wire_video_enqueued", video_seq=seq,
+                  callback_ns=callback_ns, enqueue_start_ns=enqueue_start_ns,
+                  enqueue_return_ns=time.perf_counter_ns(),
+                  iopub_depth_before=depth)
+        return result
+
+    channel_queue.put_nowait = put_nowait
+    wire._on_message = on_message

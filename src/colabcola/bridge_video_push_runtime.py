@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import runpy
 import struct
 import threading
 import time
@@ -38,7 +39,8 @@ class CreditPushSender:
     """Strict bounded grants; no replay or per-frame host pull RPC."""
 
     def __init__(self, *, comm, source, directory, run_id,
-                 credits=MAX_PUSH_CREDITS, enable_status_sidecar=False):
+                 credits=MAX_PUSH_CREDITS, enable_status_sidecar=False,
+                 trace_pipeline=False):
         if (type(credits) is not int or credits not in PUSH_CREDIT_CHOICES
                 or not isinstance(run_id, str) or len(run_id) != 32
                 or not getattr(source, "sequence_buffered", False)):
@@ -59,8 +61,19 @@ class CreditPushSender:
         self.stopped = threading.Event()
         self._condition = threading.Condition()
         self._thread = None
-        # v35B optional diagnostics: 30Hz sender payloads remain untouched.
-        self.diagnostics = getattr(source, "fps", 30) == 60
+        if (type(trace_pipeline) is not bool or (trace_pipeline and
+                getattr(source, "fps", 30) != 30)):
+            raise ValueError("pipeline trace requires 30Hz source")
+        self.trace_pipeline = trace_pipeline
+        self._trace = None
+        self._source_misses = 0
+        if trace_pipeline:
+            trace_class = runpy.run_path(str(Path(__file__).with_name(
+                "bridge_remote_trace.py")))["RemotePipelineTrace"]
+            self._trace = trace_class(self.directory / "remote-sender-trace.jsonl",
+                                      run_id, "credit-sender")
+        # Preserve the original default behavior; explicitly opt in at 30Hz.
+        self.diagnostics = getattr(source, "fps", 30) == 60 or trace_pipeline
         self._credit_wait_ns = 0
         self._credit_wait_iterations = 0
         self._previous_comm_send_us = None
@@ -123,6 +136,9 @@ class CreditPushSender:
                 self.available += 1
             if self.available > self.capacity:
                 raise ValueError("push credit window overflow")
+            if self._trace:
+                self._trace.add("credit_granted", count=count, available=self.available,
+                                sent=self.sent_count, replenished=self.replenished)
             self._condition.notify_all()
 
     def step(self):
@@ -136,6 +152,8 @@ class CreditPushSender:
         latest = newest_frame_seq(self.directory)
         last = getattr(self.source, "last_renderer_seq", None)
         if latest is None or (last is not None and latest <= last):
+            if self._trace:
+                self._source_misses += 1
             return False
         with self._condition:
             if self.available <= 0 or self.failed or self.stopped.is_set():
@@ -143,11 +161,24 @@ class CreditPushSender:
             self.available -= 1
             self.sent_count += 1
             send_seq = self.sent_count
+            if self._trace:
+                self._trace.add("credit_reserved", video_seq=send_seq,
+                                latest_header_seq=latest, available=self.available,
+                                sent=self.sent_count, replenished=self.replenished,
+                                cumulative_source_misses=self._source_misses)
         phase = "source_pull"
         try:
+            if self._trace:
+                self._trace.add("source_pull_begin", video_seq=send_seq)
             reply = self.source.pull(send_seq)
             if reply.get("kind") not in ("video_access_unit", "video_no_new"):
                 raise ValueError("invalid push video response")
+            if self._trace:
+                self._trace.add("source_pull_end", video_seq=send_seq,
+                                renderer_seq=(getattr(self.source, "last_renderer_seq", None)
+                                              if reply["kind"] == "video_access_unit" else None),
+                                input_ack=reply.get("input_ack"),
+                                has_video=reply["kind"] == "video_access_unit")
             # An encoded frame carries bounded, previous-send diagnostics.
             # We cannot time the current send until after it has completed.
             if self.diagnostics and reply["kind"] == "video_access_unit":
@@ -159,14 +190,22 @@ class CreditPushSender:
                     }
                     if self._previous_comm_send_us is not None:
                         extras["sender_comm_previous_us"] = self._previous_comm_send_us
+                    if self.trace_pipeline:
+                        extras.update(sender_available_credits=self.available,
+                                      sender_sent_count=self.sent_count,
+                                      sender_replenished_count=self.replenished)
                 reply = {**reply, **extras}
-            started_ns = time.perf_counter_ns()
             phase = "comm_send"
+            if self._trace:
+                self._trace.add("comm_send_begin", video_seq=send_seq)
+            started_ns = time.perf_counter_ns()
             self.comm.send(reply)
             if self.diagnostics:
                 elapsed_us = (time.perf_counter_ns() - started_ns) / 1000
                 with self._condition:
                     self._previous_comm_send_us = round(elapsed_us, 2)
+            if self._trace:
+                self._trace.add("comm_send_end", video_seq=send_seq)
             return True
         except Exception:
             with self._condition:
@@ -174,6 +213,8 @@ class CreditPushSender:
                 self.failed = True
                 self.stopped.set()
                 self._condition.notify_all()
+            if self._trace:
+                self._trace.add("send_failed", video_seq=send_seq, phase=phase)
             self._write_sidecar("failed", force=True)
             try:
                 self.comm.send({"v": 1, "kind": "error", "run_id": self.run_id,
@@ -182,7 +223,17 @@ class CreditPushSender:
                 pass
             return False
 
+    def _finish_trace(self, outcome):
+        if self._trace:
+            with self._condition:
+                terminal=dict(sent=self.sent_count, replenished=self.replenished,
+                              available=self.available, initialized=self.initialized_credits,
+                              error_phase=self._send_error_phase,
+                              cumulative_source_misses=self._source_misses)
+            self._trace.finish(outcome=outcome, **terminal)
+
     def _worker(self):
+        outcome = "interrupted"
         try:
             while not self.stopped.is_set():
                 self._write_sidecar("active")
@@ -190,18 +241,28 @@ class CreditPushSender:
                     if self.available == 0 and not self.stopped.is_set():
                         since = (time.perf_counter_ns()
                                  if self.diagnostics and self.initialized_credits else None)
+                        wait_start_ns = (time.monotonic_ns() if self._trace and
+                                         self.initialized_credits else None)
                         self._condition.wait(timeout=0.05)
                         if since is not None:
                             self._credit_wait_ns += max(
                                 0, time.perf_counter_ns() - since)
                             self._credit_wait_iterations += 1
+                        if wait_start_ns is not None:
+                            self._trace.add("credit_wait", wait_start_ns=wait_start_ns,
+                                            available_after=self.available,
+                                            sent=self.sent_count, replenished=self.replenished)
                 if self.stopped.is_set():
                     break
                 if not self.step():
                     self.stopped.wait(0.004)
+            outcome = "failed" if self.failed else "stopped"
         finally:
-            self._write_sidecar(
-                "failed" if self.failed else "stopped", force=True)
+            try:
+                self._write_sidecar(
+                    "failed" if self.failed else "stopped", force=True)
+            finally:
+                self._finish_trace(outcome)
 
     def start(self):
         if self._thread is not None:
@@ -217,3 +278,5 @@ class CreditPushSender:
         # Never block the notebook's Comm callback indefinitely.
         if self._thread is not None:
             self._thread.join(timeout=0.5)
+        else:
+            self._finish_trace("failed" if self.failed else "stopped")

@@ -276,13 +276,36 @@ def create_viewer_layout(root, width: int, height: int):
 class MeteredFrameQueue(queue.Queue):
     """Count video frames evicted before Tk configures them."""
 
-    def __init__(self, maxsize: int):
+    def __init__(self, maxsize: int, *, presentation_trace=None):
         super().__init__(maxsize=maxsize)
         self.coalesced_video_frames = 0
+        self.presentation_trace = presentation_trace
 
     def note_discarded(self, item) -> None:
         if isinstance(item, tuple) and item and item[0] in ("frame", "frame-timed"):
             self.coalesced_video_frames += 1
+            self._trace_item("gui_discarded", item)
+
+    def _trace_item(self, event, item):
+        if (self.presentation_trace is None or not isinstance(item, tuple)
+                or len(item) != 2 or item[0] != "frame-timed"
+                or not isinstance(item[1], tuple) or len(item[1]) != 2):
+            return
+        from .bridge_viewer_stats import frame_trace_fields
+        fields = frame_trace_fields(item[1][1])
+        if fields is not None:
+            self.presentation_trace.add(event, **fields)
+
+    def trace_pending(self):
+        if self.presentation_trace is None:
+            return
+        # Only after media worker join; do not drain or change queue policy.
+        with self.mutex:
+            remaining = tuple(self.queue)
+        for item in remaining:
+            self._trace_item("gui_pending_at_close", item)
+        self.presentation_trace.add("gui_queue_terminal", pending_items=len(remaining),
+                                    coalesced_video_frames=self.coalesced_video_frames)
 
 
 def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
@@ -291,7 +314,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                timestamp_local_input: bool = False,
                poll_interval_ms: int = 30,
                game_controls: bool = False,
-               input_lab: bool = False) -> None:
+               input_lab: bool = False, presentation_trace=None) -> None:
     # Preserve the 30ms viewer default for existing transports; allow only
     # explicit local experiments to request a shorter bounded Tk poll.
     if (type(poll_interval_ms) is not int
@@ -305,16 +328,20 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
     import tkinter as tk
 
     outgoing: queue.Queue = queue.Queue(maxsize=64)
-    frames: queue.Queue = MeteredFrameQueue(maxsize=2)
+    frames: queue.Queue = MeteredFrameQueue(maxsize=2, presentation_trace=presentation_trace)
     stopped = threading.Event()
     root = tk.Tk()
     root.title(title or "Colab Cola · Interactive Bridge Prototype")
     label, status = create_viewer_layout(root, width, height)
     from .bridge_viewer_stats import (
         LocalFrameTiming, ViewerPresentationMeter, console_safe_viewer_summary,
+        frame_trace_fields,
     )
     gui_meter = ViewerPresentationMeter(started_at=time.monotonic()) if viewer_stats else None
     last_motion = [0.0]
+    last_poll_ns = None
+    if presentation_trace is not None:
+        presentation_trace.add("viewer_ready", poll_interval_ms=poll_interval_ms)
 
     def enqueue(event: dict) -> None:
         if timestamp_local_input:
@@ -323,7 +350,14 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
             event = {**event, "_ui_callback_ns": time.perf_counter_ns()}
         try:
             outgoing.put_nowait(event)
+            if presentation_trace is not None:
+                presentation_trace.add("gui_input_enqueued",
+                                       callback_ns=event.get("_ui_callback_ns"),
+                                       outgoing_depth=outgoing.qsize())
         except queue.Full:
+            if presentation_trace is not None:
+                presentation_trace.add("gui_input_rejected",
+                                       callback_ns=event.get("_ui_callback_ns"))
             # Synthetic mouse updates are transient; an unreleased game key is not.
             if game_controls or input_lab:
                 stopped.set()
@@ -338,12 +372,20 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                  "y": max(0.0, min(1.0, event.y / height))})
 
     def poll() -> None:
+        nonlocal last_poll_ns
+        if presentation_trace is not None:
+            now_ns = time.perf_counter_ns()
+            if last_poll_ns is not None and now_ns-last_poll_ns > 50_000_000:
+                presentation_trace.add("gui_poll_gap", previous_poll_ns=last_poll_ns,
+                                       poll_ns=now_ns)
+            last_poll_ns = now_ns
         if stopped.is_set():
             root.destroy()
             return
         try:
             while True:
                 kind, data = frames.get_nowait()
+                dequeued_ns = time.perf_counter_ns() if presentation_trace is not None else None
                 if kind == "status":
                     status.set(concise_viewer_status(data))
                 elif kind in ("frame", "frame-timed"):
@@ -354,15 +396,29 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                         data, timing = data
                         if not isinstance(timing, LocalFrameTiming):
                             raise ValueError("invalid local frame metadata")
+                    fields = (frame_trace_fields(timing)
+                              if presentation_trace is not None else None)
+                    if fields is not None:
+                        presentation_trace.add("gui_dequeued", **fields,
+                                               dequeued_ns=dequeued_ns,
+                                               gui_depth_after=frames.qsize())
                     image_started = time.perf_counter()
+                    image_start_ns = (time.perf_counter_ns() if fields is not None else None)
                     image = photoimage_from_ppm(root, data)
                     label.configure(image=image, text="")
                     label.image = image
                     configured_ns = time.perf_counter_ns()
+                    # End the legacy GUI cost measurement before trace bookkeeping.
+                    image_cost_ms = ((time.perf_counter() - image_started) * 1000
+                                     if gui_meter is not None else None)
+                    if fields is not None:
+                        presentation_trace.add("gui_configured", **fields,
+                                               image_start_ns=image_start_ns,
+                                               configured_ns=configured_ns,
+                                               decoded_ns=timing.decoded_ns)
                     if gui_meter is not None:
                         gui_meter.presented(
-                            (time.perf_counter() - image_started) * 1000,
-                            configured_ns=configured_ns)
+                            image_cost_ms, configured_ns=configured_ns)
                         if timing is not None:
                             gui_meter.configured_timed_frame(timing, configured_ns)
                     if status.get() == "Connecting...":
@@ -477,6 +533,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
             lab_cleanup()
         stopped.set()
     thread.join()  # Wait for in-flight I/O to finish before releasing a remote runtime.
+    frames.trace_pending()
     if gui_meter is not None:
         # The full-session result pools actual GUI observations, not
         # reporting-window medians. Never interrupt cleanup on log errors.
@@ -521,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="v34 opt-in: sender-driven bounded H.264 Comm")
     remote.add_argument("--producer-zlib-level0", action="store_true",
                         help="v35C opt-in: 60Hz external push uses zlib level 0 for internal snapshots")
+    remote.add_argument("--trace-pipeline", action="store_true",
+                        help="v38A opt-in: bounded diagnostics for external 30Hz H.264 push")
     remote.add_argument("--push-credits", type=int,
                         choices=(4, 6, 8, 10, 12), default=4,
                         help="push credit window; 30Hz: 4/6/8, opt-in 60Hz: 8/10/12")
@@ -566,6 +625,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
+            if args.trace_pipeline and not (
+                    args.attach_existing and args.sequence_buffered and args.push_video
+                    and (args.fps, args.poll_hz) == (30, 30)
+                    and args.transport == "comm" and args.video_codec == "h264"):
+                parser.error("--trace-pipeline requires external 30Hz buffered H.264 push")
             if args.application in ("freedoom", "inputlab") and not (
                     args.attach_existing and args.sequence_buffered
                     and args.push_video and not args.producer_zlib_level0

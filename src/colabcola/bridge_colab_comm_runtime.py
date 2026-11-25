@@ -61,7 +61,7 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
           video_push: bool = False, video_push_source_path: str | None = None,
           push_credits: int = 4, producer_zlib_level0: bool = False,
           application: str = "synthetic",
-          game_renderer_path: str | None = None):
+          game_renderer_path: str | None = None, trace_pipeline: bool = False):
     global BOOTSTRAP_STAGE
     if (type(video_push) is not bool
             or (video_push and (not sequence_buffered or not preflight_video
@@ -74,6 +74,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                  or (fps == 60 and push_credits not in (8, 10, 12))
                  or fps not in (30, 60)))):
         raise ValueError("invalid sender FPS/credit pairing")
+    if (type(trace_pipeline) is not bool or (trace_pipeline and not (
+            fps == 30 and video_push and sequence_buffered and preflight_video))):
+        raise ValueError("pipeline trace requires 30Hz buffered H.264 push")
     if (type(producer_zlib_level0) is not bool
             or (producer_zlib_level0 and not (
                 fps == 60 and video_push and sequence_buffered and preflight_video))):
@@ -99,7 +102,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
     BOOTSTRAP_STAGE = "starting_renderer"
     if sequence_buffered:
         renderer["start"](directory, fps, run_id, sequence_buffered=True,
-                          **({"zlib_level": 0} if producer_zlib_level0 else {}))
+                          **({"zlib_level": 0} if producer_zlib_level0 else {}),
+                          **({"trace_pipeline": True}
+                             if trace_pipeline and application == "inputlab" else {}))
     else:
         renderer["start"](directory, fps, run_id)
     BOOTSTRAP_STAGE = "waiting_cuda"
@@ -172,6 +177,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
         ready["video_codec"] = "h264-annexb"
         if video_push:
             ready["video_mode"] = "credit-push"
+            if trace_pipeline:
+                ready["trace_pipeline"] = True
             if application in ("freedoom", "inputlab"):
                 ready["application"] = application
             if producer_zlib_level0:
@@ -188,7 +195,8 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
                 comm=comm, source=video_source, directory=root,
                 run_id=run_id, credits=push_credits,
                 **({"enable_status_sidecar": True}
-                   if application == "inputlab" else {}))
+                   if application == "inputlab" else {}),
+                **({"trace_pipeline": True} if trace_pipeline else {}))
         except Exception:
             video_failed = True
 
@@ -373,6 +381,7 @@ if __name__ == "__main__":
               video_push_source_path=globals().get("BRIDGE_VIDEO_PUSH_SOURCE_PATH"),
               push_credits=globals().get("BRIDGE_PUSH_CREDITS", 4),
               producer_zlib_level0=globals().get("BRIDGE_PRODUCER_ZLIB_LEVEL0", False),
+              trace_pipeline=globals().get("BRIDGE_TRACE_PIPELINE", False),
               application=globals().get("BRIDGE_APPLICATION", "synthetic"),
               game_renderer_path=globals().get("BRIDGE_GAME_RENDERER_PATH"))
     except BaseException as exc:
