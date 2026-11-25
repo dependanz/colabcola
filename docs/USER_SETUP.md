@@ -322,8 +322,24 @@ profile. `login --config-home PATH` applies only to that invocation; keep
 reports the absolute `config_home` and the profile name when using a named profile.
 
 Packaging is offline and does not bind the portable job to an account. Select the
-intended profile when preparing or executing it. Prepared journals and existing
-explicit helpers retain their absolute configuration paths; they are not migrated.
+intended profile when preparing or executing it. Profiles and OAuth credentials
+belong to the selected configuration directory, **not to one Python environment**.
+A release installation and a development venv can use the same profile without
+repeating `login` when their credential formats are compatible.
+
+The original `drive-helper.json` is retained for older installations, even
+when another installation logs in. If a different Python interpreter uses the
+profile, managed preparation creates its own `drive-helper-install-<hash>.json`
+command file offline, with no OAuth refresh. `login --status` remains read-only.
+Both helper formats are schema 1 (six-element argv arrays); the current
+`profile.json` schema is 1. Unknown profile/helper schema versions fail with
+an explicit supported-version error. Google's OAuth credential JSON is managed
+and validated by Google authentication libraries, not silently migrated by
+Colab Cola. An interpreter removed from disk or a modified helper is rejected,
+rather than executing an unexpected command.
+
+Prepared journals and existing explicit helpers retain their absolute
+configuration paths; they are not migrated.
 Use the same profile when resuming a run. The normal managed profile workflow
 checks the saved helper binding and refuses a different selection for an already
 prepared journal. Older custom helpers retain their own configuration and cannot
