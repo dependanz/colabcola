@@ -221,14 +221,25 @@ def _validate_environment_targets(spec, expanded):
         config = json.loads(config_file.read_text(encoding="utf-8"))
     except (UnicodeError, ValueError) as exc:
         raise SpecError("invalid generated step configuration") from exc
-    if config != {"steps": [step.mapping() for step in spec.steps]}:
-        raise SpecError("generated commands.json does not match the declared ordered steps")
+    expected_config = {"steps": [step.mapping() for step in spec.steps]}
+    shell_scripts = {}
     for step in spec.steps:
         target = step_script_path(step.mapping())
         if target is not None and target not in files:
             raise SpecError("step script is not in the packaged project: " + target)
+        if step.command[0] == "bash":
+            if files[target].role != "source":
+                raise SpecError("Bash step script must be a packaged source file: " + target)
+            if "_colabcola/shell_runtime.py" not in files:
+                raise SpecError("Bash steps require packaged generated file: _colabcola/shell_runtime.py")
+            with files[target].source.open("rb") as stream:
+                shell_scripts[target] = hashlib.file_digest(stream, "sha256").hexdigest()
         if step.cwd != "." and not any(p.startswith(step.cwd + "/") for p in files):
             raise SpecError("step cwd is not in the packaged project: " + step.cwd)
+    if shell_scripts:
+        expected_config["shell_scripts"] = shell_scripts
+    if config != expected_config:
+        raise SpecError("generated commands.json does not match the declared ordered steps or shell script hashes")
     for environment in spec.environments:
         definition = environment.mapping()
         packages = list(definition["pip"]["packages"])
