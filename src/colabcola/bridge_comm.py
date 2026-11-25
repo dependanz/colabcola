@@ -93,7 +93,7 @@ class KernelCommBridge:
                  max_buffer_lag_frames: int = 2,
                  video_push: bool = False, push_credits: int = 4,
                  producer_zlib_level0: bool = False,
-                 application: str = "synthetic"):
+                 application: str = "synthetic", trace_pipeline: bool = False):
         if video_codec not in ("ppm", "h264"):
             raise ValueError("invalid optional kernel video codec")
         if type(install_remote_pyav) is not bool or (install_remote_pyav and video_codec != "h264"):
@@ -132,6 +132,10 @@ class KernelCommBridge:
                     and video_codec == "h264" and push_credits in (4, 6, 8)
                     and not producer_zlib_level0))):
             raise ValueError("game/input lab requires explicitly selected 30Hz H.264 push")
+        if (type(trace_pipeline) is not bool or (trace_pipeline and not (
+                fps == 30 and video_push and sequence_buffered and video_codec == "h264"))):
+            raise ValueError("pipeline trace requires 30Hz buffered H.264 push")
+        self.trace_pipeline = trace_pipeline
         self.application = application
         self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
@@ -275,7 +279,8 @@ class KernelCommBridge:
                     f"'BRIDGE_VIDEO_PUSH_SOURCE_PATH':{push_path!r},"
                     f"'BRIDGE_PUSH_CREDITS':{self.push_credits!r},"
                     f"'BRIDGE_PRODUCER_ZLIB_LEVEL0':{self.producer_zlib_level0!r},"
-                    f"'BRIDGE_APPLICATION':{self.application!r},"
+                    f"'BRIDGE_TRACE_PIPELINE':{self.trace_pipeline!r},"
+                     f"'BRIDGE_APPLICATION':{self.application!r},"
                     f"'BRIDGE_GAME_RENDERER_PATH':{game_path!r}"
                     "})\n")
             # Never replay an uncertain request. A new run directory is required
@@ -340,6 +345,8 @@ class KernelCommBridge:
                     if (self.producer_zlib_level0 and
                             details.get("producer_zlib_level") != 0):
                         raise LifecycleError("kernel level0 compression handshake invalid")
+                    if self.trace_pipeline and details.get("trace_pipeline") is not True:
+                        raise LifecycleError("kernel pipeline trace handshake invalid")
                     if (self.application in ("freedoom", "inputlab") and
                             details.get("application") != self.application):
                         raise LifecycleError("kernel application handshake invalid")

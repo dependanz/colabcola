@@ -521,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="v34 opt-in: sender-driven bounded H.264 Comm")
     remote.add_argument("--producer-zlib-level0", action="store_true",
                         help="v35C opt-in: 60Hz external push uses zlib level 0 for internal snapshots")
+    remote.add_argument("--trace-pipeline", action="store_true",
+                        help="v38A opt-in: bounded diagnostics for external 30Hz H.264 push")
     remote.add_argument("--push-credits", type=int,
                         choices=(4, 6, 8, 10, 12), default=4,
                         help="push credit window; 30Hz: 4/6/8, opt-in 60Hz: 8/10/12")
@@ -566,6 +568,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "cleanup":
                 return cleanup_colab(args)
+            if args.trace_pipeline and not (
+                    args.attach_existing and args.sequence_buffered and args.push_video
+                    and (args.fps, args.poll_hz) == (30, 30)
+                    and args.transport == "comm" and args.video_codec == "h264"):
+                parser.error("--trace-pipeline requires external 30Hz buffered H.264 push")
             if args.application in ("freedoom", "inputlab") and not (
                     args.attach_existing and args.sequence_buffered
                     and args.push_video and not args.producer_zlib_level0

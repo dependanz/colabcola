@@ -38,7 +38,8 @@ class CreditPushSender:
     """Strict bounded grants; no replay or per-frame host pull RPC."""
 
     def __init__(self, *, comm, source, directory, run_id,
-                 credits=MAX_PUSH_CREDITS, enable_status_sidecar=False):
+                 credits=MAX_PUSH_CREDITS, enable_status_sidecar=False,
+                 trace_pipeline=False):
         if (type(credits) is not int or credits not in PUSH_CREDIT_CHOICES
                 or not isinstance(run_id, str) or len(run_id) != 32
                 or not getattr(source, "sequence_buffered", False)):
@@ -59,8 +60,12 @@ class CreditPushSender:
         self.stopped = threading.Event()
         self._condition = threading.Condition()
         self._thread = None
-        # v35B optional diagnostics: 30Hz sender payloads remain untouched.
-        self.diagnostics = getattr(source, "fps", 30) == 60
+        if (type(trace_pipeline) is not bool or (trace_pipeline and
+                getattr(source, "fps", 30) != 30)):
+            raise ValueError("pipeline trace requires 30Hz source")
+        self.trace_pipeline = trace_pipeline
+        # Preserve the original default behavior; explicitly opt in at 30Hz.
+        self.diagnostics = getattr(source, "fps", 30) == 60 or trace_pipeline
         self._credit_wait_ns = 0
         self._credit_wait_iterations = 0
         self._previous_comm_send_us = None
@@ -159,6 +164,10 @@ class CreditPushSender:
                     }
                     if self._previous_comm_send_us is not None:
                         extras["sender_comm_previous_us"] = self._previous_comm_send_us
+                    if self.trace_pipeline:
+                        extras.update(sender_available_credits=self.available,
+                                      sender_sent_count=self.sent_count,
+                                      sender_replenished_count=self.replenished)
                 reply = {**reply, **extras}
             started_ns = time.perf_counter_ns()
             phase = "comm_send"

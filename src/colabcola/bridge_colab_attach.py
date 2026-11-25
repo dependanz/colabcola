@@ -86,6 +86,11 @@ def validate_attach_options(args) -> None:
             or (getattr(args, "fps", None), getattr(args, "poll_hz", None)) != (60, 60)
             or getattr(args, "benchmark_h264_capacity", False)):
         raise LifecycleError("level0 intermediate compression requires 60Hz external push")
+    trace_pipeline = getattr(args, "trace_pipeline", False)
+    if (type(trace_pipeline) is not bool or (trace_pipeline and not (
+            getattr(args, "push_video", False) and getattr(args, "sequence_buffered", False)
+            and (getattr(args, "fps", None), getattr(args, "poll_hz", None)) == (30, 30)))):
+        raise LifecycleError("pipeline trace requires 30Hz external buffered H.264 push")
     application = getattr(args, "application", "synthetic")
     if application not in ("synthetic", "freedoom", "inputlab"):
         raise LifecycleError("unknown application")
@@ -148,6 +153,7 @@ def run_attached_colab(args, provider) -> int:
             push_credits=getattr(args, "push_credits", 4),
             producer_zlib_level0=getattr(args, "producer_zlib_level0", False),
             application=getattr(args, "application", "synthetic"),
+            **({"trace_pipeline": True} if getattr(args, "trace_pipeline", False) else {}),
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
@@ -165,7 +171,8 @@ def run_attached_colab(args, provider) -> int:
                  push_credits=getattr(args, "push_credits", 4),
                  producer_zlib_level=(
                      0 if getattr(args, "producer_zlib_level0", False) else 1),
-                 application=getattr(args, "application", "synthetic"))
+                 application=getattr(args, "application", "synthetic"),
+                 **({"trace_pipeline": True} if getattr(args, "trace_pipeline", False) else {}))
 
             push = getattr(args, "push_video", False)
             if push:
@@ -173,7 +180,9 @@ def run_attached_colab(args, provider) -> int:
                 def work(outgoing, frames, stopped):
                     run_push_comm_h264(
                         peer, details["gpu"], outgoing, frames, stopped,
-                        deadline, credits=peer.push_credits)
+                        deadline, credits=peer.push_credits,
+                        **({"trace_path": args.run_dir / "pipeline-trace.jsonl"}
+                           if getattr(args, "trace_pipeline", False) else {}))
             else:
                 def work(outgoing, frames, stopped):
                     run_h264_capacity_sweep(
