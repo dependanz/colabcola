@@ -108,7 +108,24 @@ Each step names a declared environment. `command` is a literal argument array;
 Python scripts, Python modules and commands installed in that environment are
 supported. Scripts must be inside the packaged project. Arguments added to the
 generated job at launch time are refused: put each step's arguments in the recipe.
-Shell command strings and shell programs are not supported by this feature.
+A fixed Bash interpreter is also supported for packaged script files:
+
+```toml
+[[steps]]
+name = "prepare-shell"
+environment = "prepare"
+command = ["bash", "scripts/prepare.sh", "literal argument"]
+```
+
+The script path is relative to the step's `cwd`, must end in `.sh`, and must be a
+regular included project source file. Use normalized POSIX paths (no leading `./`,
+`..`, absolute paths, backslashes, or symlinks). Colabcola invokes `/bin/bash`
+without startup files, after activating the selected environment, and passes each
+argument separately. The script's bytes are frozen into the job and checked again before dispatch. Arbitrary shell
+strings, `bash -c`, interpreter flags and other shell programs remain unsupported.
+Write Bash files with LF line endings. As with Python workloads, script code is
+trusted workload code; this is not a shell sandbox. Bash does not need to be a
+conda dependency, but commands and libraries used by the script must be available.
 
 `cwd` defaults to `.` and is relative to the project root. Script paths and ordinary
 file arguments are relative to that step's working directory. The working directory
@@ -161,8 +178,9 @@ package indexes; credential-bearing URLs and query strings are refused.
 Declared environment variables can set application options and build limits. Relative
 `PYTHONPATH` entries are interpreted from the job root. Interpreter, activation,
 package-manager and library-search overrides are reserved for colabcola; credentials
-do not belong in a recipe. An executable missing from the selected environment fails
-instead of falling through to a command from the runtime image.
+do not belong in a recipe. An ordinary console executable missing from the selected environment fails
+instead of falling through to a command from the runtime image. The fixed runtime
+`/bin/bash` is the explicit exception for packaged shell scripts.
 
 For named jobs, dependency and isolation settings belong inside each environment.
 Global `environment.dependencies`, requirements, wheels, runtime requirements and

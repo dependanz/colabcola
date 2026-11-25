@@ -1,0 +1,45 @@
+name = "packaged-shell-example"
+project = "."
+include = ["scripts/*.sh"]
+inputs = []
+
+[environments.prepare]
+python = "3.10"
+
+[environments.evaluate]
+python = "3.12"
+
+[[steps]]
+name = "prepare"
+environment = "prepare"
+command = ["bash", "scripts/prepare.sh", "two words", "$HOME", "$(touch unexpected)", "; literal"]
+
+[[steps]]
+name = "evaluate"
+environment = "evaluate"
+cwd = "scripts"
+command = ["bash", "evaluate.sh"]
+
+[compute]
+gpu = "NONE"
+
+[outputs]
+include = ["outputs/**"]
+maximum_bytes = 1048576
+checkpoints = []
+logs = []
+
+[[outputs.completed]]
+marker = "outputs/complete.json"
+files = ["acceptance.json", "prepared.json"]
+ready_when = { state = "complete" }
+
+[limits]
+timeout_seconds = 120
+max_seconds = 1200
+max_runtimes = 1
+seed = 2026
+
+[execution]
+runtime_version = "latest"
+provider_backend = "legacy"

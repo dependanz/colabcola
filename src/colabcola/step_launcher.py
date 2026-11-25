@@ -48,6 +48,7 @@ def _load():
         raise RuntimeError("invalid runtime execution deadline")
     if not isinstance(config.get("environments"), dict) or not isinstance(config.get("env", {}), dict):
         raise RuntimeError("invalid resolved environment configuration")
+    config["shell_scripts"] = frozen.get("shell_scripts", {})
     return config
 
 
@@ -96,8 +97,15 @@ def main():
             cwd.relative_to(root)
             if not cwd.is_dir():
                 raise RuntimeError("step working directory does not exist in the packaged project")
+            # Retain the lexical cwd for Bash's link checks, even though the
+            # process is launched in the independently resolved working directory.
+            options = {}
+            if step["command"][0] == "bash":
+                target = (Path(step["cwd"]) / step["command"][1]).as_posix()
+                options = {"cwd": root / step["cwd"],
+                           "script_sha256": config["shell_scripts"].get(target)}
             command, env = _colabcola_environment_command(config["environments"][step["environment"]],
-                step["command"], root, declared=config.get("env", {}))
+                step["command"], root, declared=config.get("env", {}), **options)
             # Only these explicitly trusted run values cross from the control
             # process; no credentials or helper configuration are copied.
             for name in ("COLABCOLA_SEED", "COLABCOLA_RESUME_MANIFEST"):

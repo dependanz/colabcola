@@ -206,9 +206,29 @@ def normalize_environments(value):
     return result
 
 
+def shell_script_path(command, cwd="."):
+    """Return the packaged path for the only supported shell command form."""
+    if not command or command[0] != "bash":
+        return None
+    if len(command) < 2 or not isinstance(command[1], str):
+        raise SpecError("bash requires a packaged .sh script, not shell options or a command string")
+    script = command[1]
+    if not script.endswith(".sh") or script.startswith("-"):
+        raise SpecError("bash requires a packaged .sh script, not shell options or a command string")
+    script = relative_path(script, "Bash script")
+    cwd = relative_path(cwd, "Bash working directory", dot=True)
+    target = script if cwd == "." else cwd + "/" + script
+    if target.split("/")[0] == "_colabcola":
+        raise SpecError("Bash script must be inside the packaged project")
+    return target
+
+
 def step_script_path(step):
     """Return the hash-bound script path, or None for modules/console commands."""
     command = step["command"]
+    shell = shell_script_path(command, step["cwd"])
+    if shell is not None:
+        return shell
     args = command[1:] if _PYTHON.fullmatch(command[0]) else command
     if not args or args[0] == "-m" or not args[0].endswith(".py"):
         return None
@@ -243,7 +263,10 @@ def normalize_steps(value, environments):
         args = command[1:] if python else command
         if not args or not args[0]:
             raise SpecError(where + ".command needs a script, module or console command")
-        if args[0] == "-m":
+        if command[0] == "bash":
+            # The script and cwd are validated together by step_script_path.
+            pass
+        elif args[0] == "-m":
             if len(args) < 2 or not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", args[1]):
                 raise SpecError(where + ": python -m needs a dotted module name")
         elif python and not args[0].endswith(".py"):
@@ -251,7 +274,7 @@ def normalize_steps(value, environments):
         elif not args[0].endswith(".py"):
             program = args[0].lower().removesuffix(".exe")
             if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", args[0]) or program in _SHELLS:
-                raise SpecError(where + ": use a portable installed console command; shell programs are not supported")
+                raise SpecError(where + ": use a portable installed console command or bash with a packaged .sh script; other shell programs are not supported")
         step = {"name": name, "environment": environment, "command": list(command),
                 "cwd": relative_path(item.get("cwd", "."), where + ".cwd", dot=True)}
         step_script_path(step)

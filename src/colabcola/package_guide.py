@@ -122,6 +122,7 @@ def inspect_project(root, commands, includes, excludes):
             elif isinstance(node,ast.ImportFrom) and node.level == 0 and node.module: imports.add(node.module.split('.')[0])
             if isinstance(node,ast.Attribute) and node.attr == 'cuda': gpu_hint=True
     for cmd in commands:
+        if cmd[0] == 'bash': continue  # An interpreter, not a Python import.
         if len(cmd)>2 and cmd[1]=='-m': imports.add(cmd[2].split('.')[0])
         elif not re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?',cmd[0]) and not cmd[0].endswith('.py'): imports.add({'torchrun':'torch'}.get(cmd[0],cmd[0]))
     external=sorted(imports - local - sys.stdlib_module_names - {'__future__'})
@@ -189,6 +190,9 @@ def guide(args, arguments, cli_parser):
         commands=[_split_command(ask('Command to run in Colab'))]
     _validate({'commands':commands})
     commands=[list(cmd) for cmd in commands]
+    from .environments import shell_script_path
+    for index, cmd in enumerate(commands):
+        shell_script_path(cmd, args.steps[index]['cwd'] if named else '.')
     root=_path(args.project,cwd) if args.project else _path(get('','project','.'),base)
     # An absolute standalone entry outside cwd supplies a useful project context.
     if not args.project and 'project' not in data and len(commands)==1:
@@ -238,7 +242,7 @@ def guide(args, arguments, cli_parser):
     for command_index, cmd in enumerate(commands):
         step_cwd = args.steps[command_index]['cwd'] if named else '.'
         command_root = root/step_cwd
-        start=3 if len(cmd)>2 and cmd[1]=='-m' else 2 if re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?',cmd[0]) else 1
+        start=2 if cmd[0]=='bash' else 3 if len(cmd)>2 and cmd[1]=='-m' else 2 if re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?',cmd[0]) else 1
         for i in range(start,len(cmd)):
             token=cmd[i]
             flag,separator,value=token.partition('=') if token.startswith('--') else ('','','')

@@ -3,6 +3,7 @@ from __future__ import annotations
 from .console import ConsoleUI, emit_json
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,17 @@ for index, command in enumerate(commands):
 '''
 
 
+# Keep the exact original launcher bytes for jobs without Bash commands.
+_BASH_LAUNCHER = _LAUNCHER.replace(
+    'config = json.loads', 'from shell_runtime import packaged_bash_argv\n\nconfig = json.loads', 1
+).replace(
+    '    if config.get("console_commands", [False] * len(commands))[index]:',
+    '    if args[0] == "bash":\n'
+    '        invocation = packaged_bash_argv(args, Path.cwd(), expected_sha256=config.get("shell_scripts", {}).get(args[1]))\n'
+    '    elif config.get("console_commands", [False] * len(commands))[index]:', 1
+)
+
+
 def parser():
     p = argparse.ArgumentParser(prog='colabcola package', description=__doc__,
         epilog='Options precede SCRIPT.py [args] or -- python [-m MODULE | SCRIPT.py] [args]. No upload or execution.')
@@ -65,7 +77,7 @@ def parser():
     p.add_argument('--save-colaml', '--save-answers', dest='save_answers', type=Path, metavar='COLAML', help='save resolved configuration to a new .colaml file (--save-answers is a compatibility alias)')
     p.add_argument('--interactive', action='store_true', help='ask questions even when an explicit --output is supplied')
     p.add_argument('--non-interactive', action='store_true', help='fail with missing questions instead of reading stdin')
-    p.add_argument('--command', action='append', dest='command_strings', default=[], help='one command in an ordered sequence; repeatable, no shell execution')
+    p.add_argument('--command', action='append', dest='command_strings', default=[], help='one command in an ordered sequence; repeatable, no shell command strings')
     p.add_argument('--include', action='append', default=[], help='include only matching project-relative files; repeatable')
     p.add_argument('--name')
     p.add_argument('--data', action='append', default=[], metavar='SOURCE=TARGET', help='file or directory mapped relative to job root')
@@ -194,7 +206,7 @@ def package(args):
         raise SpecError('--timeout must be positive and below --max-seconds to leave time for recovery')
     if args.resume_arg and (not args.checkpoint or not args.resume_arg.startswith('--')):
         raise SpecError('--resume-arg requires --checkpoint and an option beginning with --')
-    from .environments import normalize_environments, normalize_steps
+    from .environments import normalize_environments, normalize_steps, shell_script_path, _SHELLS
     named = bool(getattr(args, 'environments', None))
     environments = normalize_environments(args.environments) if named else {}
     steps = normalize_steps(args.steps, environments) if named else []
@@ -224,13 +236,17 @@ def package(args):
             if not isinstance(cmd,list) or not cmd or any(not isinstance(a,str) or '\0' in a for a in cmd):
                 raise SpecError('each command must be a nonempty string argv array without NUL bytes')
             cmd = list(cmd)
+            if shell_script_path(cmd) is not None:
+                normalized.append(cmd)
+                console_commands.append(False)
+                continue
             python_command = bool(re.fullmatch(r'python(?:3(?:\.\d+)?)?(?:\.exe)?', cmd[0]))
             if python_command: cmd.pop(0)
             if not cmd: raise SpecError('Python command needs a script or -m MODULE')
             console = not python_command and cmd[0] != '-m' and not cmd[0].endswith('.py')
             if console:
-                if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', cmd[0]) or cmd[0] in ('bash','sh','cmd','powershell','pwsh'):
-                    raise SpecError('use a portable installed console command; shell programs are not supported')
+                if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', cmd[0]) or cmd[0].lower().removesuffix('.exe') in _SHELLS:
+                    raise SpecError('use a portable installed console command or bash with a packaged .sh script; other shell programs are not supported')
             elif cmd[0] != '-m' and not cmd[0].endswith('.py'):
                 raise SpecError('Python commands must run a .py script or -m MODULE')
             if cmd[0]=='-m' and (len(cmd)<2 or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*',cmd[1])):
@@ -241,6 +257,9 @@ def package(args):
         raise SpecError('resume-arg currently supports one command; sequences restart from their first command')
     project = _safe_input(args.project) if args.project else None
     if project and not project.is_dir(): raise SpecError('--project must be a directory')
+    has_shell = any(cmd[0] == 'bash' for cmd in normalized)
+    if has_shell and not project:
+        raise SpecError('Bash script packaging requires --project')
     if not project and (named or len(normalized)>1 or normalized[0][0]=='-m'):
         raise SpecError('module and sequence packaging requires --project')
     files = {}
@@ -263,8 +282,14 @@ def package(args):
             if source in (args.commands,): continue
             if getattr(args, 'include', []) and not any(fnmatch.fnmatchcase(rel, pat) for pat in args.include): continue
             add(source,rel,'source')
+    # Resolve scripts against the selected source tree before input mappings
+    # are added; an external data mapping cannot introduce an executable.
+    for index, cmd in enumerate(normalized):
+        target = shell_script_path(cmd, steps[index]['cwd'] if named else '.')
+        if target is not None and (target not in files or files[target][1] != 'source'):
+            raise SpecError('Bash step script is not in the packaged project: ' + target)
     for cmd, console in ([] if named else zip(normalized, console_commands)):
-        if console: continue
+        if console or cmd[0] == 'bash': continue
         if cmd[0]=='-m':
             module = cmd[1].replace('.','/')
             if module+'.py' not in files and module+'/__main__.py' not in files and not getattr(args, 'allow_installed_modules', False):
@@ -338,10 +363,20 @@ def package(args):
             command_config = {'steps': steps}
             generated_files = ('launch.py', 'environment_runtime.py', 'commands.json')
         else:
-            (generated/'launch.py').write_text(_LAUNCHER,encoding='utf-8',newline='\n')
+            (generated/'launch.py').write_text(_BASH_LAUNCHER if has_shell else _LAUNCHER,encoding='utf-8',newline='\n')
             command_config={'commands':normalized,'resume_arg':args.resume_arg}
             if any(console_commands): command_config['console_commands']=console_commands
             generated_files = ('launch.py', 'commands.json')
+        if has_shell:
+            shell_scripts = {}
+            for index, cmd in enumerate(normalized):
+                target = shell_script_path(cmd, steps[index]['cwd'] if named else '.')
+                if target is not None:
+                    with (temporary / target).open('rb') as stream:
+                        shell_scripts[target] = hashlib.file_digest(stream, 'sha256').hexdigest()
+            command_config['shell_scripts'] = shell_scripts
+            shutil.copyfile(Path(__file__).with_name('shell_runtime.py'), generated/'shell_runtime.py')
+            generated_files += ('shell_runtime.py',)
         (generated/'commands.json').write_text(json.dumps(command_config,sort_keys=True)+'\n',encoding='utf-8',newline='\n')
         for filename in generated_files:
             payload.append({'role':'source','source':assets.name+'/_colabcola/'+filename,'target':'_colabcola/'+filename})

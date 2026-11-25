@@ -116,11 +116,13 @@ class EnvironmentSpecTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(SpecError):
                 normalize_steps(value, env)
 
-    def test_steps_preserve_literal_arguments_and_reject_shells_and_escape(self):
+    def test_steps_preserve_literal_arguments_and_reject_unsupported_shells_and_escape(self):
         env = normalize_environments({"work": {"python": "3.12"}})
         raw = {"name": "step", "environment": "work", "command": ["python", "../stage.py", "$HOME", "; literal"], "cwd": "analysis"}
         self.assertEqual(normalize_steps([raw], env)[0], raw)
-        for command in (["bash", "script.sh"], ["sh", "-c", "true"], ["python", "-c", "pass"], ["python", "../../escape.py"], ["/bin/tool"]):
+        shell = dict(raw, command=["bash", "script.sh", "$HOME", "; literal"])
+        self.assertEqual(normalize_steps([shell], env)[0], shell)
+        for command in (["bash", "-c", "true"], ["bash", "../script.sh"], ["sh", "-c", "true"], ["python", "-c", "pass"], ["python", "../../escape.py"], ["/bin/tool"]):
             changed = dict(raw, command=command)
             with self.subTest(command=command), self.assertRaises(SpecError):
                 normalize_steps([changed], env)

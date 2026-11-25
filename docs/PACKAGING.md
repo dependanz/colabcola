@@ -49,6 +49,15 @@ for names, custom paths and offline status.
 
 ## Command-first guided packaging
 
+Packaged Bash scripts may be invoked with `colabcola package -- bash scripts/step.sh ARG`
+from the project root, or with a recipe `commands = [["bash", "scripts/step.sh", "ARG"]]`.
+The script must be an included regular `.sh` source file inside the project, using
+normalized POSIX relative paths and LF line endings. Colabcola does not execute it
+while packaging or infer Python dependencies from the Bash executable. Execution
+uses the runtime's fixed `/bin/bash`, not an arbitrary shell string. Shell flags,
+absolute script paths, traversal and `bash -c` are refused. Named environments can
+select Bash scripts in ordered steps; see [recipes](RECIPES.md#named-environments-and-ordered-steps).
+
 From the directory where the command normally runs:
 
 ```powershell

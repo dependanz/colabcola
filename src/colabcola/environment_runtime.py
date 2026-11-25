@@ -323,19 +323,28 @@ def _colabcola_env_cuda_compatibility(definition, compiler_version, resolved=Non
         raise RuntimeError("environment CUDA compiler does not match the installed torch CUDA version")
 
 
-def _colabcola_environment_command(descriptor, argv, job_root, declared=None):
+def _colabcola_environment_command(descriptor, argv, job_root, declared=None, *, cwd=None, script_sha256=None):
     """Return an activated argv and an explicit, credential-free process environment."""
     if not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(x, str) or "\0" in x for x in argv):
         raise RuntimeError("environment command must be a literal argv array")
     prefix = pathlib.Path(descriptor["prefix"]).resolve()
     python = prefix / "bin/python"
     first = argv[0]
-    if re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", first):
+    if first == "bash":
+        if len(argv) < 2:
+            raise RuntimeError("unsupported Bash command: expected bash SCRIPT.sh [args...]")
+        # This function is also frozen into the standalone step launcher.
+        if __package__:
+            from .shell_runtime import packaged_bash_argv
+        else:
+            from shell_runtime import packaged_bash_argv
+        invocation = packaged_bash_argv(argv, job_root, cwd, expected_sha256=script_sha256)
+    elif re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", first):
         invocation = [str(python), *argv[1:]]
     elif first.endswith(".py") or first == "-m":
         invocation = [str(python), *argv]
     else:
-        if "/" in first or "\\" in first or first in {"bash", "sh", "dash", "zsh", "fish", "cmd", "powershell", "pwsh"}:
+        if "/" in first or "\\" in first or first.lower().removesuffix(".exe") in {"bash", "sh", "dash", "zsh", "fish", "cmd", "powershell", "pwsh"}:
             raise RuntimeError("unsupported named-environment command")
         executable = shutil.which(first, path=str(prefix / "bin"))
         if executable is None:
