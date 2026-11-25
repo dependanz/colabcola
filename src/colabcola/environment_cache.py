@@ -32,6 +32,12 @@ _CC_CACHE_METADATA_BYTES = 8 * 1024**2
 _CC_CACHE_FREE_RESERVE = 128 * 1024**2
 _CC_CACHE_BLOCK = 1024**2
 _CC_CACHE_TRANSFER_SECONDS = 300
+# Linux /proc/cpuinfo names for the baseline and v2 x86-64 psABI features.
+# The x86-64 Linux host check also establishes the ordinary OS support for
+# baseline SSE and syscall. Do not infer a target from a wheel's platform tag.
+_CC_CACHE_X86_V2_FLAGS = frozenset(("cmov", "cx8", "fpu", "fxsr", "mmx", "syscall",
+                                   "sse", "sse2", "cx16", "lahf_lm", "popcnt",
+                                   "pni", "sse4_1", "sse4_2", "ssse3"))
 
 
 class EnvironmentCacheError(RuntimeError):
@@ -143,6 +149,29 @@ def _cc_cache_runtime_fingerprint(resources, hardware, deadline):
             "cpu_flags": cpu_flags, "gpus": sorted(gpus, key=_cc_cache_json)}
 
 
+def _cc_cache_cpu_identity(definition, runtime):
+    """Exact host matching by default; a portable target is a user assertion.
+
+    Only the CPU portion is projected. The original image/ABI/GPU constraints
+    still apply and the actual flags must support the declared ISA on every
+    visible CPU. This is not proof of the installed binaries' ISA requirements.
+    """
+    policy = definition.get("cache_cpu", "exact")
+    if policy == "exact":
+        return runtime
+    if policy != "x86-64-v2" or definition.get("cache") is not True:
+        raise EnvironmentCacheError("unsupported cache CPU policy")
+    flags = runtime.get("cpu_flags")
+    if (runtime.get("system") != "Linux" or runtime.get("architecture") != "x86_64"
+            or not isinstance(flags, list) or not all(isinstance(f, str) for f in flags)
+            or not _CC_CACHE_X86_V2_FLAGS.issubset(flags)):
+        raise EnvironmentCacheError("host does not establish x86-64-v2 CPU compatibility")
+    projected = dict(runtime)
+    del projected["cpu_flags"]
+    projected["cpu_target"] = policy
+    return projected
+
+
 def _cc_cache_identity(name, definition, manifest, runtime, prefix_root, implementation):
     """Bind the declaration and every known build input, not a random run ID."""
     if not _cc_cache_digest_valid(implementation):
@@ -159,7 +188,8 @@ def _cc_cache_identity(name, definition, manifest, runtime, prefix_root, impleme
         inputs.append({"path": path, "size": entry["size"], "sha256": entry["sha256"]})
     identity = {"format": _CC_CACHE_FORMAT, "implementation": implementation,
                 "name": name, "definition": definition, "manager": manifest["environment_manager"],
-                "runtime": runtime, "prefix_root": str(prefix_root), "inputs": inputs}
+                "runtime": _cc_cache_cpu_identity(definition, runtime),
+                "prefix_root": str(prefix_root), "inputs": inputs}
     # Requirements may reference packaged local sources; local builds may read
     # arbitrary project data. Bind the whole job conservatively in these cases.
     if (pip.get("requirements") or any(p.startswith("./") for p in pip.get("packages", []))
@@ -459,7 +489,8 @@ class EnvironmentCache:
         return now + min(_CC_CACHE_TRANSFER_SECONDS, available)
 
     def choose(self, name, definition):
-        report = {"state": "bypass", "published": False}
+        report = {"state": "bypass", "published": False,
+                  "cpu_policy": definition.get("cache_cpu", "exact")}
         if self.storage is None:
             report["reason"] = "managed_cache_storage_unavailable"
             return {"report": report}
@@ -467,6 +498,9 @@ class EnvironmentCache:
             deadline = self._operation_deadline(True)
             if self.runtime is None:
                 self.runtime = self.fingerprint(self.manifest["resources"], self.hardware, deadline)
+            # Retain the actual host evidence, even when the key deliberately
+            # projects away non-required CPU flags under the portable contract.
+            report["runtime_fingerprint"] = self.runtime
             self.root = _cc_cache_check_root(self.root)
             identity = _cc_cache_identity(name, definition, self.manifest, self.runtime,
                                           self.root, self.implementation)
@@ -487,7 +521,13 @@ class EnvironmentCache:
                 report["reason"] = "prefix_already_exists"
                 return {"report": report}
             report.update(state="miss", key=key)
-            return {"report": report, "identity": identity, "prefix": prefix, "key": key}
+            selected = {"report": report, "identity": identity, "prefix": prefix, "key": key}
+            if identity["runtime"].get("cpu_target") == "x86-64-v2":
+                # The pinned micromamba release accepts this virtual-package
+                # override directly; it scopes solver CPU selection, not codegen.
+                selected["conda_archspec"] = "x86_64_v2"
+                report["conda_archspec"] = selected["conda_archspec"]
+            return selected
         except Exception as exc:
             # Do not copy arbitrary storage or environment exception messages to
             # public evidence; they can contain private URLs or credentials.

@@ -574,8 +574,14 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
             for channel in conda["channels"]:
                 create.extend(["--channel", channel])
             create.extend(["python=" + definition["python"], "pip", *conda["packages"]])
+            conda_env = _colabcola_env_clean_environment(root_prefix=root_prefix, network=True)
+            # Do not let the solver select a higher host-specific archspec for
+            # a portable cached prefix. Never fake support on an ineligible host,
+            # and never export the override into workload or pip environments.
+            if selected.get("conda_archspec"):
+                conda_env["CONDA_OVERRIDE_ARCHSPEC"] = selected["conda_archspec"]
             stage("conda", lambda: _colabcola_env_run(create, cwd=job_root,
-                env=_colabcola_env_clean_environment(root_prefix=root_prefix, network=True), deadline=deadline,
+                env=conda_env, deadline=deadline,
                 log_path=log_path, label=name + ": resolve conda environment"))
             descriptor["toolchain"] = _colabcola_env_toolchain(prefix)
             stage("python", lambda: _colabcola_env_probe(descriptor, job_root, deadline, log_path))

@@ -232,6 +232,22 @@ GPU compatibility. Local source builds conservatively bind the entire frozen job
 runtime does not expose reliable compatibility facts, or storage is unavailable,
 colabcola bypasses caching. Standalone notebooks do not mount or discover Drive.
 
+CPU feature matching is exact by default (`cache_cpu = "exact"`). Intel and AMD
+hosts can therefore have different keys even for identical recipes. An explicit
+`cache_cpu = "x86-64-v2"` (requires `cache = true`) is a portability assertion:
+all installed code, including native wheels and package/source builds, must run
+on any Linux x86-64-v2 host with the remaining recorded compatibility constraints.
+The runtime checks the required CPU flags on every visible CPU, binds the target
+rather than the full flag set, and constrains micromamba's solver archspec for
+portable cache builds. Missing required flags bypass caching. The runtime image,
+ABI, GPU, dependencies and verification constraints are unchanged. The solver
+constraint does **not** constrain arbitrary package build scripts or prove binary
+portability. Do not opt in for `-march=native` builds or unknown ISA requirements;
+wheel platform tags alone do not prove portability. In that case keep exact
+matching. Actual host fingerprint and selected policy are retained in cache
+result evidence. The cache implementation identity changes with this release, so
+older cache entries are not reused by the new implementation.
+
 Cache uploads use immutable, verified chunks and a commit published last. A hit
 must pass compressed archive integrity, safe extraction, interpreter activation,
 package inventory, `pip check`, and applicable CUDA checks. Failed restoration

@@ -542,6 +542,8 @@
       "required": [
         "python"
       ],
+      "if": { "required": ["cache_cpu"] },
+      "then": { "required": ["cache"], "properties": { "cache": { "const": true } } },
       "additionalProperties": false,
       "properties": {
         "python": {
@@ -554,6 +556,9 @@
         },
         "cache": {
           "type": "boolean"
+        },
+        "cache_cpu": {
+          "enum": ["exact", "x86-64-v2"]
         },
         "conda": {
           "type": "object",

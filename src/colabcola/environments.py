@@ -161,7 +161,7 @@ def normalize_environments(value):
     for name in sorted(value):
         _slug(name, "environment name")
         where = "environments." + name
-        item = _object(value[name], where, {"python", "conda", "pip", "cuda", "env", "cache"}, {"python"})
+        item = _object(value[name], where, {"python", "conda", "pip", "cuda", "env", "cache", "cache_cpu"}, {"python"})
         version = _text(item["python"], where + ".python")
         if not re.fullmatch(r"3\.(?:[89]|[1-9][0-9])(?:\.[0-9]+)?", version):
             raise SpecError(where + ".python must be a Python 3.8+ minor or patch version")
@@ -219,6 +219,11 @@ def normalize_environments(value):
             if type(item["cache"]) is not bool:
                 raise SpecError(where + ".cache must be boolean")
             normalized["cache"] = item["cache"]
+        if "cache_cpu" in item:
+            policy = item["cache_cpu"]
+            if item.get("cache") is not True or policy not in ("exact", "x86-64-v2"):
+                raise SpecError(where + ".cache_cpu requires cache = true and must be exact or x86-64-v2")
+            normalized["cache_cpu"] = policy
         if "cuda" in item:
             cuda = _text(item["cuda"], where + ".cuda")
             if not re.fullmatch(r"[1-9][0-9]*\.[0-9]+", cuda):

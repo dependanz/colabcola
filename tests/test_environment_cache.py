@@ -95,7 +95,65 @@ class FakeDriveHTTP:
         return lio.EnvironmentCacheStorage(parent, token, store_factory=self.factory)
 
 
+# Independent fixtures for the psABI v2 baseline and the differing feature
+# groups observed in two live Colab CPU allocations. No actual CPU vendor is
+# asserted by these synthetic fingerprints.
+_V2_FLAGS = set("cmov cx8 fpu fxsr mmx syscall sse sse2 cx16 lahf_lm popcnt pni sse4_1 sse4_2 ssse3".split())
+_CPU_A_FLAGS = sorted(_V2_FLAGS | set("avx avx2 arch_capabilities erms hle invpcid md_clear pcid rtm ss xtopology".split()))
+_CPU_B_FLAGS = sorted(_V2_FLAGS | set("avx avx2 clflushopt clwb clzero cmp_legacy cr8_legacy extd_apicid fxsr_opt misalignsse mmxext osvw rdpid sha_ni sse4a topoext umip vmmcall xgetbv1 xsavec xsaveerptr".split()))
+
+
+def _cpu_host(flags):
+    return {"release": "fixture-release-A", "system": "Linux", "architecture": "x86_64",
+            "kernel": "fixture-kernel", "libc": ["glibc", "2.35"],
+            "host_files": {"/etc/os-release": "a" * 64}, "cpu_flags": flags, "gpus": []}
+
+
 class CacheIdentityTests(unittest.TestCase):
+    def test_cpu_policy_declaration_and_schema(self):
+        for policy in ("exact", "x86-64-v2"):
+            definition = normalize_environments({"work": {"python": "3.12", "cache": True,
+                                                           "cache_cpu": policy}})["work"]
+            self.assertEqual(definition["cache_cpu"], policy)
+        invalid = [{"cache": True, "cache_cpu": x} for x in (None, True, 2, [], "native", "x86-64-v3")]
+        invalid.extend(({"cache_cpu": "x86-64-v2"}, {"cache": False, "cache_cpu": "exact"}))
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(SpecError):
+                normalize_environments({"work": {"python": "3.12", **fields}})
+        try:
+            import jsonschema
+        except ImportError:
+            return
+        schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/job-v1.schema.json").read_text())
+        validator = jsonschema.Draft202012Validator(schema["$defs"]["environment"])
+        self.assertTrue(validator.is_valid({"python": "3.12", "cache": True, "cache_cpu": "x86-64-v2"}))
+        for fields in invalid:
+            self.assertFalse(validator.is_valid({"python": "3.12", **fields}), fields)
+
+    def test_portable_policy_projects_only_cpu_and_keeps_compatibility(self):
+        definition = normalize_environments({"work": {"python": "3.12", "cache": True}})["work"]
+        portable = dict(definition, cache_cpu="x86-64-v2")
+        manifest = {"environment_manager": {}, "files": []}
+        a, b = _cpu_host(_CPU_A_FLAGS), _cpu_host(_CPU_B_FLAGS)
+        def key(d, host):
+            return cache._cc_cache_hash(cache._cc_cache_identity("work", d, manifest, host, "/content/prefixes", "1"*64))
+        self.assertNotEqual(key(definition, a), key(definition, b))
+        self.assertEqual(key(portable, a), key(portable, b))
+        self.assertNotEqual(key(definition, a), key(portable, a))
+        self.assertEqual(a["cpu_flags"], _CPU_A_FLAGS)
+        self.assertEqual(b["cpu_flags"], _CPU_B_FLAGS)
+        for change in ({"release": "other"}, {"kernel": "other"}, {"libc": ["glibc", "2.36"]},
+                       {"host_files": {"/etc/os-release": "b" * 64}},
+                       {"gpus": [{"compute_capability": "8.0", "driver": "555.1"}]}):
+            self.assertNotEqual(key(portable, a), key(portable, dict(b, **change)))
+        for flag in sorted(_V2_FLAGS):
+            with self.subTest(missing=flag), self.assertRaisesRegex(cache.EnvironmentCacheError, "x86-64-v2"):
+                key(portable, dict(b, cpu_flags=[f for f in _CPU_B_FLAGS if f != flag]))
+        for change in ({"cpu_flags": None}, {"cpu_flags": " ".join(_CPU_B_FLAGS)}, {"system": "Windows"},
+                       {"architecture": "aarch64"}):
+            with self.subTest(change=change), self.assertRaises(cache.EnvironmentCacheError):
+                key(portable, dict(b, **change))
+
     def test_declaration_and_key_invalidation(self):
         from copy import deepcopy
         definition = normalize_environments({"work": {"python": "3.12", "cache": True,
@@ -309,6 +367,7 @@ class CacheArchiveTests(unittest.TestCase):
 # Python and pip children still run through environment_runtime._env_run.
 _FIXTURE_BUILDS = []
 _FIXTURE_INSTALLS = []
+_FIXTURE_ARCHSPECS = []
 
 
 def fixture_manager_download(spec, destination, deadline):
@@ -326,6 +385,7 @@ exec "$@"
 def fixture_manager_run(argv, **kwargs):
     if "create" in argv and "--prefix" in argv:
         prefix = Path(argv[argv.index("--prefix") + 1]); _FIXTURE_BUILDS.append(str(prefix))
+        _FIXTURE_ARCHSPECS.append(kwargs["env"].get("CONDA_OVERRIDE_ARCHSPEC"))
         venv.EnvBuilder(with_pip=True, symlinks=False).create(prefix)
         libdir = sysconfig.get_config_var("LIBDIR")
         for name in {sysconfig.get_config_var("LDLIBRARY"), sysconfig.get_config_var("INSTSONAME")}:
@@ -336,6 +396,7 @@ def fixture_manager_run(argv, **kwargs):
     if "list" in argv and "--json" in argv:
         return "[]"
     if "pip" in argv and "install" in argv:
+        assert "CONDA_OVERRIDE_ARCHSPEC" not in kwargs["env"]
         _FIXTURE_INSTALLS.append(list(argv))
     return env_runtime._colabcola_env_run(argv, **kwargs)
 
@@ -354,23 +415,26 @@ assert Path(sys.prefix) == Path(os.environ["CONDA_PREFIX"])
 assert "fixture-token" not in str(dict(os.environ))
 assert "COLABCOLA_ENVIRONMENT_CACHE_STORAGE" not in os.environ
 assert "PRIVATE_FIXTURE_TOKEN" not in os.environ
+assert "CONDA_OVERRIDE_ARCHSPEC" not in os.environ
 Path("outputs").mkdir(exist_ok=True)
 Path("outputs/result.json").write_text(json.dumps({"value": cc_wheel_probe.VALUE}))
 ''', encoding="utf-8")
         self.drive = FakeDriveHTTP()
-        _FIXTURE_BUILDS.clear(); _FIXTURE_INSTALLS.clear()
+        _FIXTURE_BUILDS.clear(); _FIXTURE_INSTALLS.clear(); _FIXTURE_ARCHSPECS.clear()
         self.version = f"{sys.version_info.major}.{sys.version_info.minor}"
         self.release = "fixture-release-A"
 
-    def artifact(self, stem, *, enabled=True):
+    def artifact(self, stem, *, enabled=True, cpu_policy=None):
         args = parser().parse_args(["--project", str(self.project), "--output", str(self.root / (stem+".colajob")),
             "--name", "cache-fixture", "--artifact", "outputs/**", "--timeout", "120", "--max-seconds", "600"])
         args.environments = {"work": {"python": self.version, "cache": enabled, "pip": {"wheels": [self.wheel_rel]}}}
+        if cpu_policy is not None:
+            args.environments["work"]["cache_cpu"] = cpu_policy
         args.steps = [{"name": "work", "environment": "work", "command": ["python", "stage.py"]}]
         package(args)
         return build_notebook(build_bundle(load_job_invocation(args.output)))
 
-    def execute(self, artifact, stem, *, managed=True, release=None):
+    def execute(self, artifact, stem, *, managed=True, release=None, cpu_flags=None):
         # Fresh runtime filesystem; the absolute runtime prefix remains the same.
         if self.content.exists(): shutil.rmtree(self.content)
         document = json.loads(artifact.notebook_bytes)
@@ -380,7 +444,13 @@ Path("outputs/result.json").write_text(json.dumps({"value": cc_wheel_probe.VALUE
                 assert cell["source"].count(anchor) == 1
                 cell["source"] = cell["source"].replace(anchor,
                     "from test_environment_cache import fixture_manager_download, fixture_manager_run\n"
-                    "_colabcola_env_download = fixture_manager_download\n_colabcola_env_run = fixture_manager_run", 1)
+                    "_colabcola_env_download = fixture_manager_download\n_colabcola_env_run = fixture_manager_run\n" + anchor, 1)
+                if cpu_flags is not None:
+                    # Simulate the observed CPU capabilities only; the real
+                    # cache key, archive, validation and workload still execute.
+                    replacement = "from test_environment_cache import _cpu_host\n" + (
+                        "_cc_cache_runtime_fingerprint = lambda *args: _cpu_host(" + repr(cpu_flags) + ")\n")
+                    cell["source"] = cell["source"].replace(anchor, replacement + anchor, 1)
         control = self.root / stem; control.mkdir()
         raw = json.dumps(document).encode()
         (control / "notebook.ipynb").write_bytes(raw)
@@ -435,6 +505,29 @@ Path("outputs/result.json").write_text(json.dumps({"value": cc_wheel_probe.VALUE
         print("CACHE INTEGRATION EVIDENCE " + json.dumps({"cold": first["cache"], "warm": second["cache"],
              "wheel_change": third["cache"]["state"], "release_change": fourth["cache"]["state"],
              "builds": len(_FIXTURE_BUILDS), "installs": len(_FIXTURE_INSTALLS)}, sort_keys=True))
+
+    def test_portable_cache_restores_across_heterogeneous_cpu_fingerprints(self):
+        artifact = self.artifact("portable", cpu_policy="x86-64-v2")
+        cold, output, _ = self.execute(artifact, "portable-cold", cpu_flags=_CPU_A_FLAGS)
+        self.assertEqual(cold["cache"]["state"], "miss", cold["cache"])
+        self.assertTrue(cold["cache"]["published"], cold["cache"])
+        self.assertEqual(_FIXTURE_ARCHSPECS, ["x86_64_v2"])
+        warm, restored, _ = self.execute(artifact, "portable-warm", cpu_flags=_CPU_B_FLAGS)
+        self.assertEqual(warm["cache"]["state"], "hit", warm["cache"])
+        self.assertEqual(cold["cache"]["key"], warm["cache"]["key"])
+        self.assertEqual(cold["cache"]["runtime_fingerprint"]["cpu_flags"], _CPU_A_FLAGS)
+        self.assertEqual(warm["cache"]["runtime_fingerprint"]["cpu_flags"], _CPU_B_FLAGS)
+        self.assertEqual(output, restored)
+        self.assertEqual(len(_FIXTURE_BUILDS), 1)
+        self.assertEqual(len(_FIXTURE_INSTALLS), 1)
+        before = list(self.drive.events)
+        unsupported, fallback, _ = self.execute(artifact, "portable-ineligible", cpu_flags=[f for f in _CPU_B_FLAGS if f != "cx16"])
+        self.assertEqual(unsupported["cache"]["state"], "bypass")
+        self.assertIn("x86-64-v2", unsupported["cache"]["reason"])
+        self.assertEqual(before, self.drive.events)
+        self.assertEqual(_FIXTURE_ARCHSPECS, ["x86_64_v2", None])
+        self.assertEqual(output, fallback)
+        self.assertEqual(len(_FIXTURE_BUILDS), 2)
 
     def test_opt_out_or_missing_runtime_identity_never_touches_drive_cache(self):
         artifact = self.artifact("disabled", enabled=False)

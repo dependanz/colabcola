@@ -16,6 +16,17 @@ remain gates. Legacy jobs and environments without opt-in do not use the cache.
   Linux/CPU ABI and GPU compute capability/driver when relevant. `latest` alone
   is not an image identifier. Missing reliable compatibility facts cause a safe
   bypass; a request for a T4 alone is not proof of an actual GPU architecture.
+- Exact CPU flags remain the default. Real CPU runs on the same Colab image
+  produced different keys solely due to heterogeneous exposed CPU flags. An
+  explicit `cache_cpu = "x86-64-v2"` declares that the entire installed
+  environment is portable to that ISA baseline. Check the intersection of
+  visible CPU flags against the baseline; project only the CPU identity into
+  that target; constrain micromamba's `__archspec` to `x86_64_v2` on eligible
+  portable cache builds. All other identity fields remain exact. Preserve the
+  observed host fingerprint in result evidence. This is a user contract, not
+  automatic native-code analysis: package scripts and prebuilt wheels may use
+  additional ISA extensions, so keep exact matching for unverified native
+  builds. No old cache key is silently reinterpreted under the new policy.
 - Hash requirements and local package sources; conservatively bind the full frozen
   job identity for local source builds or other dependencies whose build input
   scope cannot be established. Wheel-only environments need not be invalidated by
