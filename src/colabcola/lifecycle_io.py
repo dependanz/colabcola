@@ -64,13 +64,45 @@ def read_regular(root, name, maximum=64 * 1024 * 1024):
 
 class DriveStore:
     """Only objects beneath an explicitly selected parent and this random run ID."""
-    def __init__(self, parent, run_id, token, *, request=None):
+    def __init__(self, parent, run_id, token, *, request=None, deadline=None, kind_prefix=""):
         if not parent or not all(c.isalnum() or c in "_-" for c in parent):
             raise LifecycleError("invalid Drive parent")
         if len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
             raise LifecycleError("invalid run ID")
         self.parent, self.run_id, self.token = parent, run_id, token
         self.request = request or urllib.request.urlopen
+        self.deadline = deadline
+        self.kind_prefix = kind_prefix
+        if kind_prefix not in ("", "environment-cache-v1-"):
+            raise LifecycleError("invalid Drive storage namespace")
+
+    def remaining(self):
+        if self.deadline is None:
+            return 30
+        remaining = self.deadline - time.time()
+        if remaining <= 0:
+            raise TimeoutError("Drive cache transfer exceeded its deadline")
+        return min(30, remaining)
+
+    def _read_response(self, response):
+        maximum = 70 * 1024 * 1024
+        if self.deadline is None:
+            return response.read(maximum + 1)
+        body = bytearray()
+        while True:
+            timeout = self.remaining()
+            # Apply the remaining budget to each socket read when using the
+            # standard urllib HTTP response, rather than permitting trickle reads.
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if sock is not None:
+                sock.settimeout(timeout)
+            read = getattr(response, "read1", response.read)
+            data = read(min(1024 * 1024, maximum + 1 - len(body)))
+            if not data:
+                return bytes(body)
+            body.extend(data)
+            if len(body) > maximum:
+                raise LifecycleError("Drive response exceeds proof limit")
 
     def api(self, method, route, data=None, headers=None):
         for retry in range(3):
@@ -78,8 +110,8 @@ class DriveStore:
                 "https://www.googleapis.com/" + route, data=data, method=method,
                 headers={"Authorization": "Bearer " + self.token(), **(headers or {})})
             try:
-                with self.request(request, timeout=30) as response:
-                    body = response.read(70 * 1024 * 1024 + 1)
+                with self.request(request, timeout=self.remaining()) as response:
+                    body = self._read_response(response)
                     if len(body) > 70 * 1024 * 1024:
                         raise LifecycleError("Drive response exceeds proof limit")
                     return body
@@ -90,13 +122,13 @@ class DriveStore:
             except (TimeoutError, urllib.error.URLError):
                 if retry == 2:
                     raise LifecycleError("Drive connection unavailable") from None
-            time.sleep(0.25 * 2**retry)
+            time.sleep(min(0.25 * 2**retry, self.remaining()))
         raise LifecycleError("Drive request failed")
 
     def list(self, kind):
         query = (f"'{self.parent}' in parents and trashed = false and "
                  f"appProperties has {{ key='cc_run' and value='{self.run_id}' }} and "
-                 f"appProperties has {{ key='cc_kind' and value='{kind}' }}")
+                 f"appProperties has {{ key='cc_kind' and value='{self.kind_prefix + kind}' }}")
         page, records = None, []
         while True:
             params = {"q": query, "fields": "nextPageToken,incompleteSearch,files(id,name,size,appProperties,createdTime)",
@@ -134,7 +166,7 @@ class DriveStore:
             return {"id": record["id"], "sha256": sha, "bytes": len(body)}
         boundary = "colabcola" + uuid.uuid4().hex
         metadata = {"name": name, "parents": [self.parent],
-                    "appProperties": {"cc_run": self.run_id, "cc_kind": kind, "cc_sha": sha}}
+                    "appProperties": {"cc_run": self.run_id, "cc_kind": self.kind_prefix + kind, "cc_sha": sha}}
         payload = (f"--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode()
                    + encoded(metadata)
                    + f"\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n".encode()
@@ -457,3 +489,198 @@ def verified_inputs(root, hashes):
             if hashlib.file_digest(stream, "sha256").hexdigest() != hashes[name]:
                 raise LifecycleError("prepared source changed")
     return paths
+
+
+# Separate cache scope: a stable namespace under the same explicit private Drive
+# parent, not an execution run. The full 256-bit key is also bound in the commit.
+ENVIRONMENT_CACHE_KIND_PREFIX = "environment-cache-v1-"
+ENVIRONMENT_CACHE_ARCHIVE_BYTES = 4 * 1024**3
+ENVIRONMENT_CACHE_MANIFEST_BYTES = 8 * 1024**2
+_ENV_CACHE_NAMES = {"environment.ccenv.gz": ENVIRONMENT_CACHE_ARCHIVE_BYTES,
+                    "manifest.json": ENVIRONMENT_CACHE_MANIFEST_BYTES}
+
+
+def environment_cache_namespace(key):
+    import re
+    if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key):
+        raise LifecycleError("invalid environment cache identity")
+    return digest((ENVIRONMENT_CACHE_KIND_PREFIX + key).encode("ascii"))[:32]
+
+
+def _cache_transfer_remaining(deadline):
+    if time.time() >= deadline:
+        raise TimeoutError("environment cache transfer exceeded its deadline")
+
+
+def _cache_ref(ref, maximum):
+    import re
+    if (not isinstance(ref, dict) or set(ref) != {"id", "bytes", "sha256"}
+            or not isinstance(ref["id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", ref["id"])
+            or type(ref["bytes"]) is not int or not 0 < ref["bytes"] <= maximum
+            or not isinstance(ref["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", ref["sha256"])):
+        raise LifecycleError("invalid environment cache object reference")
+    return ref
+
+
+class EnvironmentCacheStorage:
+    """Bounded commit-last, chunked storage using only the worker's Drive lease.
+
+    This is passed as an in-process object to managed notebook control cells.
+    It never enters the workload subprocess argv/environment or result metadata.
+    """
+    def __init__(self, parent, token, *, store_factory=DriveStore):
+        self.parent, self.token, self.store_factory = parent, token, store_factory
+
+    def _store(self, key, deadline):
+        _cache_transfer_remaining(deadline)
+        return self.store_factory(self.parent, environment_cache_namespace(key), self.token,
+                                  deadline=deadline, kind_prefix=ENVIRONMENT_CACHE_KIND_PREFIX)
+
+    @staticmethod
+    def _catalog(store, kind, maximum):
+        records = store.list(kind)
+        refs = {}
+        for item in records:
+            props = item.get("appProperties", {})
+            if (props.get("cc_run") != store.run_id
+                    or props.get("cc_kind") != ENVIRONMENT_CACHE_KIND_PREFIX + kind):
+                raise LifecycleError("environment cache catalog scope mismatch")
+            try:
+                ref = _cache_ref({"id": item["id"], "bytes": int(item["size"]),
+                                  "sha256": props["cc_sha"]}, maximum)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise LifecycleError("invalid environment cache catalog entry") from exc
+            if ref["id"] in refs:
+                raise LifecycleError("duplicate environment cache object ID")
+            refs[ref["id"]] = (ref, item.get("createdTime", ""))
+        return refs
+
+    @staticmethod
+    def _read(store, ref):
+        body = store.get(ref)
+        if len(body) != ref["bytes"] or digest(body) != ref["sha256"]:
+            raise LifecycleError("environment cache object integrity mismatch")
+        return body
+
+    def load(self, key, destination, deadline):
+        """Read the newest exact-key commit, rejecting out-of-scope member IDs."""
+        import shutil
+        import tempfile
+        store = self._store(key, deadline)
+        commits = self._catalog(store, "commit", 4 * 1024**2)
+        if not commits:
+            return False
+        ref, _ = max(commits.values(), key=lambda row: (row[1], row[0]["id"]))
+        commit = json.loads(self._read(store, ref))
+        if (not isinstance(commit, dict) or set(commit) != {"schema", "run_id", "cache_key", "kind", "members"}
+                or commit["schema"] != 1 or commit["run_id"] != store.run_id
+                or commit["cache_key"] != key or commit["kind"] != "environment-cache-v1"
+                or not isinstance(commit["members"], dict) or set(commit["members"]) != set(_ENV_CACHE_NAMES)):
+            raise LifecycleError("environment cache commit identity mismatch")
+        members = commit["members"]
+        catalog = self._catalog(store, "member", CHUNK_BYTES)
+        total = 0
+        for name, member in members.items():
+            maximum = _ENV_CACHE_NAMES[name]
+            if (not isinstance(member, dict) or set(member) != {"bytes", "sha256", "chunks"}
+                    or type(member["bytes"]) is not int or not 0 < member["bytes"] <= maximum
+                    or not isinstance(member["sha256"], str) or len(member["sha256"]) != 64
+                    or any(c not in "0123456789abcdef" for c in member["sha256"])
+                    or not isinstance(member["chunks"], list)
+                    or not 1 <= len(member["chunks"]) <= maximum // CHUNK_BYTES + 1):
+                raise LifecycleError("invalid environment cache member")
+            size = 0
+            for chunk in member["chunks"]:
+                _cache_ref(chunk, CHUNK_BYTES)
+                if chunk["id"] not in catalog or catalog[chunk["id"]][0] != chunk:
+                    raise LifecycleError("environment cache member is outside its Drive namespace")
+                size += chunk["bytes"]
+            if size != member["bytes"]:
+                raise LifecycleError("environment cache chunk sizes differ")
+            total += size
+        destination = Path(destination)
+        if os.path.lexists(destination):
+            raise LifecycleError("environment cache download destination already exists")
+        if shutil.disk_usage(destination.parent).free < total + 128 * 1024**2:
+            raise LifecycleError("insufficient environment cache download disk space")
+        temporary = Path(tempfile.mkdtemp(prefix=".download-", dir=destination.parent))
+        try:
+            # Download metadata first to avoid fetching the archive if the full
+            # key disagrees. The runtime separately checks the exact identity.
+            for name in ("manifest.json", "environment.ccenv.gz"):
+                member = members[name]
+                check = hashlib.sha256()
+                with (temporary / name).open("xb") as stream:
+                    for chunk in member["chunks"]:
+                        _cache_transfer_remaining(deadline)
+                        body = self._read(store, chunk)
+                        stream.write(body)
+                        check.update(body)
+                if check.hexdigest() != member["sha256"]:
+                    raise LifecycleError("environment cache member SHA-256 mismatch")
+                if name == "manifest.json":
+                    meta = json.loads((temporary / name).read_bytes())
+                    if (not isinstance(meta, dict) or meta.get("key") != key
+                            or not isinstance(meta.get("archive"), dict)
+                            or meta["archive"].get("sha256") != members["environment.ccenv.gz"]["sha256"]
+                            or meta["archive"].get("bytes") != members["environment.ccenv.gz"]["bytes"]):
+                        raise LifecycleError("environment cache manifest disagrees with commit")
+            _cache_transfer_remaining(deadline)
+            if os.path.lexists(destination):
+                raise LifecycleError("environment cache download destination already exists")
+            os.rename(temporary, destination)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        return True
+
+    def save(self, key, source, deadline):
+        """Publish immutable verified members, and publish the commit last."""
+        store = self._store(key, deadline)
+        source = Path(source)
+        metadata_path = safe_file(source, "manifest.json")
+        if metadata_path.stat().st_size > ENVIRONMENT_CACHE_MANIFEST_BYTES:
+            raise LifecycleError("environment cache manifest exceeds its bound")
+        meta = json.loads(metadata_path.read_bytes())
+        if not isinstance(meta, dict) or meta.get("key") != key or not isinstance(meta.get("archive"), dict):
+            raise LifecycleError("environment cache manifest identity mismatch")
+        members = {}
+        for name in ("environment.ccenv.gz", "manifest.json"):
+            path = safe_file(source, name)
+            size = path.stat().st_size
+            if not 0 < size <= _ENV_CACHE_NAMES[name]:
+                raise LifecycleError("environment cache file exceeds its bound")
+            check = hashlib.sha256()
+            chunks, total = [], 0
+            with path.open("rb") as stream:
+                while True:
+                    _cache_transfer_remaining(deadline)
+                    body = stream.read(CHUNK_BYTES)
+                    if not body:
+                        break
+                    total += len(body)
+                    if total > size:
+                        raise LifecycleError("environment cache file grew during publication")
+                    check.update(body)
+                    sha = digest(body)
+                    ref = _cache_ref(store.put("member", "environment-cache-chunk-" + sha, body), CHUNK_BYTES)
+                    # DriveStore.put itself reads the remote object back before returning.
+                    if ref["bytes"] != len(body) or ref["sha256"] != sha:
+                        raise LifecycleError("environment cache chunk publication mismatch")
+                    chunks.append(ref)
+            if total != size or path.stat().st_size != size:
+                raise LifecycleError("environment cache file changed during publication")
+            members[name] = {"bytes": total, "sha256": check.hexdigest(), "chunks": chunks}
+        archive = members["environment.ccenv.gz"]
+        if meta["archive"].get("bytes") != archive["bytes"] or meta["archive"].get("sha256") != archive["sha256"]:
+            raise LifecycleError("environment cache archive changed during publication")
+        commit = {"schema": 1, "run_id": store.run_id, "cache_key": key,
+                  "kind": "environment-cache-v1", "members": members}
+        body = encoded(commit)
+        _cache_transfer_remaining(deadline)
+        if len(body) > 4 * 1024**2:
+            raise LifecycleError("environment cache commit exceeds its bound")
+        ref = _cache_ref(store.put("commit", "environment-cache-" + key + ".json", body), 4 * 1024**2)
+        if ref["bytes"] != len(body) or ref["sha256"] != digest(body):
+            raise LifecycleError("environment cache commit publication mismatch")
+        return ref

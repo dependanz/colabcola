@@ -282,6 +282,18 @@ def package(args):
             if source in (args.commands,): continue
             if getattr(args, 'include', []) and not any(fnmatch.fnmatchcase(rel, pat) for pat in args.include): continue
             add(source,rel,'source')
+    # Explicit wheel declarations must reference included project source files,
+    # not a host path or an external data mapping. Classify once even if several
+    # environments use the same wheel. Keep targets project-relative.
+    if named:
+        for target in sorted({wheel for definition in environments.values()
+                              for wheel in definition["pip"].get("wheels", [])}):
+            if target not in files or files[target][1] != 'source':
+                raise SpecError('environment wheel is not in the packaged project: ' + target)
+            source, _ = files[target]
+            if not source.is_file():
+                raise SpecError('environment wheel must be a regular file: ' + target)
+            files[target] = (source, 'wheel')
     # Resolve scripts against the selected source tree before input mappings
     # are added; an external data mapping cannot introduce an executable.
     for index, cmd in enumerate(normalized):

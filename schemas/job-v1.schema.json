@@ -552,6 +552,9 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*\\.[0-9]+$"
         },
+        "cache": {
+          "type": "boolean"
+        },
         "conda": {
           "type": "object",
           "additionalProperties": false,
@@ -581,6 +584,15 @@
               "type": "array",
               "items": {
                 "$ref": "#/$defs/portablePath"
+              }
+            },
+            "wheels": {
+              "type": "array",
+              "maxItems": 1024,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/portablePath",
+                "pattern": "\\.whl$"
               }
             },
             "index_url": {

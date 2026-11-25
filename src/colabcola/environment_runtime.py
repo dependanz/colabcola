@@ -383,8 +383,105 @@ def _colabcola_environment_command(descriptor, argv, job_root, declared=None, *,
     return _colabcola_env_activation(descriptor, invocation), env
 
 
+def _colabcola_env_wheel_inputs(definition, job_root, wheel_records, deadline):
+    """Verify each declared wheel against the authenticated bundle manifest."""
+    root = pathlib.Path(job_root).resolve()
+    verified = []
+    for relative in definition["pip"].get("wheels", []):
+        if (not isinstance(relative, str) or not relative.endswith(".whl")
+                or any(c in relative for c in "\\:\0\r\n")
+                or any(p in ("", ".", "..") for p in relative.split("/"))):
+            raise RuntimeError("environment wheel must be a normalized project-relative .whl file")
+        record = (wheel_records or {}).get(relative)
+        if (not isinstance(record, dict) or record.get("role") != "wheel"
+                or record.get("path") != relative or type(record.get("size")) is not int
+                or record["size"] < 0 or not isinstance(record.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])):
+            raise RuntimeError("environment wheel has no valid frozen identity: " + relative)
+        path = root
+        for part in relative.split("/"):
+            path /= part
+            if path.is_symlink():
+                raise RuntimeError("environment wheel path contains a symlink: " + relative)
+        if not path.is_file() or not path.resolve().is_relative_to(root):
+            raise RuntimeError("environment wheel is missing or unsafe: " + relative)
+        if path.stat().st_size != record["size"]:
+            raise RuntimeError("environment wheel size differs from frozen identity: " + relative)
+        digest = hashlib.sha256()
+        count = 0
+        with path.open("rb") as stream:
+            while True:
+                if deadline is not None and time.time() >= deadline:
+                    raise TimeoutError("environment wheel verification exceeded its deadline")
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                count += len(block)
+                if count > record["size"]:
+                    raise RuntimeError("environment wheel grew during verification: " + relative)
+                digest.update(block)
+        if count != record["size"] or digest.hexdigest() != record["sha256"]:
+            raise RuntimeError("environment wheel SHA-256 differs from frozen identity: " + relative)
+        verified.append({"path": relative, "size": count, "sha256": digest.hexdigest()})
+    return verified
+
+
+def _colabcola_env_install_wheels(descriptor, job_root, wheel_records, deadline, log_path):
+    verified = _colabcola_env_wheel_inputs(descriptor["definition"], job_root, wheel_records, deadline)
+    if verified:
+        # Do not resolve transitive dependencies or silently keep an index wheel
+        # with the same version. The declared local wheel bytes are authoritative.
+        argv = ["python", "-m", "pip", "install", "--no-input", "--no-index",
+                "--no-deps", "--force-reinstall", *[str(pathlib.Path(job_root).resolve() / w["path"])
+                                                     for w in verified]]
+        command, env = _colabcola_environment_command(descriptor, argv, job_root)
+        _colabcola_env_run(command, cwd=job_root, env=env, deadline=deadline,
+                           log_path=log_path, label=descriptor["name"] + ": embedded wheels")
+    return verified
+
+
+def _colabcola_env_compiler_probe(descriptor, job_root, deadline, log_path, stage):
+    name, definition = descriptor["name"], descriptor["definition"]
+    if definition.get("cuda") and not descriptor["toolchain"].get("nvcc"):
+        raise RuntimeError("environment " + name + " declares CUDA but does not provide its own nvcc")
+    nvcc = descriptor["toolchain"].get("nvcc")
+    compiler_version = None
+    if nvcc:
+        _, cuda_env = _colabcola_environment_command(descriptor, ["python"], job_root)
+        nvcc_command = _colabcola_env_activation(descriptor, [nvcc, "--version"])
+        compiler_output = stage("cuda-toolkit", lambda: _colabcola_env_run(nvcc_command,
+            cwd=job_root, env=cuda_env, deadline=deadline, timeout=60, log_path=log_path,
+            label=name + ": CUDA compiler", capture=True))
+        match = re.search(r"release\s+([0-9]+\.[0-9]+)", compiler_output)
+        if not match:
+            raise RuntimeError("cannot determine the environment CUDA compiler version")
+        compiler_version = match.group(1)
+    _colabcola_env_cuda_compatibility(definition, compiler_version)
+    return compiler_version
+
+
+def _colabcola_env_resolved_facts(descriptor, job_root, deadline, log_path, stage, compiler_version):
+    name, definition = descriptor["name"], descriptor["definition"]
+    manager, root_prefix, prefix = descriptor["manager"], descriptor["root_prefix"], descriptor["prefix"]
+    nvcc = descriptor["toolchain"].get("nvcc")
+    command, env = _colabcola_environment_command(descriptor, ["python", "-m", "pip", "check"], job_root)
+    stage("pip-check", lambda: _colabcola_env_run(command, cwd=job_root, env=env,
+        deadline=deadline, timeout=120, log_path=log_path, label=name + ": pip check"))
+    resolved = stage("resolved", lambda: _colabcola_env_probe(descriptor, job_root, deadline, log_path, cuda=True))
+    conda_command = [str(manager), "--no-rc", "--no-env", "--root-prefix", str(root_prefix),
+                     "list", "--prefix", str(prefix), "--json"]
+    conda_output = stage("conda-packages", lambda: _colabcola_env_run(conda_command, cwd=job_root,
+        env=_colabcola_env_clean_environment(root_prefix=root_prefix), deadline=deadline,
+        timeout=120, log_path=log_path, label=name + ": resolved conda packages", capture=True))
+    resolved["conda_packages"] = json.loads(conda_output)
+    _colabcola_env_cuda_compatibility(definition, compiler_version, resolved)
+    if compiler_version:
+        resolved["cuda_compiler"] = {"path": nvcc, "version": compiler_version}
+    return resolved
+
+
 def _colabcola_prepare_environments(environments, manager_spec, job_root,
-                                    environment_root, result_root, deadline=None):
+                                    environment_root, result_root, deadline=None, *, wheel_records=None, cache_context=None):
     """Build every declared environment and persist resolved evidence as it progresses."""
     job_root = pathlib.Path(job_root).resolve()
     environment_root = pathlib.Path(environment_root).resolve()
@@ -417,8 +514,14 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
             env_start = time.monotonic()
             record.update(state="building", started_at=_colabcola_env_now())
             _colabcola_environment_json(evidence_path, facts)
-            prefix = environment_root / "envs" / name
-            if prefix.exists():
+            selected = {}
+            if definition.get("cache") is True:
+                selected = (cache_context.choose(name, definition) if cache_context is not None else
+                            {"report": {"state": "bypass", "reason": "managed_cache_storage_unavailable", "published": False}})
+                record["cache"] = selected["report"]
+                _colabcola_environment_json(evidence_path, facts)
+            prefix = selected.get("prefix", environment_root / "envs" / name)
+            if os.path.lexists(prefix):
                 raise RuntimeError("environment prefix already exists; reuse requires a verified cache")
             descriptor = {"name": name, "manager": str(manager), "root_prefix": str(root_prefix),
                           "prefix": str(prefix), "definition": definition}
@@ -437,6 +540,33 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
                 finally:
                     evidence.update(elapsed_seconds=round(time.monotonic() - stage_start, 6), finished_at=_colabcola_env_now())
                     _colabcola_environment_json(evidence_path, facts)
+            if selected.get("prefix") is not None:
+                # Wheels are still verified on a hit, not just on installation.
+                verified_wheels = _colabcola_env_wheel_inputs(definition, job_root, wheel_records, deadline)
+                def validate_restored(restore_deadline):
+                    descriptor["toolchain"] = _colabcola_env_toolchain(prefix)
+                    direct = lambda label, operation: operation()
+                    compiler = _colabcola_env_compiler_probe(descriptor, job_root, restore_deadline, log_path, direct)
+                    return _colabcola_env_resolved_facts(descriptor, job_root, restore_deadline, log_path, direct, compiler)
+                restored = stage("cache-restore", lambda: cache_context.restore(selected, validate_restored))
+                if restored is not None:
+                    elapsed = time.monotonic() - env_start
+                    selected["report"].update(setup_seconds=elapsed,
+                        estimated_seconds_saved=selected["report"]["cold_build_seconds"] - elapsed)
+                    if verified_wheels:
+                        record["embedded_wheels"] = verified_wheels
+                    record.update(state="ready", facts=restored, toolchain=descriptor["toolchain"],
+                        elapsed_seconds=round(elapsed, 6), finished_at=_colabcola_env_now())
+                    descriptors[name] = descriptor
+                    _colabcola_environment_json(evidence_path, facts)
+                    print("[colabcola] Environment " + name + " restored from cache (Python " + restored["python"] + ")", flush=True)
+                    continue
+                # A bad cache is never run; the same stable prefix is rebuilt
+                # only after the cache helper has removed its owned restoration.
+                if os.path.lexists(prefix):
+                    raise RuntimeError("cache restore left an unsafe environment prefix")
+                descriptor.pop("toolchain", None)
+            build_started = time.monotonic()
             print("[colabcola] Building environment " + name, flush=True)
             conda = definition["conda"]
             create = [str(manager), "--no-rc", "--no-env", "--root-prefix", str(root_prefix),
@@ -449,21 +579,7 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
                 log_path=log_path, label=name + ": resolve conda environment"))
             descriptor["toolchain"] = _colabcola_env_toolchain(prefix)
             stage("python", lambda: _colabcola_env_probe(descriptor, job_root, deadline, log_path))
-            if definition.get("cuda") and not descriptor["toolchain"].get("nvcc"):
-                raise RuntimeError("environment " + name + " declares CUDA but does not provide its own nvcc")
-            nvcc = descriptor["toolchain"].get("nvcc")
-            compiler_version = None
-            if nvcc:
-                _, cuda_env = _colabcola_environment_command(descriptor, ["python"], job_root)
-                nvcc_command = _colabcola_env_activation(descriptor, [nvcc, "--version"])
-                compiler_output = stage("cuda-toolkit", lambda: _colabcola_env_run(nvcc_command,
-                    cwd=job_root, env=cuda_env, deadline=deadline, timeout=60, log_path=log_path,
-                    label=name + ": CUDA compiler", capture=True))
-                match = re.search(r"release\s+([0-9]+\.[0-9]+)", compiler_output)
-                if not match:
-                    raise RuntimeError("cannot determine the environment CUDA compiler version")
-                compiler_version = match.group(1)
-            _colabcola_env_cuda_compatibility(definition, compiler_version)
+            compiler_version = _colabcola_env_compiler_probe(descriptor, job_root, deadline, log_path, stage)
             pip = definition["pip"]
             install = ["python", "-m", "pip", "install", "--no-input"]
             if pip.get("index_url"):
@@ -485,19 +601,15 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
                 descriptor["toolchain"] = _colabcola_env_toolchain(prefix)
                 pip_facts = stage(label + "-verify", lambda: _colabcola_env_probe(descriptor, job_root, deadline, log_path, cuda=True))
                 _colabcola_env_cuda_compatibility(definition, compiler_version, pip_facts)
-            command, env = _colabcola_environment_command(descriptor, ["python", "-m", "pip", "check"], job_root)
-            stage("pip-check", lambda: _colabcola_env_run(command, cwd=job_root, env=env,
-                deadline=deadline, timeout=120, log_path=log_path, label=name + ": pip check"))
-            resolved = stage("resolved", lambda: _colabcola_env_probe(descriptor, job_root, deadline, log_path, cuda=True))
-            conda_command = [str(manager), "--no-rc", "--no-env", "--root-prefix", str(root_prefix),
-                             "list", "--prefix", str(prefix), "--json"]
-            conda_output = stage("conda-packages", lambda: _colabcola_env_run(conda_command, cwd=job_root,
-                env=_colabcola_env_clean_environment(root_prefix=root_prefix), deadline=deadline,
-                timeout=120, log_path=log_path, label=name + ": resolved conda packages", capture=True))
-            resolved["conda_packages"] = json.loads(conda_output)
-            _colabcola_env_cuda_compatibility(definition, compiler_version, resolved)
-            if compiler_version:
-                resolved["cuda_compiler"] = {"path": nvcc, "version": compiler_version}
+            if pip.get("wheels"):
+                record["embedded_wheels"] = stage("embedded-wheels", lambda: _colabcola_env_install_wheels(
+                    descriptor, job_root, wheel_records, deadline, log_path))
+                descriptor["toolchain"] = _colabcola_env_toolchain(prefix)
+            resolved = _colabcola_env_resolved_facts(descriptor, job_root, deadline, log_path, stage, compiler_version)
+            if selected.get("prefix") is not None:
+                build_seconds = time.monotonic() - build_started
+                cache_context.publish(selected, resolved, build_seconds)
+                selected["report"]["setup_seconds"] = time.monotonic() - env_start
             record.update(state="ready", facts=resolved, toolchain=descriptor["toolchain"],
                 elapsed_seconds=round(time.monotonic() - env_start, 6), finished_at=_colabcola_env_now())
             descriptors[name] = descriptor
@@ -513,5 +625,7 @@ def _colabcola_prepare_environments(environments, manager_spec, job_root,
                 elapsed_seconds=round(time.monotonic() - env_start, 6))
         raise
     finally:
+        if cache_context is not None:
+            cache_context.close()
         facts.update(elapsed_seconds=round(time.monotonic() - started, 6), finished_at=_colabcola_env_now())
         _colabcola_environment_json(evidence_path, facts)

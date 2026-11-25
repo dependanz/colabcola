@@ -13,9 +13,9 @@ import time
 import threading
 
 try:
-    from .lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES
+    from .lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage
 except ImportError:
-    from lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES
+    from lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage
 
 
 class AuthorizationEvidence:
@@ -176,6 +176,11 @@ def execute_notebook(config_path):
                  "COLABCOLA_RUN_ID": config.get("run_id"),
                  "COLABCOLA_ATTEMPT": config.get("attempt"),
                  "COLABCOLA_ALLOCATION_ID": config.get("allocation_id")}
+    # A capability in the trusted control namespace, not a credential or an
+    # environment variable handed to the workload. No I/O occurs until opt-in.
+    if config.get("parent"):
+        namespace["COLABCOLA_ENVIRONMENT_CACHE_STORAGE"] = EnvironmentCacheStorage(
+            config["parent"], token_reader(root))
     for cell in json.loads(document)["cells"]:
         if cell["cell_type"] == "code":
             exec(cell["source"], namespace)

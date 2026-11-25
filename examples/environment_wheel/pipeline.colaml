@@ -1,0 +1,47 @@
+name = "environment-wheel-example"
+project = "."
+include = ["stage.py", "wheels/*.whl"]
+inputs = []
+
+[environments.train]
+python = "3.12"
+
+[environments.train.pip]
+wheels = ["wheels/cc_wheel_probe-1.0-py3-none-any.whl"]
+
+[environments.evaluate]
+python = "3.12"
+
+[[steps]]
+name = "train"
+environment = "train"
+command = ["python", "stage.py", "train"]
+
+[[steps]]
+name = "evaluate"
+environment = "evaluate"
+command = ["python", "stage.py", "evaluate"]
+
+[compute]
+gpu = "NONE"
+
+[outputs]
+include = ["outputs/**"]
+maximum_bytes = 1048576
+checkpoints = []
+logs = []
+
+[[outputs.completed]]
+marker = "outputs/complete.json"
+files = ["train.json", "acceptance.json"]
+ready_when = { state = "complete" }
+
+[limits]
+timeout_seconds = 120
+max_seconds = 1200
+max_runtimes = 1
+seed = 2026
+
+[execution]
+runtime_version = "latest"
+provider_backend = "legacy"

@@ -242,6 +242,9 @@ def _validate_environment_targets(spec, expanded):
         raise SpecError("generated commands.json does not match the declared ordered steps or shell script hashes")
     for environment in spec.environments:
         definition = environment.mapping()
+        for target in definition["pip"].get("wheels", []):
+            if target not in files or files[target].role != "wheel":
+                raise SpecError("environment wheel must resolve to a packaged file with role 'wheel': " + target)
         packages = list(definition["pip"]["packages"])
         for target in definition["pip"]["requirements"]:
             if target not in files:
