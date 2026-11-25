@@ -131,7 +131,7 @@ def test_host_video_ids_follow_validated_frame_into_viewer(tmp_path,monkeypatch)
     from colabcola import bridge_video_push_session as mod
     from colabcola.bridge_video_comm_protocol import encode_video_reply
     from colabcola.bridge_video_stream import VideoAccessUnit
-    from test_bridge_video_v34_push import IDR
+    IDR = b"\x00\x00\x00\x01\x65\x88\x84"
     ready=threading.Event()
     ready.set()
     stopped=threading.Event()
@@ -184,3 +184,65 @@ def test_host_video_ids_follow_validated_frame_into_viewer(tmp_path,monkeypatch)
     assert received["host_dequeue_ns"]<=received["host_matched_ns"]<=received["host_validated_ns"]
     assert received["host_validated_ns"]<=offered["decode_start_ns"]<=offered["decoded_ns"]
     assert offered["decoded_ns"]==timing.decoded_ns
+
+
+def test_viewer_poll_correlates_actual_label_configuration(tmp_path, monkeypatch):
+    """Execute the production polling closure against a deterministic fake Tk."""
+    import sys
+    from colabcola import bridge_demo as demo
+
+    trace = HostEventTrace(tmp_path/"gui.jsonl", RUN, "tk-viewer")
+    ready = threading.Event()
+    release = threading.Event()
+    callbacks = []
+    configured = []
+    now = time.perf_counter_ns()
+    timing = LocalFrameTiming(now, now, video_seq=12, renderer_seq=34, input_ack=5)
+
+    class Root:
+        def title(self, *_args): pass
+        def bind(self, *_args): pass
+        def protocol(self, *_args): pass
+        def destroy(self): pass
+        def after(self, _ms, callback):
+            callbacks.append(callback)
+        def mainloop(self):
+            try:
+                assert ready.wait(3)
+                callbacks.pop(0)()
+            finally:
+                release.set()
+
+    status = SimpleNamespace(value="Connecting...")
+    status.get = lambda: status.value
+    def set_status(value):
+        status.value = value
+    status.set = set_status
+    label = SimpleNamespace(bind=lambda *_args: None,
+                            configure=lambda **kw: configured.append(kw))
+    root = Root()
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=lambda: root))
+    monkeypatch.setattr(demo, "create_viewer_layout", lambda *_args: (label, status))
+    image = object()
+    monkeypatch.setattr(demo, "photoimage_from_ppm", lambda *_args: image)
+    def work(_outgoing, frames, stopped):
+        frames.put_nowait(("frame-timed", (b"not-retained", timing)))
+        ready.set()
+        assert release.wait(3)
+
+    demo.run_viewer("127.0.0.1", 0, "", worker=work,
+                    presentation_trace=trace)
+    assert configured == [{"image":image, "text":""}]
+    assert label.image is image
+    assert status.value == "Connected"
+    assert trace.finish(outcome="completed")
+    rows = read_rows(trace.path)
+    assert [r["event"] for r in rows] == [
+        "header","viewer_ready","gui_dequeued","gui_configured","gui_queue_terminal","terminal"]
+    dequeued, presented = rows[2:4]
+    assert dequeued["video_seq"] == presented["video_seq"] == 12
+    assert dequeued["renderer_seq"] == presented["renderer_seq"] == 34
+    assert dequeued["input_ack"] == presented["input_ack"] == 5
+    assert now <= dequeued["dequeued_ns"] <= presented["image_start_ns"] <= presented["configured_ns"]
+    assert rows[4]["pending_items"] == 0
+    assert "not-retained" not in trace.path.read_text()

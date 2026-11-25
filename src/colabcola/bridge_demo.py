@@ -408,6 +408,9 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                     label.configure(image=image, text="")
                     label.image = image
                     configured_ns = time.perf_counter_ns()
+                    # End the legacy GUI cost measurement before trace bookkeeping.
+                    image_cost_ms = ((time.perf_counter() - image_started) * 1000
+                                     if gui_meter is not None else None)
                     if fields is not None:
                         presentation_trace.add("gui_configured", **fields,
                                                image_start_ns=image_start_ns,
@@ -415,8 +418,7 @@ def run_viewer(host: str, port: int, token: str, *, width: int = WIDTH,
                                                decoded_ns=timing.decoded_ns)
                     if gui_meter is not None:
                         gui_meter.presented(
-                            (time.perf_counter() - image_started) * 1000,
-                            configured_ns=configured_ns)
+                            image_cost_ms, configured_ns=configured_ns)
                         if timing is not None:
                             gui_meter.configured_timed_frame(timing, configured_ns)
                     if status.get() == "Connecting...":
