@@ -186,6 +186,8 @@ class KernelCommBridge:
             names.append("bridge_video_colab_source.py")
         if self.video_push:
             names.append("bridge_video_push_runtime.py")
+        if self.trace_pipeline:
+            names.append("bridge_remote_trace.py")
         if self.application == "freedoom":
             names.append("bridge_game_freedoom_runtime.py")
         elif self.application == "inputlab":

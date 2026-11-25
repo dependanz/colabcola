@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import runpy
 import struct
 import threading
 import time
@@ -507,13 +508,21 @@ class InputLabFrameCache:
 
 
 class InputLabSource:
-    def __init__(self,directory,run_id,fps=30,sequence_buffered=True):
+    def __init__(self,directory,run_id,fps=30,sequence_buffered=True,*,trace_pipeline=False):
         if (not isinstance(run_id,str) or RUN_RE.fullmatch(run_id) is None
                 or type(fps) is not int or fps!=FPS
                 or sequence_buffered is not True):
             raise ValueError("Input Lab requires 30Hz buffered source")
+        if type(trace_pipeline) is not bool:
+            raise ValueError("invalid pipeline trace selector")
         self.root=Path(directory)
         self.run_id=run_id
+        self._trace=None
+        if trace_pipeline:
+            trace_class=runpy.run_path(str(Path(__file__).with_name(
+                "bridge_remote_trace.py")))["RemotePipelineTrace"]
+            self._trace=trace_class(self.root/"remote-producer-trace.jsonl",
+                                    run_id, "inputlab-producer")
         self.events=queue.Queue(maxsize=QUEUE_LIMIT)
         self._seq=0
         self.state=LabState()
@@ -526,6 +535,7 @@ class InputLabSource:
         self._thread=None
 
     def submit_input(self,event):
+        submitted_ns=time.monotonic_ns() if self._trace else None
         record=validate_event(event)
         with self._lock:
             if self._stop.is_set() or record["seq"]<=self._seq:
@@ -535,6 +545,10 @@ class InputLabSource:
             except queue.Full:
                 return False
             self._seq=record["seq"]
+            if self._trace:
+                self._trace.add("input_enqueued", input_seq=self._seq,
+                                submit_start_ns=submitted_ns,
+                                queue_depth=self.events.qsize())
             return True
 
     def note_host_credit(self):
@@ -564,6 +578,10 @@ class InputLabSource:
                       (json.dumps(payload,sort_keys=True)+"\n").encode())
 
     def _worker(self):
+        outcome="interrupted"
+        stop_reason="worker_interrupted"
+        published_seq=-1
+        phase="initialization"
         try:
             import torch
             if not torch.cuda.is_available():
@@ -583,29 +601,60 @@ class InputLabSource:
             stop_reason="normal"
             while not self._stop.is_set() and not (self.root/"stop").exists():
                 tick=time.monotonic()
+                phase="lease_check"
                 if self.host_credit_lease_expired(tick):
                     stop_reason="host_credit_lease_expired"
                     break
+                phase="input_application"
+                if self._trace:
+                    self._trace.add("frame_begin", renderer_seq=frame_seq,
+                                    pending_inputs=self.events.qsize())
                 for _ in range(32):
                     try:
                         e=self.events.get_nowait()
                     except queue.Empty:
                         break
                     with self._lock:
-                        self.state.apply(e,now=tick)
+                        if self._trace:
+                            apply_start_ns=time.monotonic_ns()
+                            applied=self.state.apply(e,now=tick)
+                            self._trace.add("input_applied", input_seq=e["seq"],
+                                            renderer_seq=frame_seq, applied=applied,
+                                            stage=self.state.stage,
+                                            apply_start_ns=apply_start_ns)
+                        else:
+                            self.state.apply(e,now=tick)
                 # Snapshot small logical state under lock, then render
                 # outside it; expensive Pillow drawing must never block the
                 # notebook's authenticated Comm input or credit callbacks.
+                phase="snapshot"
+                snapshot_start_ns=time.monotonic_ns() if self._trace else None
                 with self._lock:
                     state_snapshot=copy.deepcopy(self.state)
                     ack=state_snapshot.last_input_seq
-                compressed,render_ms,compress_ms,_=cache.frame(
+                phase="render_compress"
+                render_start_ns=time.monotonic_ns() if self._trace else None
+                compressed,render_ms,compress_ms,cache_hit=cache.frame(
                     painter,state_snapshot,time.monotonic())
                 packed=HEADER.pack(MAGIC,frame_seq,ack,WIDTH,HEIGHT)+compressed
+                phase="publish"
+                publish_start_ns=time.monotonic_ns() if self._trace else None
                 publish_start=time.monotonic()
                 _atomic_bytes(self.root/f"frame-ring-{frame_seq % SLOTS:02d}.bin",packed)
                 _atomic_bytes(self.root/"frame.bin",packed)
                 publish_ms=(time.monotonic()-publish_start)*1000
+                published_seq=frame_seq
+                if self._trace:
+                    self._trace.add("frame_published", renderer_seq=frame_seq,
+                                    input_ack=ack, stage=state_snapshot.stage,
+                                    cache_hit=cache_hit, compressed_bytes=len(compressed),
+                                    snapshot_start_ns=snapshot_start_ns,
+                                    render_start_ns=render_start_ns,
+                                    publish_start_ns=publish_start_ns,
+                                    render_ms=round(render_ms,3),
+                                    compress_ms=round(compress_ms,3),
+                                    publish_ms=round(publish_ms,3))
+                phase="metrics"
                 if frame_seq==0:
                     self._status("ready",gpu=gpu)
                 render_times.append(render_ms)
@@ -641,13 +690,29 @@ class InputLabSource:
                     publish_times.clear()
                     count=0
                 frame_seq+=1
+                phase="pacing_wait"
                 self._stop.wait(max(0,1/FPS-(time.monotonic()-tick)))
+            phase="terminal_status"
             self._status("stopped",gpu=gpu,reason=stop_reason)
+            outcome="stopped"
         except Exception as exc:
+            outcome="failed"
+            stop_reason="worker_failed"
             if not self._stop.is_set():
                 self._status("failed",error_type=type(exc).__name__)
         finally:
             self._stop.set()
+            if self._trace:
+                # Barrier against an input submission already holding the lock.
+                # File I/O occurs outside the state lock after producer exit.
+                with self._lock:
+                    terminal=dict(last_published_seq=published_seq,
+                                  last_input_ack=self.state.last_input_seq,
+                                  last_accepted_input_seq=self._seq,
+                                  pending_inputs=self.events.qsize(),
+                                  stage=self.state.stage)
+                self._trace.finish(outcome=outcome, reason=stop_reason,
+                                   phase=phase, **terminal)
 
     def start(self):
         if self._thread is not None:
@@ -664,11 +729,12 @@ class InputLabSource:
             self._thread.join(timeout=2)
 
 
-def start(directory,fps,run_id,*,sequence_buffered=False):
+def start(directory,fps,run_id,*,sequence_buffered=False,trace_pipeline=False):
     global _CONTROLLER
     if _CONTROLLER is not None:
         raise ValueError("Input Lab controller already active")
-    _CONTROLLER=InputLabSource(directory,run_id,fps,sequence_buffered)
+    _CONTROLLER=InputLabSource(directory,run_id,fps,sequence_buffered,
+                               trace_pipeline=trace_pipeline)
     return _CONTROLLER.start()
 
 

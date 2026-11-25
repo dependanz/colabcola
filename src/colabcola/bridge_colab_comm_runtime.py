@@ -102,7 +102,9 @@ def start(directory: str, run_id: str, fps: int, renderer_path: str,
     BOOTSTRAP_STAGE = "starting_renderer"
     if sequence_buffered:
         renderer["start"](directory, fps, run_id, sequence_buffered=True,
-                          **({"zlib_level": 0} if producer_zlib_level0 else {}))
+                          **({"zlib_level": 0} if producer_zlib_level0 else {}),
+                          **({"trace_pipeline": True}
+                             if trace_pipeline and application == "inputlab" else {}))
     else:
         renderer["start"](directory, fps, run_id)
     BOOTSTRAP_STAGE = "waiting_cuda"
