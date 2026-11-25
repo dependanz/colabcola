@@ -267,9 +267,145 @@ class LifecycleTests(unittest.TestCase):
         self.assert_owned_worker_receipt_failure(
             "failed", "busy", "worker_receipt_failed")
 
-    def test_finished_without_final_commit_releases_attempt(self):
-        self.assert_owned_worker_receipt_failure(
-            "finished", "completed", "finished_without_final")
+    def test_finished_without_final_commit_releases_after_bounded_grace(self):
+        engine = self.finished_worker()
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.now += 29
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "monitoring")
+        self.assertEqual(restarted.state["pending_final"]["observations"], 2)
+        self.assertEqual(self.provider.releases, [])
+        self.now += 1
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "failed")
+        self.assertEqual(restarted.state["reason"], "worker_failed_attempt_budget_exhausted")
+        self.assertEqual(restarted.state["last_failure"]["signal"], "finished_without_final")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertNotIn("pending_final", restarted.state)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "final_reconciliation_pending"]), 1)
+        self.assertEqual(len([e for e in restarted.state["events"]
+                              if e["event"] == "final_reconciliation_exhausted"]), 1)
+
+    def finished_worker(self, *, max_attempts=1):
+        engine = self.running()
+        engine.plan.update(execution_mode="kernel-v1", max_attempts=max_attempts)
+        atomic(self.root / "plan.json", engine.plan)
+        self.provider.observe = mock.Mock(return_value={
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "completed",
+                                 "worker_execution_state": "finished",
+                                 "worker_finished_at": self.now}})
+        return engine
+
+    def test_finished_receipt_can_race_final_publication(self):
+        engine = self.finished_worker()
+        # Reproduce a status read which predates publication but a receipt read
+        # which follows it. The first catalogue lookup happened before observe.
+        observed = self.provider.observe.return_value
+        def finish_during_observe(*args):
+            self.final_snapshot(1, 0)
+            return dict(observed)
+        self.provider.observe.side_effect = finish_during_observe
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "completed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertFalse(any(e["event"] == "worker_failed" for e in engine.state["events"]))
+
+    def test_finished_receipt_waits_for_late_catalogue_after_restart(self):
+        engine = self.finished_worker()
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.assertEqual(self.provider.releases, [])
+        self.assertEqual(engine.state["pending_final"]["observations"], 1)
+        self.now += 14
+        self.final_snapshot(1, 0)
+        restarted = self.reload()
+        restarted.advance()
+        self.assertEqual(restarted.state["phase"], "completed")
+        self.assertEqual(len(self.provider.allocations), 1)
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertNotIn("pending_final", restarted.state)
+        self.assertFalse(any(e["event"] == "worker_failed" for e in restarted.state["events"]))
+
+    def test_finished_receipt_recovers_exact_reference_during_listing_lag(self):
+        engine = self.finished_worker()
+        with mock.patch.object(self.store, "list", return_value=[]):
+            engine.advance()
+            self.assertEqual(engine.state["phase"], "monitoring")
+            final = self.final_snapshot(1, 0)
+            self.now += 5
+            self.provider.observe.return_value = {
+                **self.provider.observe.return_value,
+                "state": "completed",
+                "final_commit": {k: final[k] for k in ("id", "bytes", "sha256")},
+            }
+            engine.advance()
+            self.assertEqual(engine.state["phase"], "monitoring")
+            self.assertFalse(self.provider.releases)
+            self.reload().advance()
+        self.assertEqual(self.reload().state["phase"], "completed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+
+    def test_finished_receipt_never_accepts_another_attempts_final(self):
+        engine = self.finished_worker()
+        engine.advance()
+        self.final_snapshot(2, 0)
+        self.now += 30
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertNotIn("final", engine.state)
+        self.assertEqual(self.provider.releases, ["vm-1"])
+
+    def test_finished_receipt_late_failed_result_is_not_success(self):
+        engine = self.finished_worker()
+        engine.advance()
+        self.now += 10
+        self.final_snapshot(1, 0, terminal="job_failed")
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["reason"], "job_failed")
+        self.assertIn("final", engine.state)
+        self.assertEqual(self.provider.releases, ["vm-1"])
+
+    def test_finished_receipt_reconciliation_never_extends_wall_budget(self):
+        engine = self.finished_worker()
+        self.now = 1095
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "monitoring")
+        self.now = 1100
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "budget_exhausted")
+        self.assertEqual(engine.state["reason"], "wall_budget_exhausted")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertNotIn("pending_final", engine.state)
+
+    def test_explicit_worker_failure_preempts_final_reconciliation(self):
+        engine = self.finished_worker()
+        engine.advance()
+        self.now += 1
+        self.provider.observe.return_value = {
+            "state": "running", "attempt": 1,
+            "kernel_execution": {"request_state": "failed",
+                                 "worker_execution_state": "failed",
+                                 "worker_error_type": "RuntimeError"}}
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(engine.state["last_failure"]["signal"], "worker_receipt_failed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertNotIn("pending_final", engine.state)
+
+    def test_finished_receipt_with_explicit_failed_status_does_not_wait(self):
+        engine = self.finished_worker()
+        self.provider.observe.return_value["state"] = "persistence_failed"
+        engine.advance()
+        self.assertEqual(engine.state["phase"], "failed")
+        self.assertEqual(self.provider.releases, ["vm-1"])
+        self.assertNotIn("pending_final", engine.state)
 
     def test_uncertain_worker_failure_release_cannot_allocate_replacement(self):
         engine = self.running()

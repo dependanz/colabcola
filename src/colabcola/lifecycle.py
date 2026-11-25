@@ -19,6 +19,7 @@ from .lifecycle_io import (DriveStore, LifecycleError, AllocationRejected, atomi
                            publish, read_regular, recover, relative, snapshots, publish_files, verified_inputs, INPUT_BYTES, ARTIFACT_BYTES, RESULT_METADATA_BYTES)
 
 MAX_SECONDS = 86400
+FINAL_RECONCILIATION_GRACE_SECONDS = 30.0
 
 TERMINAL = {"completed", "failed", "cancelled", "budget_exhausted"}
 
@@ -225,6 +226,7 @@ class Supervisor:
             self.observer(self.state)
 
     def finish(self, outcome, reason=None):
+        self.state.pop("pending_final", None)
         self.save("cleanup_requested", phase="cleanup", outcome=outcome, reason=reason)
         self.cleanup()
 
@@ -323,6 +325,7 @@ class Supervisor:
                 facts[key] = value
         # Persist the failure and its exact owned attempt before releasing.
         # A crash or uncertain release resumes the same release barrier.
+        self.state.pop("pending_final", None)
         self.save("worker_failed", event_details=facts,
                   phase="releasing_failed_worker", last_failure=facts)
         self._release_failed_worker(attempt)
@@ -439,7 +442,76 @@ class Supervisor:
         self.state["attempts"].append(attempt)
         self.state.pop("worker_stall", None)  # Alerts belong to one attempt.
         self.state.pop("kernel_absence", None)
+        self.state.pop("pending_final", None)
         self.save("allocation_intent", phase="allocating")
+
+    def _finish_visible_final(self, attempt):
+        """Verify the current attempt's final commit using the normal completion rules."""
+        worker = self.state.get("worker", {})
+        reference = worker.get("final_commit") if worker.get("attempt") == attempt["number"] else None
+        finals = ([reported_final(self.store, self.plan, attempt, reference)] if reference
+                  else snapshots(self.store, self.plan, "final"))
+        finals = [f for f in finals if f["commit"]["attempt"] == attempt["number"]]
+        if attempt["number"] == 1 and (self.state.get("fault_pending")
+                                         or self.state.get("fault_injected")):
+            # A late terminal commit cannot finish a proof whose restart is underway.
+            finals = []
+        if finals:
+            final = finals[-1]
+            root = recover(self.store, final, self.directory / "artifacts" / final["sha256"])
+            result = verify_final(root, self.plan["job_id"])
+            self.state["final"] = {**final, "local_directory": str(root)}
+            if (root / "hardware.json").is_file():
+                hardware = json.loads(read_regular(root,"hardware.json",65536))
+                if hardware.get("job_id") != self.plan["job_id"]:
+                    raise LifecycleError("hardware report job identity mismatch")
+                self.state["hardware"] = hardware
+            self.state.pop("pending_final", None)
+            self.save("final_artifacts_verified")
+            if self.plan["fault_after_checkpoint"] and result["terminal_state"] == "success":
+                evidence = json.loads(read_regular(root, "attempt.json")) if (root / "attempt.json").exists() else {}
+                resume = attempt.get("resume") or {}
+                restored = evidence.get("restored_step", 0)
+                if not (self.state.get("fault_injected") and attempt["number"] > 1
+                        and final["commit"]["attempt"] == attempt["number"]
+                        and evidence.get("attempt") == attempt["number"]
+                        and evidence.get("resume_sha256") == resume.get("sha256")
+                        and restored > 0 and restored == resume.get("commit", {}).get("step")
+                        and final["commit"]["step"] > restored):
+                    self.finish("failed", "recovery_proof_not_demonstrated")
+                    return True
+                self.save("recovery_proof_verified", restored_step=restored)
+            self.finish("completed" if result["terminal_state"] == "success" else "failed",
+                        result["terminal_state"])
+            return True
+        return False
+
+    def _reconcile_finished_worker(self, attempt, observed):
+        """A clean kernel receipt can be newer than the worker status and Drive list.
+
+        Recheck after observing completion, then allow bounded, restart-safe
+        reconciliation before releasing an owned runtime for a missing final.
+        No successful outcome is inferred from a receipt alone.
+        """
+        if self._finish_visible_final(attempt):
+            return
+        now = self.clock()
+        # Network reconciliation may itself have consumed the remaining budget.
+        if self.state.get("deadline") is not None and now >= self.state["deadline"]:
+            self.finish("budget_exhausted", "wall_budget_exhausted")
+            return
+        pending = self.state.get("pending_final")
+        if pending is None or pending.get("attempt") != attempt["number"]:
+            pending = {"attempt": attempt["number"], "first_seen_at": now,
+                       "observations": 1, "grace_seconds": FINAL_RECONCILIATION_GRACE_SECONDS}
+            self.save("final_reconciliation_pending", event_details=dict(pending), pending_final=pending)
+            return
+        pending["observations"] += 1
+        if now - pending["first_seen_at"] < FINAL_RECONCILIATION_GRACE_SECONDS:
+            self.save()
+            return
+        self.save("final_reconciliation_exhausted", event_details=dict(pending))
+        self._worker_failed(attempt, observed, "finished_without_final")
 
     def tick(self):
         phase = self.state["phase"]
@@ -507,41 +579,7 @@ class Supervisor:
         if phase != "monitoring":
             raise LifecycleError("unknown supervisor phase")
 
-        worker = self.state.get("worker", {})
-        reference = worker.get("final_commit") if worker.get("attempt") == attempt["number"] else None
-        finals = ([reported_final(self.store, self.plan, attempt, reference)] if reference
-                  else snapshots(self.store, self.plan, "final"))
-        finals = [f for f in finals if f["commit"]["attempt"] == attempt["number"]]
-        if attempt["number"] == 1 and (self.state.get("fault_pending")
-                                         or self.state.get("fault_injected")):
-            # A late terminal commit cannot finish a proof whose restart is underway.
-            finals = []
-        if finals:
-            final = finals[-1]
-            root = recover(self.store, final, self.directory / "artifacts" / final["sha256"])
-            result = verify_final(root, self.plan["job_id"])
-            self.state["final"] = {**final, "local_directory": str(root)}
-            if (root / "hardware.json").is_file():
-                hardware = json.loads(read_regular(root,"hardware.json",65536))
-                if hardware.get("job_id") != self.plan["job_id"]:
-                    raise LifecycleError("hardware report job identity mismatch")
-                self.state["hardware"] = hardware
-            self.save("final_artifacts_verified")
-            if self.plan["fault_after_checkpoint"] and result["terminal_state"] == "success":
-                evidence = json.loads(read_regular(root, "attempt.json")) if (root / "attempt.json").exists() else {}
-                resume = attempt.get("resume") or {}
-                restored = evidence.get("restored_step", 0)
-                if not (self.state.get("fault_injected") and attempt["number"] > 1
-                        and final["commit"]["attempt"] == attempt["number"]
-                        and evidence.get("attempt") == attempt["number"]
-                        and evidence.get("resume_sha256") == resume.get("sha256")
-                        and restored > 0 and restored == resume.get("commit", {}).get("step")
-                        and final["commit"]["step"] > restored):
-                    self.finish("failed", "recovery_proof_not_demonstrated")
-                    return
-                self.save("recovery_proof_verified", restored_step=restored)
-            self.finish("completed" if result["terminal_state"] == "success" else "failed",
-                        result["terminal_state"])
+        if self._finish_visible_final(attempt):
             return
         checkpoints = snapshots(self.store, self.plan, "checkpoint")
         if checkpoints:
@@ -585,6 +623,9 @@ class Supervisor:
             # A list request above can race publication. Persist the exact ref first;
             # the next tick recovers it even if Drive search has not indexed it yet.
             self.save("terminal_commit_reported")
+        elif (failure_signal == "finished_without_final"
+                and observed.get("state") not in {"failed", "persistence_failed"}):
+            self._reconcile_finished_worker(attempt, observed)
         elif failure_signal is not None:
             self._worker_failed(attempt, observed, failure_signal)
         elif observed.get("state") in {"failed", "persistence_failed"}:
