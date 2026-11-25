@@ -54,6 +54,22 @@ class LocalFrameTiming:
     captured_ns: int
     decoded_ns: int
     input_callback_ns: int | None = None
+    # Optional host-only correlation; not part of any wire format.
+    video_seq: int | None = None
+    renderer_seq: int | None = None
+    input_ack: int | None = None
+
+
+def frame_trace_fields(timing):
+    """Only return bounded identities originating in validated host frames."""
+    if not isinstance(timing, LocalFrameTiming):
+        return None
+    video, renderer, ack = timing.video_seq, timing.renderer_seq, timing.input_ack
+    if (type(video) is not int or not 1 <= video <= 100_000_000
+            or type(renderer) is not int or not 0 <= renderer < 100_000_000
+            or type(ack) is not int or not 0 <= ack < 10_000_000):
+        return None
+    return {"video_seq": video, "renderer_seq": renderer, "input_ack": ack}
 
 
 

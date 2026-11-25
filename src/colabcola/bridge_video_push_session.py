@@ -140,7 +140,8 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
         raise LifecycleError("push video requires an attached opted-in Comm")
     if trace_path is not None and target_fps != 30:
         raise ValueError("pipeline trace requires 30Hz push")
-    trace = PipelineTrace(trace_path) if trace_path is not None else None
+    trace = (PipelineTrace(trace_path, run_id=peer.run_id)
+             if trace_path is not None else None)
     av, decoder = make_host_decoder()
     gate = VideoSequenceGate()
     input_seq = last_ack = 0
@@ -218,6 +219,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                 # Avoid coarse Windows Queue.get(timeout) scheduling (often
                 # approximately 15.6 ms) in the latency-sensitive mode.
                 message = peer.wire.iopub_channel.get_msg(timeout=0)
+                dequeue_ns = time.perf_counter_ns() if trace else None
             except queue.Empty:
                 message = None
                 time.sleep(.001)
@@ -243,8 +245,8 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
             if trace:
                 trace.add("video_received", video_seq=expected_seq - 1,
                           renderer_seq=renderer_seq if unit is not None else None,
-                          input_ack=ack, host_dequeue_ns=received_ns,
-                          host_validated_ns=time.perf_counter_ns(),
+                          input_ack=ack, host_dequeue_ns=dequeue_ns,
+                          host_matched_ns=received_ns, host_validated_ns=time.perf_counter_ns(),
                           access_unit_bytes=len(unit.data) if unit is not None else 0)
             decoded_ns = None
             diag = sender_diag = None
@@ -271,6 +273,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                         (received_ns - previous_received_ns) / 1_000_000)
                 previous_received_ns = received_ns
                 phase = "host_decode"
+                decode_start_ns = time.perf_counter_ns() if trace else None
                 try:
                     packet = av.Packet(unit.data)
                     packet.pts = unit.seq
@@ -289,11 +292,18 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                 if newly_acked_callback_ns is not None:
                     first_decode_input_ms.append(
                         (decoded_ns - newly_acked_callback_ns) / 1_000_000)
+                if trace:
+                    trace.add("frame_offered", video_seq=expected_seq - 1,
+                              renderer_seq=renderer_seq, input_ack=ack,
+                              decode_start_ns=decode_start_ns, decoded_ns=decoded_ns,
+                              offer_start_ns=time.perf_counter_ns())
                 offer_update(frames, ("frame-timed", (
                     header + pixels,
                     LocalFrameTiming(
                         captured_ns=received_ns, decoded_ns=decoded_ns,
-                        input_callback_ns=latest_acked_callback_ns))))
+                        input_callback_ns=latest_acked_callback_ns,
+                        **({"video_seq": expected_seq - 1, "renderer_seq": renderer_seq,
+                            "input_ack": ack} if trace else {})))))
                 received_frames += 1
                 last_frame_at = time.monotonic()
                 diag = validated_remote_video_diagnostics(payload)
@@ -310,7 +320,7 @@ def run_push_comm_h264(peer, gpu, outgoing, frames, stopped, deadline,
                             producer_windows[wid] = window
                             if trace:
                                 trace.add("producer_window", video_seq=expected_seq - 1,
-                                          host_dequeue_ns=received_ns, window=window)
+                                          host_dequeue_ns=dequeue_ns, window=window)
                         elif previous != window:
                             raise LifecycleError("conflicting push producer windows")
                 sender_diag = validated_sender_diagnostics(payload)

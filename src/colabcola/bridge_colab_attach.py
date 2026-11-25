@@ -157,7 +157,17 @@ def run_attached_colab(args, provider) -> int:
         )
         # Used exclusively to label benchmark ownership. Never a release token.
         peer.external_attachment = True
+        wire_trace = viewer_trace = None
+        if getattr(args, "trace_pipeline", False):
+            from .bridge_pipeline_trace import HostEventTrace
+            wire_trace = HostEventTrace(args.run_dir / "host-wire-trace.jsonl",
+                                        state["run_id"], "websocket-ingress")
+            viewer_trace = HostEventTrace(args.run_dir / "host-viewer-trace.jsonl",
+                                          state["run_id"], "tk-viewer")
+            peer.ingress_trace = wire_trace
         opened = False
+        viewer_returned = False
+        close_status = "unconfirmed"
         try:
             # The expected kernel is reverified before remote file upload.
             details = peer.open(expected_kernel_id=kernel_id)
@@ -205,7 +215,9 @@ def run_attached_colab(args, provider) -> int:
                 input_lab=getattr(args, "application", "synthetic") == "inputlab",
                 poll_interval_ms=(5 if push and args.fps == 60
                                   else 10 if push else 30),
+                **({"presentation_trace": viewer_trace} if viewer_trace is not None else {}),
             )
+            viewer_returned = True
         finally:
             stop_fields = (
                 {"remote_stop_marker_uploaded": False}
@@ -230,4 +242,11 @@ def run_attached_colab(args, provider) -> int:
                      close_status="host_disconnected", **stop_fields)
                 print("[colabcola] Host bridge detached; "
                       "user-owned Colab runtime NOT released", flush=True)
+                close_status = "host_disconnected"
+            finally:
+                for trace in (wire_trace, viewer_trace):
+                    if trace is not None:
+                        trace.finish(outcome=("completed" if viewer_returned and
+                                             close_status == "host_disconnected" else "failed"),
+                                     opened=opened, close_status=close_status)
     return 0

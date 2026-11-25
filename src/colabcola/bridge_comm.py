@@ -136,6 +136,7 @@ class KernelCommBridge:
                 fps == 30 and video_push and sequence_buffered and video_codec == "h264"))):
             raise ValueError("pipeline trace requires 30Hz buffered H.264 push")
         self.trace_pipeline = trace_pipeline
+        self.ingress_trace = None
         self.application = application
         self.producer_zlib_level0 = producer_zlib_level0
         self.video_push = video_push
@@ -230,6 +231,11 @@ class KernelCommBridge:
             try:
                 wire = client._manager.client
                 probe.install(wire)
+                if self.trace_pipeline and self.ingress_trace is not None:
+                    from .bridge_ws_probe import install_video_ingress
+                    install_video_ingress(wire, trace=self.ingress_trace,
+                                          run_id=self.run_id,
+                                          comm_id_getter=lambda: self.comm_id)
                 client.start()
                 if not wire.connection_ready.is_set():
                     wire.connection_ready.wait(timeout=2)
