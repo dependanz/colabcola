@@ -73,7 +73,7 @@ class DriveStore:
         self.request = request or urllib.request.urlopen
         self.deadline = deadline
         self.kind_prefix = kind_prefix
-        if kind_prefix not in ("", "environment-cache-v1-"):
+        if kind_prefix not in ("", "environment-cache-v1-", "private-asset-v1-"):
             raise LifecycleError("invalid Drive storage namespace")
 
     def remaining(self):
@@ -133,9 +133,16 @@ class DriveStore:
         while True:
             params = {"q": query, "fields": "nextPageToken,incompleteSearch,files(id,name,size,appProperties,createdTime)",
                       "pageSize": 1000}
+            if self.kind_prefix == "private-asset-v1-":
+                # A private asset must not adopt a shared object, even if its
+                # appProperties and content digest match the requested identity.
+                params["fields"] = "nextPageToken,incompleteSearch,files(id,name,size,appProperties,createdTime,parents,ownedByMe,shared,trashed)"
             if page:
                 params["pageToken"] = page
             value = json.loads(self.api("GET", "drive/v3/files?" + urllib.parse.urlencode(params)))
+            if self.kind_prefix == "private-asset-v1-":
+                for item in value.get("files", []):
+                    _private_asset_object_scope(self, item, kind)
             if value.get("incompleteSearch"):
                 raise LifecycleError("Drive listing incomplete")
             records.extend(value.get("files", []))
@@ -684,3 +691,269 @@ class EnvironmentCacheStorage:
         if ref["bytes"] != len(body) or ref["sha256"] != digest(body):
             raise LifecycleError("environment cache commit publication mismatch")
         return ref
+
+
+# Private assets are not prepared notebook members. A content-addressed namespace
+# is stable across runs but separated from both run snapshots and environment
+# caches. Keep all transfer buffers at CHUNK_BYTES, never the asset's size.
+PRIVATE_ASSET_KIND_PREFIX = "private-asset-v1-"
+PRIVATE_ASSET_BYTES = 4 * 1024**3
+PRIVATE_ASSET_COMMIT_BYTES = 4 * 1024**2
+PRIVATE_ASSET_DISK_RESERVE = 128 * 1024**2
+
+
+def private_asset_identity(size, sha256):
+    import re
+    if (type(size) is not int or not 0 < size <= PRIVATE_ASSET_BYTES
+            or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+        raise LifecycleError("invalid private asset size or SHA-256")
+    return {"bytes": size, "sha256": sha256}
+
+
+def private_asset_namespace(identity):
+    if not isinstance(identity, dict) or set(identity) != {"bytes", "sha256"}:
+        raise LifecycleError("invalid private asset identity")
+    identity = private_asset_identity(identity["bytes"], identity["sha256"])
+    return digest(PRIVATE_ASSET_KIND_PREFIX.encode("ascii") + encoded(identity))[:32]
+
+
+def _private_asset_remaining(deadline):
+    import math
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise LifecycleError("private asset transfer requires a finite deadline")
+    if time.time() >= deadline:
+        raise TimeoutError("private asset transfer exceeded its deadline")
+
+
+def _private_asset_object_scope(store, item, kind):
+    if not isinstance(item, dict):
+        raise LifecycleError("invalid private asset catalog entry")
+    props = item.get("appProperties")
+    if (item.get("parents") != [store.parent] or item.get("ownedByMe") is not True
+            or item.get("shared") is not False or item.get("trashed") is not False
+            or not isinstance(props, dict) or props.get("cc_run") != store.run_id
+            or props.get("cc_kind") != PRIVATE_ASSET_KIND_PREFIX + kind):
+        raise LifecycleError("private asset object is not owned, unshared and in scope")
+
+
+def _private_asset_ref(ref, maximum):
+    import re
+    if (not isinstance(ref, dict) or set(ref) != {"id", "bytes", "sha256"}
+            or not isinstance(ref.get("id"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", ref["id"])
+            or type(ref.get("bytes")) is not int or not 0 < ref["bytes"] <= maximum
+            or not isinstance(ref.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"])):
+        raise LifecycleError("invalid private asset object reference")
+    return ref
+
+
+class PrivateAssetStorage:
+    """Commit-last private asset transport; no permission mutations or public URLs.
+
+    A caller supplies the already frozen size and SHA-256, a selected owned and
+    unshared Drive folder, and a bounded authorization lease. The host can reuse
+    an existing commit without uploading or downloading its asset bytes. Restore
+    verifies each chunk and the full asset before atomically exposing a file.
+    """
+    def __init__(self, parent, token, *, store_factory=DriveStore):
+        self.parent, self.token, self.store_factory = parent, token, store_factory
+
+    def _store(self, identity, deadline):
+        _private_asset_remaining(deadline)
+        store = self.store_factory(self.parent, private_asset_namespace(identity), self.token,
+                                   deadline=deadline, kind_prefix=PRIVATE_ASSET_KIND_PREFIX)
+        self._check_parent(store)
+        return store
+
+    @staticmethod
+    def _check_parent(store):
+        fields = "id,mimeType,ownedByMe,shared,trashed,capabilities(canAddChildren)"
+        value = json.loads(store.api("GET", "drive/v3/files/" + store.parent + "?" +
+                                    urllib.parse.urlencode({"fields": fields})))
+        if (not isinstance(value, dict) or value.get("id") != store.parent
+                or value.get("mimeType") != "application/vnd.google-apps.folder"
+                or value.get("ownedByMe") is not True or value.get("shared") is not False
+                or value.get("trashed") is not False
+                or value.get("capabilities", {}).get("canAddChildren") is not True):
+            raise LifecycleError("private asset storage requires an owned, unshared, writable Drive folder")
+
+    @staticmethod
+    def _catalog(store, kind, maximum):
+        refs = {}
+        for item in store.list(kind):
+            _private_asset_object_scope(store, item, kind)
+            try:
+                ref = _private_asset_ref({"id": item["id"], "bytes": int(item["size"]),
+                                          "sha256": item["appProperties"]["cc_sha"]}, maximum)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise LifecycleError("invalid private asset catalog entry") from exc
+            if ref["id"] in refs:
+                raise LifecycleError("duplicate private asset catalog object")
+            created = item.get("createdTime", "")
+            if not isinstance(created, str):
+                raise LifecycleError("invalid private asset creation time")
+            refs[ref["id"]] = (ref, created)
+        return refs
+
+    @staticmethod
+    def _read(store, ref):
+        body = store.get(ref)
+        if len(body) != ref["bytes"] or digest(body) != ref["sha256"]:
+            raise LifecycleError("private asset object integrity mismatch")
+        return body
+
+    @staticmethod
+    def _check_reference(store, kind, ref):
+        # A plan-bound receipt can predate Drive search indexing. Verify the
+        # exact object's metadata rather than interpreting catalogue lag as loss.
+        fields = "id,size,appProperties,parents,ownedByMe,shared,trashed"
+        try:
+            item = json.loads(store.api("GET", "drive/v3/files/" + ref["id"] + "?" +
+                                        urllib.parse.urlencode({"fields": fields})))
+            _private_asset_object_scope(store, item, kind)
+            if (item.get("id") != ref["id"] or int(item["size"]) != ref["bytes"]
+                    or item["appProperties"]["cc_sha"] != ref["sha256"]):
+                raise LifecycleError("private asset reference identity differs")
+        except (LifecycleError, KeyError, TypeError, ValueError) as exc:
+            raise LifecycleError("private asset reference is outside its scope or invalid") from exc
+
+    def _find(self, store, identity, reference=None):
+        exact = reference is not None
+        if exact:
+            reference = _private_asset_ref(reference, PRIVATE_ASSET_COMMIT_BYTES)
+            self._check_reference(store, "commit", reference)
+        else:
+            commits = self._catalog(store, "commit", PRIVATE_ASSET_COMMIT_BYTES)
+            if not commits:
+                return None
+            reference, _ = max(commits.values(), key=lambda row: (row[1], row[0]["id"]))
+        commit = json.loads(self._read(store, reference))
+        if (not isinstance(commit, dict) or set(commit) != {"schema", "kind", "run_id", "asset", "chunks"}
+                or type(commit["schema"]) is not int or commit["schema"] != 1
+                or commit["kind"] != "private-asset-v1" or commit["run_id"] != store.run_id
+                or not isinstance(commit["asset"], dict) or type(commit["asset"].get("bytes")) is not int
+                or commit["asset"] != identity or not isinstance(commit["chunks"], list)
+                or len(commit["chunks"]) != (identity["bytes"] + CHUNK_BYTES - 1) // CHUNK_BYTES):
+            raise LifecycleError("private asset commit identity mismatch")
+        members = self._catalog(store, "member", CHUNK_BYTES)
+        remaining = identity["bytes"]
+        for chunk in commit["chunks"]:
+            _private_asset_ref(chunk, CHUNK_BYTES)
+            if chunk["bytes"] != min(remaining, CHUNK_BYTES):
+                raise LifecycleError("private asset chunk is invalid or outside its scope")
+            if chunk["id"] not in members and exact:
+                self._check_reference(store, "member", chunk)
+            elif chunk["id"] not in members or members[chunk["id"]][0] != chunk:
+                raise LifecycleError("private asset chunk is invalid or outside its scope")
+            remaining -= chunk["bytes"]
+        if remaining:
+            raise LifecycleError("private asset chunk sizes differ")
+        return {"reference": reference, "commit": commit}
+
+    def inspect(self, identity, deadline):
+        """Return verified commit/catalog evidence, not a full content readback."""
+        return self._find(self._store(identity, deadline), identity)
+
+    def ensure(self, source, identity, deadline):
+        """Reuse an exact committed asset, or stream source and publish last.
+
+        On a hit the frozen asset, not mutable local source bytes, is reused.
+        The caller is responsible for freezing local source identity in its plan.
+        A malformed/corrupt existing commit is an error, not silently replaced.
+        """
+        import stat
+        store = self._store(identity, deadline)
+        existing = self._find(store, identity)
+        if existing is not None:
+            return {"state": "reused", **existing}
+        if source is None:
+            raise LifecycleError("private asset is not committed and no local source is available")
+        path = Path(source)
+        if path.is_symlink() or not path.is_file():
+            raise LifecycleError("private asset source must be a regular file")
+        chunks, total = [], 0
+        check = hashlib.sha256()
+        with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+                              getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)), "rb") as stream:
+            initial = os.fstat(stream.fileno())
+            if not stat.S_ISREG(initial.st_mode) or initial.st_size != identity["bytes"]:
+                raise LifecycleError("private asset source size differs from frozen identity")
+            # Do not upload a known-mismatched local file. Hash once before any
+            # writes and again during transfer to detect concurrent changes.
+            hashed = 0
+            while hashed < identity["bytes"]:
+                _private_asset_remaining(deadline)
+                body = stream.read(min(CHUNK_BYTES, identity["bytes"] - hashed))
+                if not body:
+                    raise LifecycleError("private asset source truncated during verification")
+                check.update(body)
+                hashed += len(body)
+            if stream.read(1) or check.hexdigest() != identity["sha256"]:
+                raise LifecycleError("private asset source differs from frozen identity")
+            stream.seek(0)
+            check = hashlib.sha256()
+            while total < identity["bytes"]:
+                _private_asset_remaining(deadline)
+                expected = min(CHUNK_BYTES, identity["bytes"] - total)
+                body = stream.read(expected)
+                if len(body) != expected:
+                    raise LifecycleError("private asset source truncated during publication")
+                total += len(body)
+                check.update(body)
+                sha = digest(body)
+                ref = _private_asset_ref(store.put("member", "private-asset-chunk-" + sha, body), CHUNK_BYTES)
+                if ref["bytes"] != len(body) or ref["sha256"] != sha:
+                    raise LifecycleError("private asset chunk publication mismatch")
+                chunks.append(ref)
+            if stream.read(1) or os.fstat(stream.fileno()).st_size != initial.st_size or check.hexdigest() != identity["sha256"]:
+                raise LifecycleError("private asset source differs from frozen identity")
+        _private_asset_remaining(deadline)
+        self._check_parent(store)
+        commit = {"schema": 1, "kind": "private-asset-v1", "run_id": store.run_id,
+                  "asset": dict(identity), "chunks": chunks}
+        body = encoded(commit)
+        if len(body) > PRIVATE_ASSET_COMMIT_BYTES:
+            raise LifecycleError("private asset commit exceeds its bound")
+        reference = _private_asset_ref(store.put("commit", "private-asset-" + identity["sha256"] + ".json", body),
+                                       PRIVATE_ASSET_COMMIT_BYTES)
+        if reference["bytes"] != len(body) or reference["sha256"] != digest(body):
+            raise LifecycleError("private asset commit publication mismatch")
+        return {"state": "published", "reference": reference, "commit": commit}
+
+    def restore(self, identity, destination, deadline, *, reference=None):
+        """Restore the exact asset to a new file; never overwrite a target."""
+        import shutil
+        import tempfile
+        store = self._store(identity, deadline)
+        snapshot = self._find(store, identity, reference)
+        if snapshot is None:
+            raise LifecycleError("private asset commit is unavailable")
+        destination = Path(destination)
+        if (os.path.lexists(destination) or not destination.parent.is_dir()
+                or destination.parent.is_symlink()):
+            raise LifecycleError("private asset destination must be new in a real directory")
+        if shutil.disk_usage(destination.parent).free < identity["bytes"] + PRIVATE_ASSET_DISK_RESERVE:
+            raise LifecycleError("insufficient private asset restoration disk space")
+        fd, temporary = tempfile.mkstemp(prefix=".private-asset-", dir=destination.parent)
+        temporary = Path(temporary)
+        try:
+            check = hashlib.sha256()
+            total = 0
+            with os.fdopen(fd, "wb") as output:
+                for chunk in snapshot["commit"]["chunks"]:
+                    _private_asset_remaining(deadline)
+                    body = self._read(store, chunk)
+                    output.write(body)
+                    total += len(body)
+                    check.update(body)
+                if total != identity["bytes"] or check.hexdigest() != identity["sha256"]:
+                    raise LifecycleError("private asset SHA-256 or size mismatch")
+                output.flush()
+                os.fsync(output.fileno())
+            _private_asset_remaining(deadline)
+            # An atomic exclusive link exposes only verified bytes, even if a
+            # competing writer creates the destination after the initial check.
+            # No overwrite fallback on filesystems lacking hardlink support.
+            os.link(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {"state": "restored", "bytes": total, "sha256": check.hexdigest()}
