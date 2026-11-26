@@ -145,6 +145,7 @@ def _notebook_document(bundle: Bundle, chunks: tuple[str, ...]) -> dict[str, obj
             isolated=bool(manifest["python"].get("isolation")),
             remote_inputs=bool(manifest.get("remote_inputs")),
             named_environments=bool(manifest.get("environments")),
+            environment_cache=any(e.get("cache") is True for e in manifest.get("environments", {}).values()),
         )
     )
 

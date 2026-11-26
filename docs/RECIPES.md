@@ -165,6 +165,32 @@ requirement use dependencies installed by an earlier file. Use
 `no_build_isolation = true` only when the build needs that environment's already
 installed dependencies. A bounded `pip check` runs before the environment is ready.
 
+Use `pip.wheels` to install local, already-built wheels into one named environment:
+
+```toml
+[environments.train]
+python = "3.12"
+
+[environments.train.pip]
+packages = ["numpy==2.2.6"]
+wheels = ["wheels/my_extension-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"]
+```
+
+Wheel paths are normalized POSIX paths relative to the packaged project. Include
+these files in `include` if you use an allowlist. They are snapshotted with role
+`wheel` and exact SHA-256/size, just like other payload files. Wheel filenames
+must be valid wheel filenames; absolute paths, traversal, excluded sources, links
+and duplicate distributions in one environment are rejected. Multiple environments
+may reference the same wheel, provided it is compatible with each interpreter.
+After the declared package and requirements installs, the selected environment
+installs the wheel set with `--no-index --no-deps --force-reinstall`. Dependencies
+must already be present or `pip check` fails; a matching preinstalled index version
+cannot silently replace the declared wheel. The runtime rechecks each wheel against
+the frozen manifest and records its path, byte count and SHA-256 in the environment
+record (`embedded_wheels`), along with the resolved package inventory. The controller
+Python is unaffected. This is distinct from the legacy top-level `--wheel` option,
+which remains incompatible with named environments.
+
 Pip supports ordinary package requirements, project-relative local packages beginning
 with `./`, and named `git+https` direct references pinned to a full 40-character
 commit. A Git reference can include a project-relative `#subdirectory=...` fragment.
@@ -187,6 +213,61 @@ Global `environment.dependencies`, requirements, wheels, runtime requirements an
 `isolated_python` cannot be combined with named environments. The optional global
 `environment.python` constraint describes the controller interpreter in Colab, and
 ordinary global `environment.env` values still apply to every step.
+
+### Opt-in environment caching
+
+```toml
+[environments.train]
+python = "3.12"
+cache = true
+```
+
+Managed runs can save a fully provisioned, validated environment to the selected
+Drive parent before the first workload step. A fresh runtime restores it at the
+same deterministic installation prefix only when the full cache identity agrees:
+normalized environment declaration, wheel and requirements identities, manager
+and implementation versions, actual runtime release and host ABI, and observed
+GPU compatibility. Local source builds conservatively bind the entire frozen job.
+`runtime_version = "latest"` alone is not a runtime image identity. When the
+runtime does not expose reliable compatibility facts, or storage is unavailable,
+colabcola bypasses caching. Standalone notebooks do not mount or discover Drive.
+
+CPU feature matching is exact by default (`cache_cpu = "exact"`). Intel and AMD
+hosts can therefore have different keys even for identical recipes. An explicit
+`cache_cpu = "x86-64-v2"` (requires `cache = true`) is a portability assertion:
+all installed code, including native wheels and package/source builds, must run
+on any Linux x86-64-v2 host with the remaining recorded compatibility constraints.
+The runtime checks the required CPU flags on every visible CPU, binds the target
+rather than the full flag set, and constrains micromamba's solver archspec for
+portable cache builds. Missing required flags bypass caching. The runtime image,
+ABI, GPU, dependencies and verification constraints are unchanged. The solver
+constraint does **not** constrain arbitrary package build scripts or prove binary
+portability. Do not opt in for `-march=native` builds or unknown ISA requirements;
+wheel platform tags alone do not prove portability. In that case keep exact
+matching. Actual host fingerprint and selected policy are retained in cache
+result evidence. The cache implementation identity changes with this release, so
+older cache entries are not reused by the new implementation.
+
+Cache uploads use immutable, verified chunks and a commit published last. A hit
+must pass compressed archive integrity, safe extraction, interpreter activation,
+package inventory, `pip check`, and applicable CUDA checks. Failed restoration
+falls back to a fresh build within the remaining lifecycle budget. A failed cache
+publication does not by itself fail the workload. Cache transfers are optional
+and bounded (4 GiB compressed, 12 GiB expanded, 200,000 entries, and up to five
+minutes per operation subject to remaining time and workload reserve). Cache
+objects include installed code, including any proprietary dependencies; enable
+this only with an appropriate private Drive parent. Invalid or old entries are
+not automatically deleted, and the cache is not a dependency lockfile: unpinned
+packages may retain older resolved versions. Change the declaration or disable
+caching to request a fresh resolution.
+
+The named environment record includes `cache.state` (`miss`, `hit`, `rebuild`,
+`bypass`), the key when available, and timing/publication evidence. The reported
+`estimated_seconds_saved` compares a prior cold build's duration with the current
+warm environment setup; actual end-to-end savings depend on the runtime and
+Drive throughput. Local integration has been tested using simulated provisioning
+and Drive HTTP transport. Real Colab cold/warm acceptance is still pending.
+See [the cache design](ENVIRONMENT_CACHE_DESIGN.md).
 
 ### CUDA toolkits and native builds
 

@@ -22,6 +22,8 @@ _EVENT_LABELS = {
     "runtime_bootstrapped": "Runtime: worker started",
     "logs_verified": "Logs: verified snapshot available",
     "final_artifacts_verified": "Artifacts: verified from Drive",
+    "final_reconciliation_pending": "Artifacts: worker finished; reconciling final commit",
+    "final_reconciliation_exhausted": "Artifacts: final commit unavailable after reconciliation",
     "cleanup_requested": "Cleanup: releasing owned runtime",
     "owned_runtime_released": "Cleanup: owned runtime released",
     "run_finished": "Run: finished",

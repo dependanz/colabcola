@@ -161,7 +161,7 @@ def normalize_environments(value):
     for name in sorted(value):
         _slug(name, "environment name")
         where = "environments." + name
-        item = _object(value[name], where, {"python", "conda", "pip", "cuda", "env"}, {"python"})
+        item = _object(value[name], where, {"python", "conda", "pip", "cuda", "env", "cache", "cache_cpu"}, {"python"})
         version = _text(item["python"], where + ".python")
         if not re.fullmatch(r"3\.(?:[89]|[1-9][0-9])(?:\.[0-9]+)?", version):
             raise SpecError(where + ".python must be a Python 3.8+ minor or patch version")
@@ -181,7 +181,7 @@ def normalize_environments(value):
             if re.split(r"[ =<>!~]", package, maxsplit=1)[0].lower() == "python":
                 raise SpecError(where + ": declare the Python version in python, not conda.packages")
         pip = _object(item.get("pip", {}), where + ".pip",
-                      {"packages", "requirements", "index_url", "extra_index_urls", "no_build_isolation"})
+                      {"packages", "requirements", "wheels", "index_url", "extra_index_urls", "no_build_isolation"})
         pip_packages = [normalize_pip_package(p, where + ".pip.packages")
                         for p in _strings(pip.get("packages", []), where + ".pip.packages")]
         requirements = [relative_path(p, where + ".pip.requirements")
@@ -193,10 +193,37 @@ def normalize_environments(value):
             raise SpecError(where + ".pip.no_build_isolation must be boolean")
         normalized_pip = {"packages": pip_packages, "requirements": requirements,
                           "extra_index_urls": indexes, "no_build_isolation": no_build}
+        wheels = [relative_path(p, where + ".pip.wheels")
+                  for p in _strings(pip.get("wheels", []), where + ".pip.wheels")]
+        if len(set(p.casefold() for p in wheels)) != len(wheels):
+            raise SpecError(where + ".pip.wheels contains duplicate wheel paths")
+        from packaging.utils import parse_wheel_filename, InvalidWheelFilename
+        wheel_names = set()
+        for target in wheels:
+            if target.split("/")[0].casefold() == "_colabcola":
+                raise SpecError(where + ".pip.wheels cannot use reserved packaging paths")
+            try:
+                distribution, _, _, _ = parse_wheel_filename(target.rsplit("/", 1)[-1])
+            except InvalidWheelFilename:
+                raise SpecError(where + ".pip.wheels must name valid .whl files") from None
+            if distribution in wheel_names:
+                raise SpecError(where + ".pip.wheels contains multiple wheels for " + distribution)
+            wheel_names.add(distribution)
+        if wheels:
+            normalized_pip["wheels"] = wheels
         if "index_url" in pip:
             normalized_pip["index_url"] = _https(pip["index_url"], where + ".pip.index_url")
         normalized = {"python": version, "conda": {"channels": channels, "packages": packages},
                       "pip": normalized_pip, "env": normalize_environment_variables(item.get("env", {}), where + ".env")}
+        if "cache" in item:
+            if type(item["cache"]) is not bool:
+                raise SpecError(where + ".cache must be boolean")
+            normalized["cache"] = item["cache"]
+        if "cache_cpu" in item:
+            policy = item["cache_cpu"]
+            if item.get("cache") is not True or policy not in ("exact", "x86-64-v2"):
+                raise SpecError(where + ".cache_cpu requires cache = true and must be exact or x86-64-v2")
+            normalized["cache_cpu"] = policy
         if "cuda" in item:
             cuda = _text(item["cuda"], where + ".cuda")
             if not re.fullmatch(r"[1-9][0-9]*\.[0-9]+", cuda):

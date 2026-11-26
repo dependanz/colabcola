@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Final
 from pathlib import Path
+import hashlib
 
 _ISOLATION_HELPERS = Path(__file__).with_name("isolation_runtime.py").read_text(encoding="utf-8-sig")
 
@@ -1614,10 +1615,23 @@ if _COLABCOLA_TERMINAL_STATE is None:
         environment_root = COLABCOLA_CONTENT_ROOT / "colabcola" / "environments" / COLABCOLA_JOB_ID
         if environment_root.exists():
             shutil.rmtree(environment_root)
+        wheel_options = {}
+        if any(e["pip"].get("wheels") for e in COLABCOLA_MANIFEST["environments"].values()):
+            wheel_options["wheel_records"] = {entry["path"]: entry for entry in COLABCOLA_MANIFEST["files"]
+                                                if entry["role"] == "wheel"}
+        if any(e.get("cache") is True for e in COLABCOLA_MANIFEST["environments"].values()):
+            wheel_options["cache_context"] = EnvironmentCache(
+                globals().get("COLABCOLA_ENVIRONMENT_CACHE_STORAGE"),
+                COLABCOLA_CONTENT_ROOT / "colabcola" / "environment-cache-v1" / "prefixes",
+                dict(COLABCOLA_MANIFEST, job_id=COLABCOLA_JOB_ID),
+                _COLABCOLA_CACHE_IMPLEMENTATION,
+                _COLABCOLA_RUNTIME_FACTS.get("resource_check", {}),
+                environment_deadline, COLABCOLA_MANIFEST["run"]["timeout_seconds"],
+            )
         descriptors, environment_facts = _colabcola_prepare_environments(
             COLABCOLA_MANIFEST["environments"], COLABCOLA_MANIFEST["environment_manager"],
             COLABCOLA_JOB_ROOT, environment_root, COLABCOLA_RESULT_ROOT,
-            deadline=environment_deadline,
+            deadline=environment_deadline, **wheel_options,
         )
         _COLABCOLA_ENVIRONMENT_FACTS["environments"] = environment_facts
         if time.time() >= environment_deadline:
@@ -1738,8 +1752,12 @@ def _named_execution_source() -> str:
     return source
 
 
-def _named_runtime_sources(*, drive: bool, remote_inputs: bool) -> tuple[tuple[str, str], ...]:
+def _named_runtime_sources(*, drive: bool, remote_inputs: bool, environment_cache: bool = False) -> tuple[tuple[str, str], ...]:
     helper = Path(__file__).with_name("environment_runtime.py").read_text(encoding="utf-8-sig")
+    if environment_cache:
+        cache_source = Path(__file__).with_name("environment_cache.py").read_text(encoding="utf-8-sig")
+        implementation = hashlib.sha256((cache_source + "\n" + helper + "\n" + _NAMED_ENVIRONMENT_SETUP).encode("utf-8")).hexdigest()
+        helper = (cache_source + "\n" + helper + "\n_COLABCOLA_CACHE_IMPLEMENTATION = " + repr(implementation))
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     cells = [
         ("preflight", (_GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE + "\n" + _NAMED_ENVIRONMENT_INITIALIZATION).strip()),
@@ -1754,10 +1772,10 @@ def _named_runtime_sources(*, drive: bool, remote_inputs: bool) -> tuple[tuple[s
     return tuple(cells)
 
 
-def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False) -> tuple[tuple[str, str], ...]:
+def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False, environment_cache=False) -> tuple[tuple[str, str], ...]:
     """Preserve cell groups while omitting unused remote-input code."""
     if named_environments:
-        return _named_runtime_sources(drive=False, remote_inputs=remote_inputs)
+        return _named_runtime_sources(drive=False, remote_inputs=remote_inputs, environment_cache=environment_cache)
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
@@ -1767,10 +1785,10 @@ def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environmen
     )
 
 
-def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False) -> tuple[tuple[str, str], ...]:
+def drive_runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False, environment_cache=False) -> tuple[tuple[str, str], ...]:
     """Preserve controller cell groups while omitting unused download code."""
     if named_environments:
-        return _named_runtime_sources(drive=True, remote_inputs=remote_inputs)
+        return _named_runtime_sources(drive=True, remote_inputs=remote_inputs, environment_cache=environment_cache)
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),

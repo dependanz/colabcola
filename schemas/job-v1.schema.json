@@ -542,6 +542,8 @@
       "required": [
         "python"
       ],
+      "if": { "required": ["cache_cpu"] },
+      "then": { "required": ["cache"], "properties": { "cache": { "const": true } } },
       "additionalProperties": false,
       "properties": {
         "python": {
@@ -551,6 +553,12 @@
         "cuda": {
           "type": "string",
           "pattern": "^[1-9][0-9]*\\.[0-9]+$"
+        },
+        "cache": {
+          "type": "boolean"
+        },
+        "cache_cpu": {
+          "enum": ["exact", "x86-64-v2"]
         },
         "conda": {
           "type": "object",
@@ -581,6 +589,15 @@
               "type": "array",
               "items": {
                 "$ref": "#/$defs/portablePath"
+              }
+            },
+            "wheels": {
+              "type": "array",
+              "maxItems": 1024,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/portablePath",
+                "pattern": "\\.whl$"
               }
             },
             "index_url": {

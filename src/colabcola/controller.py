@@ -189,6 +189,7 @@ def _controller_document(
             isolated=bool(manifest["python"].get("isolation")),
             remote_inputs=bool(manifest.get("remote_inputs")),
             named_environments=bool(manifest.get("environments")),
+            environment_cache=any(e.get("cache") is True for e in manifest.get("environments", {}).values()),
         )
     )
     return {
