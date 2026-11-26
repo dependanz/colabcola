@@ -194,19 +194,19 @@ class GPUFingerprintTests(unittest.TestCase):
             [{"name": "Tesla T4"}] if observed is None else observed, time.time() + 30)
 
     def test_host_driver_paths_are_explicit_and_credentials_are_not_inherited(self):
-        present = {"/usr/lib64-nvidia", "/usr/local/nvidia/lib64"}
+        present = [Path("/usr/lib64-nvidia"), Path("/usr/local/nvidia/lib64")]
         with mock.patch.object(Path, "is_file", return_value=True), \
-                mock.patch.object(Path, "is_dir", lambda p: str(p) in present), \
+                mock.patch.object(Path, "is_dir", lambda p: p in present), \
                 mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/private/workload/stubs", "SECRET_TOKEN": "private"}), \
                 mock.patch.object(cache.subprocess, "run", return_value=subprocess.CompletedProcess(
                     [], 0, stdout="Tesla T4, 7.5, 580.95.05\n")) as run:
             facts = self.probe([{"name": "NVIDIA T4"}])
         self.assertEqual(facts, [{"name": "Tesla T4", "compute_capability": "7.5", "driver": "580.95.05"}])
         args, kwargs = run.call_args
-        self.assertEqual(args[0], ["/usr/bin/nvidia-smi", "--query-gpu=name,compute_cap,driver_version",
+        self.assertEqual(args[0], [str(Path("/usr/bin/nvidia-smi")), "--query-gpu=name,compute_cap,driver_version",
                                    "--format=csv,noheader,nounits"])
         self.assertEqual(kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
-                                       "LD_LIBRARY_PATH": os.pathsep.join(sorted(present))})
+                                       "LD_LIBRARY_PATH": os.pathsep.join(map(str, present))})
         self.assertTrue(kwargs["check"])
         self.assertLessEqual(kwargs["timeout"], 10)
 
