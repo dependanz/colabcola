@@ -65,6 +65,8 @@ def build_notebook(bundle: Bundle) -> NotebookArtifact:
     """Build deterministic notebook bytes containing all seven cell groups."""
 
     verify_bundle(bundle)
+    if json.loads(bundle.canonical_manifest_bytes).get("private_inputs"):
+        raise NotebookError("private inputs require managed acquisition (not yet integrated)")
     chunks = encode_archive_chunks(bundle.archive_bytes)
     notebook_bytes = _stable_notebook_json_bytes(_notebook_document(bundle, chunks))
     artifact = NotebookArtifact(

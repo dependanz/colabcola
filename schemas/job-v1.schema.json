@@ -60,6 +60,21 @@
         "$ref": "#/$defs/remoteInput"
       }
     },
+    "private_inputs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "bytes", "sha256"],
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "target": {"type": "string", "minLength": 1},
+          "bytes": {"type": "integer", "minimum": 1, "maximum": 4294967296},
+          "sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+        }
+      }
+    },
     "limits": {
       "$ref": "#/$defs/limits"
     },

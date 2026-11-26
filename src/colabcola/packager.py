@@ -214,6 +214,29 @@ def package(args):
         raise SpecError('named environments cannot be combined with global dependency, wheel or isolation settings')
     if named and args.resume_arg:
         raise SpecError('named steps read COLABCOLA_RESUME_MANIFEST; resume-arg is not supported')
+    from .private_inputs import (local_binding, private_target, inspect_source, freeze_source,
+                                 source_filter, PRIVATE_INPUT_COUNT, PRIVATE_INPUT_TOTAL_BYTES)
+    declarations = getattr(args, "private_inputs", [])
+    if len(declarations) > PRIVATE_INPUT_COUNT:
+        raise SpecError("private input count exceeds 64")
+    private_inputs = []
+    total = 0
+    for item in declarations:
+        source = local_binding(item["source"], Path.cwd())
+        target = private_target(item["target"], "private input target")
+        metadata = inspect_source(source)
+        if total + metadata.st_size > PRIVATE_INPUT_TOTAL_BYTES:
+            raise SpecError("private input total exceeds 8 GiB")
+        identity = freeze_source(source)
+        total += identity["bytes"]
+        if total > PRIVATE_INPUT_TOTAL_BYTES:
+            raise SpecError("private input total exceeds 8 GiB")
+        private_inputs.append({"source": str(source), "target": target, **identity})
+    private_source = source_filter([Path(item["source"]) for item in private_inputs])
+    if any(private_source(Path(os.path.abspath(path))) for path in (
+            *args.requirements, *args.remote_inputs, *args.wheel,
+            *[p for p in (args.answers, args.commands, args.token_command) if p is not None])):
+        raise SpecError("private input cannot be a packaging control file or embedded wheel")
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if named and (command or args.commands or args.command_strings):
         raise SpecError('named steps cannot be overridden by command arguments')
@@ -264,6 +287,8 @@ def package(args):
         raise SpecError('module and sequence packaging requires --project')
     files = {}
     def add(source,target,role):
+        if private_source(source):
+            raise SpecError("private input source cannot also be embedded")
         if _private_host_path(source):
             raise SpecError('Colabcola account configuration cannot be packaged')
         target = _portable_path(target, 'package target')
@@ -277,9 +302,9 @@ def package(args):
     if project:
         patterns = list(args.exclude)
         ignore = project/'.colabcolaignore'
-        if ignore.is_file(): patterns += [s.strip() for s in ignore.read_text(encoding='utf-8').splitlines() if s.strip() and not s.lstrip().startswith('#')]
+        if not private_source(ignore) and ignore.is_file(): patterns += [s.strip() for s in ignore.read_text(encoding='utf-8').splitlines() if s.strip() and not s.lstrip().startswith('#')]
         for source,rel in _files(project,patterns):
-            if source in (args.commands,): continue
+            if source in (args.commands,) or private_source(source): continue
             if getattr(args, 'include', []) and not any(fnmatch.fnmatchcase(rel, pat) for pat in args.include): continue
             add(source,rel,'source')
     # Explicit wheel declarations must reference included project source files,
@@ -400,13 +425,14 @@ def package(args):
             'resources':{'accelerator':'cpu' if args.gpu=='NONE' else 'gpu','gpu_count':0 if args.gpu=='NONE' else 1,'cuda_required':args.gpu!='NONE','minimum_gpu_memory_bytes':args.minimum_gpu_memory_bytes},
             'run':{'timeout_seconds':args.timeout,'seed':args.seed,'environment':env,'capture_stdout':True,'capture_stderr':True},
             'outputs':[{'pattern':pat,'required':bool(args.artifact),'maximum_bytes':args.artifact_max_bytes} for pat in (args.artifact or ['outputs/**'])],
-            'limits':{'maximum_file_count':max(100,len(payload)+len(remote_inputs)+10)},
+            'limits':{'maximum_file_count':max(100,len(payload)+len(remote_inputs)+len(private_inputs)+10)},
             'managed_recovery':{'checkpoint_pattern':args.checkpoint or 'outputs/_colabcola/disabled-*.json','log_patterns':args.log}}
         if named:
             job['environments'] = environments
             job['steps'] = steps
         if args.artifact_group: job['managed_recovery']['artifact_groups']=args.artifact_group
         if remote_inputs: job['remote_inputs']=remote_inputs
+        if private_inputs: job['private_inputs']=private_inputs
         if args.isolated_python:
             from .python_profiles import PYTHON_312
             job['python']['isolation'] = dict(PYTHON_312)
@@ -424,6 +450,7 @@ def package(args):
         committed=True
         return {'state':'packaged','job':str(output),'files_directory':str(assets),'job_id':bundle.job_id,
                 'files':len(bundle.files),'input_bytes':bundle.raw_input_bytes,'commands':normalized,
+                **({'private_input_bytes':total, 'private_input_count':len(private_inputs)} if private_inputs else {}),
                 'execution_config':str(config_path) if config else None,
                 'requested_gpu':args.gpu,'runtime_version':args.runtime_version,
                 'provider_backend':args.provider_backend,'high_mem':args.high_mem,

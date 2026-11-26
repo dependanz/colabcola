@@ -79,6 +79,7 @@ def build_bundle(invocation: JobInvocation) -> Bundle:
     """Compile one validated invocation into a deterministic in-memory bundle."""
 
     expanded = _expand_payload(invocation.spec)
+    _reject_private_input_conflicts(invocation.spec, expanded)
     _validate_runtime_targets(invocation.spec, expanded)
     _validate_environment_targets(invocation.spec, expanded)
     _reject_remote_input_conflicts(invocation.spec, expanded)
@@ -438,6 +439,23 @@ def _reject_remote_input_conflicts(spec: JobSpec, files: Sequence[_ExpandedFile]
                 )
 
 
+def _reject_private_input_conflicts(spec: JobSpec, files: Sequence[_ExpandedFile]) -> None:
+    if not spec.private_inputs:
+        return
+    from .private_inputs import source_filter
+    private_source = source_filter([entry.source for entry in spec.private_inputs])
+    if len(files) + len(spec.remote_inputs) + len(spec.private_inputs) > spec.limits.maximum_file_count:
+        raise SpecError("expanded payload plus external inputs exceed limits.maximum_file_count")
+    targets = [entry.target.casefold() for entry in spec.private_inputs]
+    others = [item.path.casefold() for item in files] + [entry.target.casefold() for entry in spec.remote_inputs]
+    for i, target in enumerate(targets):
+        for other in others + targets[:i]:
+            if target == other or target.startswith(other + "/") or other.startswith(target + "/"):
+                raise SpecError("private input target collides with another job path: " + target)
+    if any(private_source(item.source) for item in files):
+        raise SpecError("private input source must not also be an embedded payload file")
+
+
 def _validate_runtime_targets(spec: JobSpec, files: Sequence[_ExpandedFile]) -> None:
     roles_by_path = {item.path: item.role for item in files}
     entrypoint_role = roles_by_path.get(spec.entrypoint.path)
@@ -611,6 +629,8 @@ def _portable_manifest(
             }
             for entry in sorted(spec.remote_inputs, key=lambda entry: entry.target)
         ]
+    if spec.private_inputs:
+        manifest["private_inputs"] = [entry.mapping() for entry in sorted(spec.private_inputs, key=lambda e: e.target)]
     return manifest
 
 

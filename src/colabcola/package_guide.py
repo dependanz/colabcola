@@ -17,7 +17,7 @@ import tomllib
 from .errors import SpecError
 
 _FIELDS = {
-    '': {'commands','project','include','exclude','name','output','inputs','remote_input_files',
+    '': {'commands','project','include','exclude','name','output','inputs','private_inputs','remote_input_files',
          'environment','environments','steps','compute','outputs','limits','execution'},
     'environment': {'python','requirements','dependencies','runtime_requirements','wheels','isolated_python','env'},
     'compute': {'gpu','minimum_gpu_memory_gib','minimum_gpu_memory_bytes','high_mem'},
@@ -25,6 +25,7 @@ _FIELDS = {
     'limits': {'timeout_minutes','timeout_seconds','max_seconds','max_runtimes','seed'},
     'execution': {'drive_parent','token_command','runtime_version','provider_backend'},
     'inputs': {'source','target'},
+    'private_inputs': {'source','target'},
 }
 _IMPORT_NAMES = {'PIL':'pillow','cv2':'opencv-python','sklearn':'scikit-learn','yaml':'pyyaml',
                  'skimage':'scikit-image','bs4':'beautifulsoup4'}
@@ -42,10 +43,10 @@ def _validate(data):
     if not isinstance(data, dict): raise SpecError('answers must be a TOML table')
     for section, allowed in _FIELDS.items():
         value = data if not section else data.get(section, {})
-        values = value if section == 'inputs' else [value]
-        if section == 'inputs' and not isinstance(value, list):
-            if value == {}: continue
-            raise SpecError('inputs must be an array of source/target tables')
+        values = value if section in ('inputs','private_inputs') else [value]
+        if section in ('inputs','private_inputs') and not isinstance(value, list):
+            if section not in data or (section == 'inputs' and value == {}): continue
+            raise SpecError(section+' must be an array of source/target tables')
         for item in values:
             if not isinstance(item, dict): raise SpecError(f'{section or "answers"} must contain tables')
             extra = set(item) - allowed
@@ -79,6 +80,12 @@ def _validate(data):
     for item in data.get('inputs',[]):
         for key in ('source','target'):
             if not isinstance(item.get(key),str) or not item[key]: raise SpecError('each input needs source and target strings')
+    from .private_inputs import PRIVATE_INPUT_COUNT, private_target
+    if len(data.get('private_inputs',[])) > PRIVATE_INPUT_COUNT:
+        raise SpecError('private input count exceeds 64')
+    for item in data.get('private_inputs',[]):
+        if not isinstance(item.get('source'),str) or not item['source']: raise SpecError('each private input needs a source string')
+        private_target(item.get('target'), 'private_inputs.target')
     for section in ('compute','limits','outputs'):
         for key,value in data.get(section,{}).items():
             if key in ('minimum_gpu_memory_gib','minimum_gpu_memory_bytes','timeout_minutes','timeout_seconds','max_seconds','max_runtimes','seed','maximum_bytes'):
@@ -102,11 +109,12 @@ def _split_command(text):
     return result
 
 
-def inspect_project(root, commands, includes, excludes):
+def inspect_project(root, commands, includes, excludes, *, private_source=None):
     from .packager import _files
+    private_source = private_source or (lambda path: False)
     ignores=root/'.colabcolaignore'
-    if ignores.is_file(): excludes=list(excludes)+[v.strip() for v in ignores.read_text().splitlines() if v.strip() and not v.lstrip().startswith('#')]
-    files=list(_files(root,excludes))
+    if not private_source(ignores) and ignores.is_file(): excludes=list(excludes)+[v.strip() for v in ignores.read_text().splitlines() if v.strip() and not v.lstrip().startswith('#')]
+    files=[(p,r) for p,r in _files(root,excludes) if not private_source(p)]
     import fnmatch
     if includes: files=[(p,r) for p,r in files if any(fnmatch.fnmatchcase(r,pat) for pat in includes)]
     imports=set(); gpu_hint=False
@@ -128,10 +136,10 @@ def inspect_project(root, commands, includes, excludes):
     external=sorted(imports - local - sys.stdlib_module_names - {'__future__'})
     dependencies=sorted({_IMPORT_NAMES.get(name,name) for name in external})
     pyproject={}
-    if (root/'pyproject.toml').is_file():
+    if not private_source(root/'pyproject.toml') and (root/'pyproject.toml').is_file():
         try: pyproject=tomllib.loads((root/'pyproject.toml').read_text(encoding='utf-8-sig')).get('project',{})
         except tomllib.TOMLDecodeError as exc: raise SpecError(f'pyproject.toml: {exc}') from None
-    requirements=[str(root/name) for name in ('requirements.lock','requirements.txt') if (root/name).is_file()]
+    requirements=[str(root/name) for name in ('requirements.lock','requirements.txt') if not private_source(root/name) and (root/name).is_file()]
     source_paths=[]
     for cmd in commands:
         if '-m' in cmd[:2]:
@@ -156,6 +164,12 @@ def guide(args, arguments, cli_parser):
         if answer_path.suffix != '.colaml': raise SpecError('--colaml must name a .colaml TOML file')
         data=tomllib.loads(answer_path.read_text(encoding='utf-8-sig'));base=answer_path.parent
     _validate(data)
+    from .private_inputs import local_binding, source_filter
+    args.private_inputs=[{'source':str(local_binding(item['source'],base)), 'target':item['target']}
+                         for item in data.get('private_inputs',[])]
+    private_source=source_filter([Path(item['source']) for item in args.private_inputs])
+    if any(p is not None and private_source(_path(p,cwd)) for p in (args.answers,args.commands)):
+        raise SpecError('private input cannot be a recipe or command file')
     prefix=arguments[:len(arguments)-len(args.command)] if args.command else arguments
     explicit=set()
     for action in cli_parser._actions:
@@ -206,7 +220,7 @@ def guide(args, arguments, cli_parser):
     args.project=root
     assign('include','','include',lambda v:_strings(v,'include'))
     assign('exclude','','exclude',lambda v:_strings(v,'exclude'))
-    info=inspect_project(root,commands,args.include,args.exclude)
+    info=inspect_project(root,commands,args.include,args.exclude,private_source=private_source)
     print(f'Project: {root}\nFound {info["files"]} project files; inspecting source without running it.',file=sys.stderr)
     if info['imports']: print('External imports: '+', '.join(info['imports']),file=sys.stderr)
     assign('name','','name')
@@ -224,7 +238,7 @@ def guide(args, arguments, cli_parser):
             for i,token in enumerate(cmd):
                 if i and cmd[i-1] in ('--data','--dataset','--input','--input-dir','--config'):
                     source=_path(token,root)
-                    if source.exists():
+                    if source.exists() and not private_source(source):
                         try: source.relative_to(root)
                         except ValueError:
                             target='data' if cmd[i-1] in ('--data','--dataset') else source.name
@@ -256,6 +270,15 @@ def guide(args, arguments, cli_parser):
                     import posixpath
                     value=posixpath.relpath(relative.as_posix(), step_cwd)
                     cmd[i]=flag+'='+value if separator else value
+            for item in args.private_inputs:
+                if path == Path(item['source']):
+                    import posixpath
+                    target=posixpath.relpath(item['target'], step_cwd)
+                    cmd[i]=flag+'='+target if separator else target
+                    break
+            else:
+                item=None
+            if item is not None: continue
             for item in sorted(input_records,key=lambda x:len(x['source']),reverse=True):
                 try: relative=path.relative_to(item['source'])
                 except ValueError: continue
@@ -363,6 +386,7 @@ def guide(args, arguments, cli_parser):
         del resolved['commands']
         resolved['environments'] = args.environments
         resolved['steps'] = args.steps
+    if args.private_inputs: resolved['private_inputs']=args.private_inputs
     if args.artifact_group: resolved['outputs']['completed']=args.artifact_group
     if args.name: resolved['name']=args.name
     if args.isolated_python: resolved['environment']['isolated_python']=args.isolated_python

@@ -47,6 +47,19 @@ class RemoteInputSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class PrivateInputSpec:
+    """Local source binding; only target, bytes and digest are portable."""
+
+    target: str
+    source: Path
+    bytes: int
+    sha256: str
+
+    def mapping(self):
+        return {"target": self.target, "bytes": self.bytes, "sha256": self.sha256}
+
+
+@dataclass(frozen=True, slots=True)
 class PayloadEntry:
     role: str
     source: Path
@@ -181,6 +194,7 @@ class JobSpec:
     managed_recovery: ManagedRecoverySpec | None = None
     environments: tuple[EnvironmentSpec, ...] = ()
     steps: tuple[StepSpec, ...] = ()
+    private_inputs: tuple[PrivateInputSpec, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -201,7 +215,7 @@ class JobSpec:
                 "outputs",
                 "limits",
             },
-            optional={"durable_checkpoints", "remote_inputs", "managed_recovery", "environments", "steps"},
+            optional={"durable_checkpoints", "remote_inputs", "managed_recovery", "environments", "steps", "private_inputs"},
             where="JobSpec",
         )
 
@@ -288,6 +302,7 @@ class JobSpec:
             limits=limits,
             durable_checkpoints=durable_checkpoints,
             remote_inputs=remote_inputs,
+            private_inputs=_parse_private_inputs(root.get("private_inputs", []), resolved_base),
             environments=environments,
             steps=steps,
             managed_recovery=(
@@ -565,6 +580,37 @@ def _parse_limits(value: Any) -> LimitSpec:
             item["maximum_file_count"], f"{where}.maximum_file_count"
         ),
     )
+
+
+def _parse_private_inputs(value, base_dir):
+    from .private_inputs import (PRIVATE_INPUT_COUNT, PRIVATE_INPUT_TOTAL_BYTES,
+                                 private_target, local_binding, inspect_source)
+    from .lifecycle_io import private_asset_identity, LifecycleError
+    entries = _array(value, "JobSpec.private_inputs")
+    if len(entries) > PRIVATE_INPUT_COUNT:
+        raise SpecError("private input count exceeds 64")
+    records = []
+    sources, targets = set(), set()
+    for index, raw in enumerate(entries):
+        where = f"JobSpec.private_inputs[{index}]"
+        item = _object(raw, where)
+        _keys(item, required={"source", "target", "bytes", "sha256"}, optional=set(), where=where)
+        target = private_target(item["target"], where + ".target")
+        source = local_binding(item["source"], base_dir)
+        inspect_source(source, missing_ok=True)
+        sha = _string(item["sha256"], where + ".sha256").lower()
+        try:
+            identity = private_asset_identity(item["bytes"], sha)
+        except LifecycleError as exc:
+            raise SpecError(str(exc)) from None
+        if target.casefold() in targets or source in sources:
+            raise SpecError("duplicate private input source or target")
+        targets.add(target.casefold())
+        sources.add(source)
+        records.append(PrivateInputSpec(target, source, identity["bytes"], identity["sha256"]))
+    if sum(entry.bytes for entry in records) > PRIVATE_INPUT_TOTAL_BYTES:
+        raise SpecError("private input total exceeds 8 GiB")
+    return tuple(records)
 
 
 def _parse_remote_inputs(

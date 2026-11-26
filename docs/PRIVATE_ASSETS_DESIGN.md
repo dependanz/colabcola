@@ -3,9 +3,12 @@
 ## Status and scope
 
 M0 implements the private content-addressed storage protocol in `lifecycle_io.py`.
-Recipe syntax, manifest/plan binding, controller staging, preflight and runtime
-materialization are **not** implemented by M0. The 512 MiB prepared-input cap
-remains unchanged. No live Drive or Colab allocation is required by M0 tests.
+M1 implements offline recipe packaging and frozen manifest identities. It is a
+development intermediate: notebook and staged transport compilation explicitly
+reject private-input jobs until managed acquisition is implemented in M2.
+Controller staging, plan receipt binding, preflight and runtime materialization
+remain pending. The 512 MiB prepared-input cap remains unchanged. No live Drive
+or Colab allocation is required by M0/M1 tests.
 
 ## M0: storage contract
 
@@ -49,23 +52,50 @@ remains unchanged. No live Drive or Colab allocation is required by M0 tests.
   control process; never expose credentials or source-local paths to workload
   code or remote asset manifests.
 
-## M1/M2: planned integration
+## M1: offline recipe packaging and identity
 
-The recipe-level `[[private_inputs]]` declaration should map a local source to a
-normalized job-relative target. Freeze bytes and digest without embedding the
-large file in the notebook. Include size, digest and target in the job identity;
-keep source bindings local. Reject target collisions (including ancestor/child
-and reserved paths) with all bundled, remote and other private input targets.
-Avoid also embedding the declared asset via broad project include patterns.
-Validate the local source binding before staging or allow an explicit existing
-asset receipt for an already-committed identity. The controller must stage and
-journal exact asset receipts before allocating compute; the runtime must check
-plan/manifest identity, per-file and aggregate limits, disk headroom and the
-workload deadline before materializing any asset. Restore before provisioning
-or executing a workload that needs the asset. Standalone compilation must not
-silently discover a user's Drive account; report that managed acquisition is
-required. Persist useful size/transfer/reuse/integrity evidence without private
-URLs, credentials or local source paths. Do not relax the notebook cap.
+Declare regular local files, not directories or remote URLs:
+
+```toml
+[[private_inputs]]
+source = "./models/weights.pt"
+target = "models/weights.pt"
+```
+
+Source paths are relative to the recipe (absolute paths are also accepted).
+The packager streams the source to compute its exact bytes and SHA-256, checks
+file metadata before and after hashing, and rejects links, Windows reparse
+points, missing or special files and colabcola account configuration paths.
+The source file and hardlinked aliases are excluded from implicit project
+inclusion; attempts to explicitly embed the same file or reuse it as packaging
+control data are rejected. This does not discover independent copies of a
+private file elsewhere in the project. Choose project includes accordingly.
+The initial limits are 64 files, 4 GiB per file and 8 GiB in aggregate.
+Private targets are normalized relative POSIX paths with case-insensitive
+collision checks against embedded, remote and other private input paths,
+including ancestor/descendant conflicts. `_colabcola` and `outputs` are reserved.
+
+The local `.colajob` stores source bindings alongside the frozen identities;
+only target, byte count and SHA-256 enter the portable canonical manifest.
+Local source paths are not part of the job ID. The packager rewrites exact
+source-path arguments to their declared target relative to the step cwd and
+preserves declarations in saved recipes. On a newly packaged job, changing
+source bytes changes the identity. Loading a previously packaged job does not
+rehash or silently refreeze that asset, including when the original source is
+absent. M2 must verify the frozen identity at staging and only permit an absent
+source when a verified committed asset is available. A changed or unavailable
+source cannot be uploaded under the old digest.
+
+## M2: planned managed integration
+
+The controller must stage and journal exact asset receipts before allocating
+compute; the runtime must check plan/manifest identity, per-file and aggregate
+limits, disk headroom and the workload deadline before materializing any asset.
+Restore before provisioning or executing a workload that needs the asset.
+Standalone compilation must not silently discover a user's Drive account;
+report that managed acquisition is required. Persist useful size/transfer/reuse/
+integrity evidence without private URLs, credentials or local source paths.
+Do not relax the notebook cap.
 
 ## M3/M4: acceptance
 
