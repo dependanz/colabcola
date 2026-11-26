@@ -220,6 +220,13 @@ def _report_result(state, plan, directory, progress, *, existing=False):
             raise LifecycleError("final artifact bundle could not be verified; inspect the saved result directory") from None
         terminal_state = result.get("terminal_state")
         final_status = "verified"
+        if plan.get("private_inputs") and terminal_state == "success":
+            from .lifecycle_io import verify_private_input_result
+            try:
+                verify_private_input_result(plan["private_inputs"], result)
+            except LifecycleError:
+                final_status = "private_input_evidence_invalid"
+                progress.say("Private input verification evidence is incomplete or invalid")
         progress.say("Artifacts: final bundle verified at " + final_directory)
     else:
         progress.say("Final artifact bundle is not available locally; artifact recovery is incomplete")
@@ -238,11 +245,17 @@ def _report_result(state, plan, directory, progress, *, existing=False):
         progress.say("The journal records completion, but verified successful final artifacts are required for a successful command")
     progress.say("Result: " + ("SUCCESS - verified final artifacts" if success else
                "INCOMPLETE - inspect the journal and saved artifacts"))
-    emit_json({"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
+    summary = {"state": state["phase"], "job_id": plan["job_id"], "run_dir": str(directory),
                       "result_directory": final_directory, "completed_artifact_directory": intermediate_directory,
                       "final_artifacts_status": final_status, "completed_outputs_status": completed_status,
                       "final_terminal_state": terminal_state, "viewing_existing_run": existing,
-                      "run_success": success, "reason": state.get("reason"), "hardware": state.get("hardware")}, indent=2)
+                      "run_success": success, "reason": state.get("reason"), "hardware": state.get("hardware")}
+    if plan.get("private_inputs"):
+        transport = result.get("transport") if final_directory else None
+        summary["private_inputs"] = {"staging": state.get("private_input_staging", {}),
+                                     "restoration": (transport.get("private_inputs")
+                                                     if isinstance(transport, dict) else None)}
+    emit_json(summary, indent=2)
     return 0 if success else 3
 
 
@@ -326,6 +339,10 @@ def run_managed(command, invocation):
                 raise LifecycleError("resume-from does not match this journal; prepare a new --run-dir")
         if build_bundle(invocation).job_id != plan["job_id"]:
             raise LifecycleError("job changed; use a new --run-dir")
+        if invocation.spec.private_inputs:
+            from .private_inputs import plan_sources
+            if plan.get("private_input_sources") != plan_sources(invocation.spec):
+                raise LifecycleError("private input source bindings changed; use a new --run-dir")
         if str(directory) != plan["directory"]:
             raise LifecycleError("run directory moved across hosts")
         for key in ("gpu", "max_attempts", "max_seconds"):
@@ -366,6 +383,9 @@ def run_managed(command, invocation):
             for name, definition in sorted(plan["environments"].items())))
         progress.say("Steps: " + " -> ".join(
             step["name"] + " [" + step["environment"] + "]" for step in plan["steps"]))
+    if plan.get("private_inputs"):
+        progress.say("Private inputs: " + str(len(plan["private_inputs"])) + " files, " +
+                     str(sum(e["bytes"] for e in plan["private_inputs"])) + " bytes (not embedded)")
     progress.say("Workspace: " + str(directory))
     if command.prepare_only:
         validate_prepared(plan)

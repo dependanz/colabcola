@@ -13,9 +13,9 @@ import time
 import threading
 
 try:
-    from .lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage
+    from .lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage, PrivateAssetStorage, private_input_receipts, private_input_disk_requirements
 except ImportError:
-    from lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage
+    from lifecycle_io import DriveStore, LifecycleError, atomic, digest, encoded, publish, read_regular, recover, publish_files, safe_file, verified_inputs, INPUT_BYTES, EnvironmentCacheStorage, PrivateAssetStorage, private_input_receipts, private_input_disk_requirements
 
 
 class AuthorizationEvidence:
@@ -163,6 +163,56 @@ def checkpoint_members(job_root, pattern):
     return [(step, members)]
 
 
+def restore_private_inputs(config, manifest, job_root, storage, report=None):
+    """Managed-only acquisition, after payload extraction and before any setup."""
+    import stat
+    entries = manifest.get("private_inputs")
+    if entries != config.get("private_inputs"):
+        raise LifecycleError("private inputs differ from the frozen job")
+    report = {} if report is None else report
+    report.update(private_input_disk_requirements(manifest))
+    receipts = private_input_receipts(entries, config.get("private_input_receipts"))
+    deadline = config["deadline"] - 30.0
+    if time.time() >= deadline:
+        raise LifecycleError("private inputs have no time before finalization reserve")
+    root = Path(job_root).absolute()
+    if root.resolve() != root or not root.is_dir():
+        raise LifecycleError("private input job root is not a real directory")
+    free = shutil.disk_usage(root).free
+    required = report["runtime_required_bytes_after_extraction"]
+    report.update(runtime_free_bytes=free, runtime_headroom_bytes=free-required)
+    if free < required:
+        raise LifecycleError("insufficient runtime disk for private inputs and reserve")
+    # Validate all target parents before any transfer. Existing directories are
+    # allowed, but no link, non-directory ancestor or existing target is allowed.
+    destinations = []
+    for entry in entries:
+        target = root.joinpath(*entry["target"].split("/"))
+        for parent in reversed(tuple(p for p in target.parents if p != root and root in p.parents)):
+            if os.path.lexists(parent):
+                metadata = parent.lstat()
+                if (not stat.S_ISDIR(metadata.st_mode)
+                        or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+                    raise LifecycleError("private input target ancestor is not a real directory")
+            else:
+                parent.mkdir()
+        if os.path.lexists(target) or target.resolve() != target:
+            raise LifecycleError("private input target already exists or is unsafe")
+        destinations.append(target)
+    started = time.monotonic()
+    restored = []
+    for entry, target in zip(entries, destinations, strict=True):
+        identity = {k: entry[k] for k in ("bytes", "sha256")}
+        facts = storage.restore(identity, target, deadline,
+                                reference=receipts[entry["target"]]["reference"])
+        if facts != {"state": "restored", **identity}:
+            raise LifecycleError("private asset restoration identity differs")
+        restored.append({"target": entry["target"], **facts})
+        print("[colabcola] Private input verified: " + entry["target"] + " (" + str(entry["bytes"]) + " bytes)", flush=True)
+    report.update(state="restored", files=restored, duration_seconds=time.monotonic()-started)
+    return report
+
+
 def execute_notebook(config_path):
     config = json.loads(Path(config_path).read_text())
     root = Path(config["directory"])
@@ -181,6 +231,10 @@ def execute_notebook(config_path):
     if config.get("parent"):
         namespace["COLABCOLA_ENVIRONMENT_CACHE_STORAGE"] = EnvironmentCacheStorage(
             config["parent"], token_reader(root))
+    if config.get("private_inputs"):
+        storage = PrivateAssetStorage(config["parent"], token_reader(root))
+        namespace["COLABCOLA_PRIVATE_INPUT_ACQUIRE"] = lambda manifest, job_root, report: restore_private_inputs(
+            config, manifest, job_root, storage, report)
     for cell in json.loads(document)["cells"]:
         if cell["cell_type"] == "code":
             exec(cell["source"], namespace)

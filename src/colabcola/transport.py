@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import struct
@@ -50,6 +51,8 @@ def build_staged_bundle(bundle: Bundle) -> StagedBundleArtifact:
     """Frame a verified bundle without base64 or another archive copy."""
 
     verify_bundle(bundle)
+    if json.loads(bundle.canonical_manifest_bytes).get("private_inputs"):
+        raise DriveTransportError("private inputs require managed acquisition; standalone Drive transport is unsupported")
     header = _HEADER.pack(
         STAGED_BUNDLE_MAGIC,
         len(bundle.canonical_manifest_bytes),

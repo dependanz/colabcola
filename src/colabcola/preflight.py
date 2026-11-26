@@ -188,7 +188,7 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
         check("controller_integrity", installation_integrity)
         check("provider_dependencies", dependency_report)
         check("prepared_files", lambda: {"count":len(verified_inputs(directory,plan["files"]))})
-        check("frozen_job", lambda: _manifest_identity(directory,plan))
+        frozen_detail = check("frozen_job", lambda: _manifest_identity(directory,plan))
         report["hardware_policy"] = plan.get("hardware_policy", "legacy_model_check_unavailable")
         if validator:
             check("consumer_binding", lambda: validator(plan) or {"verified":True})
@@ -228,6 +228,20 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
             return {"expires_at":access["expires_at"],"seconds_left":access["expires_at"]-time.time()}
         check("drive_access", access_check)
         check("drive_parent", lambda:drive_parent(plan["parent"],token()))
+        if plan.get("private_inputs"):
+            from .lifecycle_io import PrivateAssetStorage
+            from .private_inputs import inspect_private_inputs
+            def private_assets():
+                detail = dict(frozen_detail["private_input_disk"])
+                detail.update(local_recovery_free_bytes=report["disk"]["free_bytes"],
+                              local_recovery_headroom_bytes=report["disk"]["free_bytes"] - report["disk"]["required_bytes"],
+                              runtime_free_bytes=None, runtime_headroom_bytes=None,
+                              runtime_check="after allocation, before private acquisition")
+                report["private_inputs"] = detail
+                detail["assets"] = inspect_private_inputs(plan, PrivateAssetStorage(
+                    plan["parent"], lambda:token()["access_token"]), time.time() + 120)
+                return detail
+            check("private_inputs", private_assets)
         if close_provider:
             def close_client():
                 provider.close()
@@ -254,10 +268,15 @@ def run_preflight(directory, approval, *, validator=None, allow_active_assignmen
 
 def _manifest_identity(directory, plan):
     manifest = frozen_job(directory, plan)
-    for key in ("environments", "steps", "environment_manager"):
+    for key in ("environments", "steps", "environment_manager", "private_inputs"):
         if plan.get(key) != manifest.get(key):
             raise LifecycleError("prepared " + key + " differ from the frozen job")
     detail = {"job_id": plan["job_id"]}
+    if manifest.get("private_inputs"):
+        from .lifecycle_io import private_input_disk_requirements
+        from .private_inputs import validate_plan_sources
+        validate_plan_sources(plan)
+        detail["private_input_disk"] = private_input_disk_requirements(manifest)
     if manifest.get("environments"):
         detail.update({key: manifest[key] for key in
                        ("environments", "steps", "environment_manager")})
@@ -273,5 +292,6 @@ _REMEDIATION = {
     "colab_sign_in":"Run colabcola lifecycle login in this controller environment, then retry.",
     "drive_access":"Renew host Drive authorization; the helper must return more than 600 seconds of access.",
     "drive_parent":"Select an owned, untrashed Drive folder that permits new children.",
+    "private_inputs":"Use owned unshared Drive storage and the frozen local source or an exact committed asset; inspect the input bounds.",
     "recovery_disk":"Free the reported recovery reserve on the journal filesystem, then retry.",
 }

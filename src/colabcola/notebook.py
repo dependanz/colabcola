@@ -61,10 +61,12 @@ def encode_archive_chunks(
     )
 
 
-def build_notebook(bundle: Bundle) -> NotebookArtifact:
+def build_notebook(bundle: Bundle, *, managed_private_inputs=False) -> NotebookArtifact:
     """Build deterministic notebook bytes containing all seven cell groups."""
 
     verify_bundle(bundle)
+    if json.loads(bundle.canonical_manifest_bytes).get("private_inputs") and not managed_private_inputs:
+        raise NotebookError("private inputs require managed acquisition")
     chunks = encode_archive_chunks(bundle.archive_bytes)
     notebook_bytes = _stable_notebook_json_bytes(_notebook_document(bundle, chunks))
     artifact = NotebookArtifact(
@@ -145,6 +147,7 @@ def _notebook_document(bundle: Bundle, chunks: tuple[str, ...]) -> dict[str, obj
             isolated=bool(manifest["python"].get("isolation")),
             remote_inputs=bool(manifest.get("remote_inputs")),
             named_environments=bool(manifest.get("environments")),
+            private_inputs=bool(manifest.get("private_inputs")),
             environment_cache=any(e.get("cache") is True for e in manifest.get("environments", {}).values()),
         )
     )
@@ -185,6 +188,9 @@ def _summary_markdown(bundle: Bundle) -> str:
         f"\n\n> **Size warning:** {message}" for message in bundle.warnings
     )
     remote_warning, remote_bullet = remote_inputs_summary(manifest)
+    if manifest.get("private_inputs"):
+        remote_warning += "\n\n> **Managed private inputs:** This notebook requires verified private Drive asset receipts from the managed controller. Standalone execution cannot acquire them."
+        remote_bullet += "\n- Private inputs: " + str(sum(e["bytes"] for e in manifest["private_inputs"])) + " bytes (not embedded)"
     return (
         f"# colabcola job: {bundle.name}\n\n"
         "> **Security warning:** This notebook is designed to reconstruct and execute "

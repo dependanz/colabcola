@@ -74,6 +74,49 @@ These commands run in the installed controller environment. Native Windows
 PowerShell and Ubuntu WSL have both been exercised; they do not migrate or
 upgrade an older controller.
 
+## Large private input files
+
+Use `[[private_inputs]]` for large regular files such as model weights that must
+not be embedded in the notebook or made publicly accessible:
+
+```toml
+[[private_inputs]]
+source = "./models/weights.pt"
+target = "models/weights.pt"
+```
+
+The source path is relative to the recipe. The target is relative to the runtime
+job root; use this path in the workload. Limits are 64 files, 4 GiB per file and
+8 GiB total. Local source paths and file bytes are excluded from the portable
+manifest and embedded payload; the manifest records each target, byte count and
+SHA-256. A declared source and its hardlinked aliases are excluded from broad
+project inclusion, but independent copies are not automatically identified.
+Review includes carefully. The generated local `.colajob` and approved plan
+retain source paths; treat those local files as private metadata.
+
+Use the managed `colabcola run` command with an owned, unshared Drive parent:
+
+```sh
+colabcola run --profile default --colaml experiment.colaml \
+  --run-dir "$HOME/colabcola-runs/experiment-1" --non-interactive --preflight-only
+colabcola run --profile default --colaml experiment.colaml \
+  --run-dir "$HOME/colabcola-runs/experiment-1" --non-interactive
+```
+
+Preflight is read-only and reports input totals, limits, local recovery disk
+headroom and required runtime disk. Actual runtime free space is checked after
+allocation and before downloading. The controller uploads and verifies the
+asset before allocating a runtime, or reuses the committed content by hash.
+Subsequent fresh runtimes reconstruct and verify the exact file before any
+environment setup or workload step. A fresh recipe requires its source for
+hashing; a previously frozen job can use an existing committed asset if the
+source is absent. A missing or changed uncommitted source fails before allocation.
+The CLI result and journal distinguish published/reused asset staging from
+verified runtime restoration. No shared folders, public URLs or standalone
+notebook/staged Drive transport are supported for private inputs. The storage
+checks do not encrypt assets or prevent the account owner from sharing them
+later. Keep the Drive folder private. See [design and verification status](PRIVATE_ASSETS_DESIGN.md).
+
 ## Named environments and ordered steps
 
 A recipe can declare several workload environments and select one for each step.
