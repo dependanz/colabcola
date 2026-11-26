@@ -339,6 +339,11 @@ class GoogleProvider:
                 configuration[key] = plan[key]
         if plan.get("input_transport") == "drive_chunks":
             configuration["input_snapshot"] = attempt["input_snapshot"]
+        if plan.get("private_inputs"):
+            from .lifecycle_io import private_input_receipts
+            configuration["private_inputs"] = plan["private_inputs"]
+            configuration["private_input_receipts"] = private_input_receipts(
+                plan["private_inputs"], attempt.get("private_input_receipts"))
         if plan.get("authorization_policy") == "renewable-v1":
             configuration["authorization_policy"] = "renewable-v1"
         configuration.update(attempt=attempt["number"], deadline=attempt["deadline"],

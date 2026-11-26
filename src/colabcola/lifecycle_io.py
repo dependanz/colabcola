@@ -184,6 +184,8 @@ class DriveStore:
         if self.get(ref) != body:
             raise LifecycleError("Drive readback mismatch")
         self._content_index[kind].setdefault(sha, []).append({"id": ref["id"]})
+        if self.kind_prefix == PRIVATE_ASSET_KIND_PREFIX and kind == "member":
+            self.private_asset_uploaded_bytes = getattr(self, "private_asset_uploaded_bytes", 0) + len(body)
         return ref
 
     def get(self, ref):
@@ -702,6 +704,90 @@ PRIVATE_ASSET_COMMIT_BYTES = 4 * 1024**2
 PRIVATE_ASSET_DISK_RESERVE = 128 * 1024**2
 
 
+PRIVATE_INPUT_COUNT = 64
+PRIVATE_INPUT_TOTAL_BYTES = 8 * 1024**3
+
+
+def private_input_entries(entries):
+    """Validate the portable identity list at each managed trust boundary."""
+    if not isinstance(entries, list) or not 1 <= len(entries) <= PRIVATE_INPUT_COUNT:
+        raise LifecycleError("invalid private input count")
+    seen = set()
+    total = 0
+    reserved = {"con", "prn", "aux", "nul"} | {f"{p}{i}" for p in ("com", "lpt") for i in range(1, 10)}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"target", "bytes", "sha256"}:
+            raise LifecycleError("invalid private input identity record")
+        target = relative(entry["target"])
+        parts = target.split("/")
+        if (parts[0].casefold() in {"_colabcola", "outputs"}
+                or any(p.rstrip(" .") != p or p.split(".")[0].casefold() in reserved
+                       or any(ord(c) < 32 or c in '<>"|?*' for c in p) for p in parts)):
+            raise LifecycleError("invalid private input target")
+        key = target.casefold()
+        if any(key == prior or key.startswith(prior + "/") or prior.startswith(key + "/") for prior in seen):
+            raise LifecycleError("private input targets collide")
+        seen.add(key)
+        total += private_asset_identity(entry["bytes"], entry["sha256"])["bytes"]
+    if total > PRIVATE_INPUT_TOTAL_BYTES:
+        raise LifecycleError("private input aggregate exceeds 8 GiB")
+    return total
+
+
+def private_input_disk_requirements(manifest):
+    entries = manifest["private_inputs"]
+    total = private_input_entries(entries)
+    remote = manifest.get("remote_inputs", [])
+    # Public remote input acquisition also needs disk and a 1 GiB margin.
+    remote_total = sum(e["bytes"] for e in remote)
+    margin = max(PRIVATE_ASSET_DISK_RESERVE, 1024**3 if remote else 0)
+    occupied = [e["path"] for e in manifest.get("files", [])]
+    occupied += [e["target"] for e in remote]
+    occupied += [e["target"] + ".partial" for e in remote]
+    for entry in entries:
+        key = entry["target"].casefold()
+        if any(key == p.casefold() or key.startswith(p.casefold() + "/")
+               or p.casefold().startswith(key + "/") for p in occupied):
+            raise LifecycleError("private input collides with bundled or remote input path")
+    return {"count": len(entries), "total_bytes": total, "per_file_limit_bytes": PRIVATE_ASSET_BYTES,
+            "total_limit_bytes": PRIVATE_INPUT_TOTAL_BYTES, "remote_input_bytes": remote_total,
+            "runtime_required_bytes_after_extraction": total + remote_total + margin,
+            "runtime_reserve_bytes": margin}
+
+
+def private_input_receipts(entries, receipts):
+    """Bind an exact commit ref to every frozen target; never pass host sources."""
+    private_input_entries(entries)
+    if not isinstance(receipts, dict) or set(receipts) != {e["target"] for e in entries}:
+        raise LifecycleError("private input receipt set differs from frozen targets")
+    for entry in entries:
+        record = receipts[entry["target"]]
+        if (not isinstance(record, dict) or set(record) != {"bytes", "sha256", "reference"}
+                or type(record["bytes"]) is not int or record["bytes"] != entry["bytes"]
+                or record["sha256"] != entry["sha256"]):
+            raise LifecycleError("private input receipt identity differs from frozen target")
+        _private_asset_ref(record["reference"], PRIVATE_ASSET_COMMIT_BYTES)
+    return receipts
+
+
+def verify_private_input_result(entries, result):
+    """Successful managed completion requires the frozen per-target evidence."""
+    total = private_input_entries(entries)
+    transport = result.get("transport")
+    facts = transport.get("private_inputs", {}) if isinstance(transport, dict) else {}
+    expected = [{**entry, "state": "restored"} for entry in entries]
+    if (not isinstance(facts, dict) or facts.get("state") != "restored"
+            or facts.get("count") != len(entries) or facts.get("total_bytes") != total
+            or facts.get("files") != expected
+            or type(facts.get("runtime_free_bytes")) is not int
+            or type(facts.get("runtime_required_bytes_after_extraction")) is not int
+            or type(facts.get("runtime_headroom_bytes")) is not int
+            or facts["runtime_required_bytes_after_extraction"] < total + PRIVATE_ASSET_DISK_RESERVE
+            or facts["runtime_headroom_bytes"] < 0
+            or facts["runtime_headroom_bytes"] != facts["runtime_free_bytes"] - facts["runtime_required_bytes_after_extraction"]):
+        raise LifecycleError("private input result evidence differs from frozen job")
+
+
 def private_asset_identity(size, sha256):
     import re
     if (type(size) is not int or not 0 < size <= PRIVATE_ASSET_BYTES
@@ -849,9 +935,9 @@ class PrivateAssetStorage:
             raise LifecycleError("private asset chunk sizes differ")
         return {"reference": reference, "commit": commit}
 
-    def inspect(self, identity, deadline):
+    def inspect(self, identity, deadline, *, reference=None):
         """Return verified commit/catalog evidence, not a full content readback."""
-        return self._find(self._store(identity, deadline), identity)
+        return self._find(self._store(identity, deadline), identity, reference)
 
     def ensure(self, source, identity, deadline):
         """Reuse an exact committed asset, or stream source and publish last.
@@ -864,9 +950,12 @@ class PrivateAssetStorage:
         store = self._store(identity, deadline)
         existing = self._find(store, identity)
         if existing is not None:
-            return {"state": "reused", **existing}
+            return {"state": "reused", "confirmed_uploaded_bytes": 0, **existing}
         if source is None:
             raise LifecycleError("private asset is not committed and no local source is available")
+        # A prior interrupted publication may have left chunks. Refuse any
+        # shared or foreign catalog entries before deduplicating them.
+        self._catalog(store, "member", CHUNK_BYTES)
         path = Path(source)
         if path.is_symlink() or not path.is_file():
             raise LifecycleError("private asset source must be a regular file")
@@ -917,7 +1006,11 @@ class PrivateAssetStorage:
                                        PRIVATE_ASSET_COMMIT_BYTES)
         if reference["bytes"] != len(body) or reference["sha256"] != digest(body):
             raise LifecycleError("private asset commit publication mismatch")
-        return {"state": "published", "reference": reference, "commit": commit}
+        snapshot = self._find(store, identity, reference)
+        if snapshot["commit"] != commit:
+            raise LifecycleError("published private asset commit differs")
+        return {"state": "published", **snapshot,
+                "confirmed_uploaded_bytes": getattr(store, "private_asset_uploaded_bytes", 0)}
 
     def restore(self, identity, destination, deadline, *, reference=None):
         """Restore the exact asset to a new file; never overwrite a target."""

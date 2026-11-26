@@ -132,11 +132,11 @@ def write_notebook(artifact: NotebookArtifact, output_path: Path | str) -> Path:
 
 
 def compile_invocation(
-    invocation: JobInvocation, output_path: Path | str
+    invocation: JobInvocation, output_path: Path | str, *, managed_private_inputs=False
 ) -> CompilationResult:
     """Compile a bound invocation and atomically persist its verified notebook."""
 
-    artifact = build_notebook(build_bundle(invocation))
+    artifact = build_notebook(build_bundle(invocation), managed_private_inputs=managed_private_inputs)
     persisted = write_notebook(artifact, output_path)
     return CompilationResult(artifact=artifact, output_path=persisted)
 

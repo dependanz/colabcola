@@ -136,6 +136,7 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertIsNone(self.drive.storage().inspect(self.identity, self.deadline))
         published = self.publish()
         self.assertEqual(published["state"], "published")
+        self.assertEqual(published["confirmed_uploaded_bytes"], len(self.body))
         self.assertEqual([r["bytes"] for r in published["commit"]["chunks"]], [64, 64, 64, 3])
         writes = [e for e in self.drive.events if e[0] == "put"]
         self.assertEqual([e[1] for e in writes], [lio.PRIVATE_ASSET_KIND_PREFIX + "member"] * 4 + [lio.PRIVATE_ASSET_KIND_PREFIX + "commit"])
@@ -146,6 +147,7 @@ class PrivateAssetTests(unittest.TestCase):
         start = len(self.drive.events)
         reused = self.drive.storage().ensure(None, self.identity, self.deadline)
         self.assertEqual(reused["state"], "reused")
+        self.assertEqual(reused["confirmed_uploaded_bytes"], 0)
         self.assertEqual(reused["reference"], published["reference"])
         self.assertFalse(any(e[0] == "put" or e[:2] == ("get", lio.PRIVATE_ASSET_KIND_PREFIX + "member") for e in self.drive.events[start:]))
         self.assertEqual(self.restore(reference=reused["reference"]), {"state": "restored", **self.identity})
@@ -180,6 +182,17 @@ class PrivateAssetTests(unittest.TestCase):
         start = len(self.drive.events)
         self.assertEqual(self.publish()["state"], "published")
         self.assertEqual([e[1] for e in self.drive.events[start:] if e[0] == "put"], [lio.PRIVATE_ASSET_KIND_PREFIX + "commit"])
+
+    def test_uncommitted_shared_chunk_refused_before_upload(self):
+        self.drive.fail_kind = lio.PRIVATE_ASSET_KIND_PREFIX + "commit"
+        with self.assertRaises(lio.LifecycleError):
+            self.publish()
+        self.drive.fail_kind = None
+        next(iter(self.drive.objects.values()))["shared"] = True
+        posts = sum(e[0] == "put" for e in self.drive.events)
+        with self.assertRaisesRegex(lio.LifecycleError, "not owned, unshared and in scope"):
+            self.publish()
+        self.assertEqual(sum(e[0] == "put" for e in self.drive.events), posts)
 
     def test_privacy_and_parent_scope(self):
         self.drive.shared_parent = True

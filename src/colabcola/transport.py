@@ -52,7 +52,7 @@ def build_staged_bundle(bundle: Bundle) -> StagedBundleArtifact:
 
     verify_bundle(bundle)
     if json.loads(bundle.canonical_manifest_bytes).get("private_inputs"):
-        raise DriveTransportError("private inputs require managed acquisition (not yet integrated)")
+        raise DriveTransportError("private inputs require managed acquisition; standalone Drive transport is unsupported")
     header = _HEADER.pack(
         STAGED_BUNDLE_MAGIC,
         len(bundle.canonical_manifest_bytes),

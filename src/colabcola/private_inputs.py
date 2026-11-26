@@ -7,10 +7,10 @@ from pathlib import Path
 import stat
 
 from .errors import SpecError
-from .lifecycle_io import PRIVATE_ASSET_BYTES, CHUNK_BYTES
+from .lifecycle_io import (PRIVATE_ASSET_BYTES, CHUNK_BYTES, PRIVATE_INPUT_COUNT,
+                           PRIVATE_INPUT_TOTAL_BYTES, LifecycleError, PrivateAssetStorage,
+                           private_input_entries, private_input_receipts)
 
-PRIVATE_INPUT_COUNT = 64
-PRIVATE_INPUT_TOTAL_BYTES = 8 * 1024**3
 _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _WINDOWS = os.name == "nt"
 
@@ -119,3 +119,77 @@ def source_filter(paths):
             return False
         return bool(metadata.st_ino and (metadata.st_dev, metadata.st_ino) in inodes)
     return contains
+
+
+def plan_sources(spec):
+    return {entry.target: str(entry.source) for entry in spec.private_inputs}
+
+
+def validate_plan_sources(plan):
+    entries = plan["private_inputs"]
+    private_input_entries(entries)
+    sources = plan.get("private_input_sources")
+    if (not isinstance(sources, dict) or set(sources) != {entry["target"] for entry in entries}
+            or any(not isinstance(p, str) or not Path(p).is_absolute() for p in sources.values())):
+        raise LifecycleError("private input local source bindings differ from frozen targets")
+    for path in sources.values():
+        if str(local_binding(path, Path.cwd())) != path:
+            raise LifecycleError("private input source binding is not canonical")
+    return sources
+
+
+def inspect_private_inputs(plan, storage, deadline):
+    """Read-only admission: check scoped existing assets or viable local sources."""
+    sources = validate_plan_sources(plan)
+    available = []
+    for entry in plan["private_inputs"]:
+        identity = {k: entry[k] for k in ("bytes", "sha256")}
+        if storage.inspect(identity, deadline) is not None:
+            available.append({"target": entry["target"], "state": "committed", **identity})
+            continue
+        metadata = inspect_source(sources[entry["target"]], missing_ok=True)
+        if metadata is None or metadata.st_size != identity["bytes"]:
+            raise LifecycleError("private input is not committed and local source is missing or differs in size")
+        available.append({"target": entry["target"], "state": "local_source", **identity})
+    return available
+
+
+def stage_private_inputs(engine):
+    """Bind receipts to the approved journal before any allocation intent."""
+    plan, state = engine.plan, engine.state
+    sources = validate_plan_sources(plan)
+    storage = PrivateAssetStorage(plan["parent"], lambda: engine.token()["access_token"])
+    receipts = state.setdefault("private_input_receipts", {})
+    evidence = state.setdefault("private_input_staging", {})
+    expected = {e["target"] for e in plan["private_inputs"]}
+    if not isinstance(receipts, dict) or set(receipts) - expected or not isinstance(evidence, dict) or set(evidence) != set(receipts):
+        raise LifecycleError("private input staging journal differs from frozen targets")
+    deadline = state["deadline"]
+    by_identity = {}
+    for entry in plan["private_inputs"]:
+        target = entry["target"]
+        identity = {k: entry[k] for k in ("bytes", "sha256")}
+        key = (entry["bytes"], entry["sha256"])
+        if target in receipts:
+            private_input_receipts([entry], {target: receipts[target]})
+            storage.inspect(identity, deadline, reference=receipts[target]["reference"])
+            by_identity[key] = receipts[target]["reference"]
+            continue
+        if key in by_identity:
+            reference = by_identity[key]
+            storage.inspect(identity, deadline, reference=reference)
+            outcome = {"state": "reused", "reference": reference, "confirmed_uploaded_bytes": 0}
+        else:
+            path = sources[target]
+            # A committed frozen asset is authoritative even if local bytes have
+            # subsequently changed or the original file is unavailable.
+            metadata = inspect_source(path, missing_ok=True)
+            outcome = storage.ensure(path if metadata is not None else None, identity, deadline)
+        receipts[target] = {**identity, "reference": outcome["reference"]}
+        by_identity[key] = outcome["reference"]
+        evidence[target] = {**identity, "state": outcome["state"],
+                            "confirmed_uploaded_bytes": outcome["confirmed_uploaded_bytes"]}
+        engine.save("private_asset_staged", event_details={"target": target, **evidence[target]})
+    private_input_receipts(plan["private_inputs"], receipts)
+    engine.save("private_inputs_staged")
+    return receipts

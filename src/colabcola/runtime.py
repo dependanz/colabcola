@@ -1772,14 +1772,38 @@ def _named_runtime_sources(*, drive: bool, remote_inputs: bool, environment_cach
     return tuple(cells)
 
 
-def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False, environment_cache=False) -> tuple[tuple[str, str], ...]:
+_PRIVATE_INPUTS_SOURCE = r'''
+# Private assets are supplied only by the managed, authenticated worker.
+if _COLABCOLA_TERMINAL_STATE is None:
+    _COLABCOLA_TRANSPORT_FACTS["private_inputs"] = {"state": "pending"}
+    try:
+        acquire = globals().get("COLABCOLA_PRIVATE_INPUT_ACQUIRE")
+        if not callable(acquire):
+            raise RuntimeError("private inputs require managed acquisition")
+        _COLABCOLA_TRANSPORT_FACTS["private_inputs"] = acquire(
+            COLABCOLA_MANIFEST, COLABCOLA_JOB_ROOT, _COLABCOLA_TRANSPORT_FACTS["private_inputs"])
+    except Exception as exc:
+        _COLABCOLA_TRANSPORT_FACTS["private_inputs"]["state"] = "failed"
+        _colabcola_fail("private_inputs", "integrity_failed", exc)
+'''
+
+
+def runtime_cell_sources(*, isolated=False, remote_inputs=True, named_environments=False, environment_cache=False, private_inputs=False) -> tuple[tuple[str, str], ...]:
     """Preserve cell groups while omitting unused remote-input code."""
+    private = _PRIVATE_INPUTS_SOURCE + "\n" if private_inputs else ""
     if named_environments:
-        return _named_runtime_sources(drive=False, remote_inputs=remote_inputs, environment_cache=environment_cache)
+        cells = _named_runtime_sources(drive=False, remote_inputs=remote_inputs, environment_cache=environment_cache)
+        if private_inputs:
+            # Inject after archive extraction and before public remote inputs or
+            # any environment setup, without changing the legacy cell variants.
+            cells = tuple((group, (_EXTRACTION_SOURCE + "\n" + private
+                                   + (_REMOTE_INPUTS_SOURCE if remote_inputs else "")).strip())
+                          if group == "extraction" else (group, source) for group, source in cells)
+        return cells
     remote = _REMOTE_INPUTS_SOURCE if remote_inputs else ""
     return (
         ("preflight", ((_ISOLATION_HELPERS + "\n" if isolated else "") + _GPU_CHECK_SOURCE + "\n" + _PREFLIGHT_SOURCE).strip()),
-        ("extraction", (_EXTRACTION_SOURCE + "\n" + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
+        ("extraction", (_EXTRACTION_SOURCE + "\n" + private + (_ISOLATION_SETUP_SOURCE if isolated else remote)).strip()),
         ("environment", (_ENVIRONMENT_SOURCE + ("\n" + remote if isolated else "")).strip()),
         ("execution", (DURABLE_CHECKPOINT_SOURCE + "\n" + _EXECUTION_SOURCE).strip()),
     )

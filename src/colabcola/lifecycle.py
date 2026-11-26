@@ -468,6 +468,13 @@ class Supervisor:
                 self.state["hardware"] = hardware
             self.state.pop("pending_final", None)
             self.save("final_artifacts_verified")
+            if self.plan.get("private_inputs") and result["terminal_state"] == "success":
+                from .lifecycle_io import verify_private_input_result
+                try:
+                    verify_private_input_result(self.plan["private_inputs"], result)
+                except LifecycleError:
+                    self.finish("failed", "private_input_evidence_invalid")
+                    return True
             if self.plan["fault_after_checkpoint"] and result["terminal_state"] == "success":
                 evidence = json.loads(read_regular(root, "attempt.json")) if (root / "attempt.json").exists() else {}
                 resume = attempt.get("resume") or {}
@@ -534,6 +541,18 @@ class Supervisor:
             self.save("staging_started", phase="staging",
                       deadline=self.clock() + self.plan["max_seconds"])
         if self.state["phase"] == "staging":
+            if self.plan.get("private_inputs"):
+                from .private_inputs import stage_private_inputs
+                try:
+                    stage_private_inputs(self)
+                except (LifecycleError, OSError, ValueError) as exc:
+                    self.save("private_input_staging_failed", private_input_error=type(exc).__name__)
+                    self.finish("budget_exhausted" if self.clock() >= self.state["deadline"] else "failed",
+                                "private_input_staging_failed")
+                    return
+            if self.plan.get("private_inputs") and self.clock() >= self.state["deadline"]:
+                self.finish("budget_exhausted", "wall_budget_exhausted")
+                return
             paths = verified_inputs(self.directory, self.plan["files"])
             if self.plan.get("input_transport") == "drive_chunks":
                 self.state["input_commit"] = publish_files(self.store, self.plan, "input", paths)
@@ -541,6 +560,9 @@ class Supervisor:
                 inputs = {name: path.read_bytes() for name, path in paths.items()}
                 self.state["input_commit"] = publish(self.store, self.plan, "input", inputs)
             self.save("inputs_verified_on_drive")
+            if self.plan.get("private_inputs") and self.clock() >= self.state["deadline"]:
+                self.finish("budget_exhausted", "wall_budget_exhausted")
+                return
             self.new_attempt()
             return
         attempt = self.state["attempts"][-1]
@@ -565,6 +587,10 @@ class Supervisor:
             boot_attempt = dict(attempt)
             if self.plan.get("input_transport") == "drive_chunks":
                 boot_attempt["input_snapshot"] = self.state["input_commit"]
+            if self.plan.get("private_inputs"):
+                from .lifecycle_io import private_input_receipts
+                boot_attempt["private_input_receipts"] = private_input_receipts(
+                    self.plan["private_inputs"], self.state.get("private_input_receipts"))
             access = self.token()
             self.provider.boot(attempt["endpoint"], self.plan, boot_attempt, access)
             if self.plan.get("authorization_policy") == "renewable-v1":
@@ -686,7 +712,8 @@ def prepare(args):
         raise LifecycleError("token command must be a JSON argv array without credentials")
     directory = Path(args.run_dir).resolve()
     directory.mkdir(parents=True, exist_ok=False)
-    compiled = compile_invocation(invocation, directory / "notebook.ipynb")
+    compile_options = {"managed_private_inputs": True} if spec.private_inputs else {}
+    compiled = compile_invocation(invocation, directory / "notebook.ipynb", **compile_options)
     for name in ("lifecycle_worker.py", "lifecycle_io.py"):
         (directory / name).write_bytes(Path(__file__).with_name(name).read_bytes())
     files = {name: digest(read_regular(directory, name, INPUT_BYTES)) for name in
@@ -708,6 +735,13 @@ def prepare(args):
         manifest = json.loads(compiled.artifact.bundle.canonical_manifest_bytes)
         for key in ("environments", "steps", "environment_manager"):
             plan[key] = manifest[key]
+    if spec.private_inputs:
+        from .private_inputs import plan_sources
+        from .lifecycle_io import private_input_disk_requirements
+        manifest = json.loads(compiled.artifact.bundle.canonical_manifest_bytes)
+        private_input_disk_requirements(manifest)
+        plan["private_inputs"] = manifest["private_inputs"]
+        plan["private_input_sources"] = plan_sources(spec)
     if spec.managed_recovery.artifact_groups:
         plan["artifact_groups"] = [g.mapping() for g in spec.managed_recovery.artifact_groups]
         plan["artifact_output_rules"] = [{"pattern": o.pattern, "maximum_bytes": o.maximum_bytes} for o in spec.outputs]

@@ -3,12 +3,12 @@
 ## Status and scope
 
 M0 implements the private content-addressed storage protocol in `lifecycle_io.py`.
-M1 implements offline recipe packaging and frozen manifest identities. It is a
-development intermediate: notebook and staged transport compilation explicitly
-reject private-input jobs until managed acquisition is implemented in M2.
-Controller staging, plan receipt binding, preflight and runtime materialization
-remain pending. The 512 MiB prepared-input cap remains unchanged. No live Drive
-or Colab allocation is required by M0/M1 tests.
+M1 implements offline recipe packaging and frozen manifest identities. M2
+integrates managed preflight, controller staging, journal-bound receipts,
+runtime acquisition and final result verification. Standalone notebook and
+standalone staged transport compilation still reject private-input jobs.
+The 512 MiB prepared-input cap remains unchanged. Local tests require no live
+Drive or Colab allocation; live acceptance is pending.
 
 ## M0: storage contract
 
@@ -27,7 +27,9 @@ or Colab allocation is required by M0/M1 tests.
   before sending any bytes, and rehash during transfer. Use existing DriveStore
   chunk readback with 8 MiB chunks. Publish the commit only after every chunk is
   verified and the aggregate size/digest match. Recheck parent privacy before
-  publishing the commit. Concurrent source mutation can leave uncommitted
+  publishing the commit. Check the existing partial member catalogue before
+  upload and verify the newly published commit and its scoped member references
+  before accepting the receipt. Concurrent source mutation can leave uncommitted
   chunks; they are never an accepted asset. No automatic remote deletion.
 - On a hit, read and verify the scoped commit and chunk catalogue. Reuse without
   any asset upload or chunk download by the host. This is commit/catalogue
@@ -40,8 +42,8 @@ or Colab allocation is required by M0/M1 tests.
   digest. Expose the result through an exclusive hardlink in the destination
   filesystem, then remove the temporary file; never overwrite an existing target
   or expose partially verified bytes. A filesystem lacking hardlinks fails
-  safely. The later runtime integration must validate the entire target path
-  under the job root and check aggregate disk requirements before any restore.
+  safely. Managed runtime acquisition validates the entire target path under
+  the job root and checks aggregate disk requirements before any restore.
 - Exact, plan-bound commit receipts are validated by direct metadata lookup,
   so an immediate restore need not wait for Drive search indexing. Missing
   member catalogue entries may be checked by exact ID in this case, but only
@@ -87,20 +89,50 @@ source-path arguments to their declared target relative to the step cwd and
 preserves declarations in saved recipes. On a newly packaged job, changing
 source bytes changes the identity. Loading a previously packaged job does not
 rehash or silently refreeze that asset, including when the original source is
-absent. M2 must verify the frozen identity at staging and only permit an absent
-source when a verified committed asset is available. A changed or unavailable
-source cannot be uploaded under the old digest.
+absent. Staging verifies the frozen identity and only permits an absent source
+when a verified committed asset is available. A changed or unavailable source
+cannot be uploaded under the old digest. On a hit, a frozen job uses the
+committed identity, not newer local contents. Fresh recipe packaging still
+requires the source to hash it; prepare distinct jobs while the file exists
+if you intend to remove it later.
 
-## M2: planned managed integration
+## M2: managed integration
 
-The controller must stage and journal exact asset receipts before allocating
-compute; the runtime must check plan/manifest identity, per-file and aggregate
-limits, disk headroom and the workload deadline before materializing any asset.
-Restore before provisioning or executing a workload that needs the asset.
-Standalone compilation must not silently discover a user's Drive account;
-report that managed acquisition is required. Persist useful size/transfer/reuse/
-integrity evidence without private URLs, credentials or local source paths.
-Do not relax the notebook cap.
+- Offline preparation writes portable identities and local source bindings into
+  the approved host plan. Source bindings and Drive credentials never enter the
+  notebook or worker configuration. Only the portable identities participate in
+  the job ID. The managed compiler generates an acquisition hook, not account
+  discovery; running the generated notebook without its trusted worker fails.
+- Read-only admission verifies the frozen manifest, source bindings, bounds,
+  owned/unshared parent and committed asset catalogue or local source size. It
+  does not upload, allocate, or assert full content validity before staging.
+  The private input check is bounded by 120 seconds. Report total bytes, 4 GiB
+  per-file and 8 GiB aggregate bounds, host recovery-disk headroom, and the
+  required runtime space. Actual remote free bytes are unknown before allocation.
+- Staging under the approved wall budget verifies and journals the exact commit
+  receipt for each target before allocation intent. Restart validates already
+  journaled receipts by exact reference even before Drive search indexes them.
+  Staging failure stops before allocation. Confirmed uploaded member-byte
+  counts exclude commit metadata, readback and retransmissions with uncertain
+  outcomes. Reuse reports zero confirmed uploaded bytes. Shared or corrupt
+  committed assets fail closed rather than being silently replaced.
+- The worker receives only frozen identities and the exact scoped receipts.
+  After archive extraction, before provisioning or workload execution, it checks
+  manifest/receipt equality, validates paths, and checks aggregate runtime disk
+  headroom (private and public remote inputs, plus a 128 MiB reserve or 1 GiB
+  when public remote inputs are declared). Collisions with remote `.partial`
+  staging paths are rejected. Restoration uses the remaining wall budget minus
+  a 30-second finalization reserve; a corrupt, missing or incompatible input
+  blocks workload execution. Already restored individual assets are not rolled
+  back if a later asset fails; no incomplete file is exposed.
+- `result.json` records verified per-target size/digest, disk headroom, and
+  restoration timing in `transport.private_inputs`. The controller refuses
+  successful managed completion without matching evidence. `state.json` and
+  the CLI completion summary expose staging and reuse evidence without local
+  source paths or credentials; exact Drive references stay in the local journal.
+
+Standalone compilation remains unsupported. No public URLs or sharing changes,
+no notebook cap relaxation, and no automatic asset garbage collection.
 
 ## M3/M4: acceptance
 
