@@ -12,6 +12,7 @@ from .lifecycle_io import PRIVATE_ASSET_BYTES, CHUNK_BYTES
 PRIVATE_INPUT_COUNT = 64
 PRIVATE_INPUT_TOTAL_BYTES = 8 * 1024**3
 _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_WINDOWS = os.name == "nt"
 
 
 def private_target(value, where):
@@ -63,16 +64,28 @@ def inspect_source(path, *, missing_ok=False):
     raise SpecError("private input source is missing")
 
 
+def _source_identity(metadata, *, cross_api=False):
+    # CPython's Windows path-stat compatibility shim returns creation time
+    # in st_ctime, while fstat may return the NTFS metadata change time
+    # (python/cpython#157671). Compare creation time across those APIs;
+    # keep the change-time field in all same-API comparisons.
+    timestamp = (metadata.st_birthtime_ns if _WINDOWS and cross_api
+                 else metadata.st_ctime_ns)
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+            metadata.st_mtime_ns, timestamp)
+
+
 def freeze_source(path):
     """Stream a bounded source, rejecting identity/metadata changes while hashing."""
     before = inspect_source(path)
     if not 0 < before.st_size <= PRIVATE_ASSET_BYTES:
         raise SpecError("private input size must be positive and at most 4 GiB")
-    identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
     sha, total = hashlib.sha256(), 0
     with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0)
                            | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)), "rb") as stream:
-        if identity(os.fstat(stream.fileno())) != identity(before):
+        opened = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(opened.st_mode)
+                or _source_identity(opened, cross_api=True) != _source_identity(before, cross_api=True)):
             raise SpecError("private input source changed before hashing")
         while total < before.st_size:
             body = stream.read(min(CHUNK_BYTES, before.st_size - total))
@@ -80,8 +93,8 @@ def freeze_source(path):
                 raise SpecError("private input source truncated during hashing")
             sha.update(body)
             total += len(body)
-        if (stream.read(1) or identity(os.fstat(stream.fileno())) != identity(before)
-                or identity(inspect_source(path)) != identity(before)):
+        if (stream.read(1) or _source_identity(os.fstat(stream.fileno())) != _source_identity(opened)
+                or _source_identity(inspect_source(path)) != _source_identity(before)):
             raise SpecError("private input source changed while hashing")
     return {"bytes": total, "sha256": sha.hexdigest()}
 

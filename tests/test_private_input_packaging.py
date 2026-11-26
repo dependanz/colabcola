@@ -1,5 +1,6 @@
 """Offline, frozen private input declarations (no live account or provider)."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 import tempfile
 import tomllib
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 import zipfile
 
@@ -17,6 +19,7 @@ from colabcola.invocation import bind_job_arguments, load_job_invocation
 from colabcola.notebook import build_notebook
 from colabcola.package_guide import save_answers
 from colabcola.private_inputs import freeze_source, PRIVATE_INPUT_TOTAL_BYTES
+from colabcola import private_inputs
 from colabcola.spec import JobSpec
 from colabcola.transport import build_staged_bundle
 
@@ -87,6 +90,56 @@ class PrivatePackagingTests(unittest.TestCase):
         for compile in (build_notebook, build_staged_bundle):
             with self.assertRaisesRegex(BundleError, 'managed acquisition'):
                 compile(bundle)
+
+    def test_windows_path_and_handle_ctime_can_differ(self):
+        real = self.asset.stat()
+        fields = {name: getattr(real, name) for name in (
+            'st_mode', 'st_dev', 'st_ino', 'st_size', 'st_mtime_ns')}
+        fields['st_birthtime_ns'] = 100
+        before = SimpleNamespace(**fields, st_ctime_ns=100)
+        opened = SimpleNamespace(**fields, st_ctime_ns=200)
+        expected = {'bytes': real.st_size, 'sha256': hashlib.sha256(self.asset.read_bytes()).hexdigest()}
+        with mock.patch.object(private_inputs, '_WINDOWS', True), \
+                mock.patch.object(private_inputs, 'inspect_source', return_value=before), \
+                mock.patch.object(private_inputs.os, 'fstat', return_value=opened):
+            self.assertEqual(freeze_source(self.asset), expected)
+        # POSIX must still compare change time across APIs.
+        with mock.patch.object(private_inputs, '_WINDOWS', False), \
+                mock.patch.object(private_inputs, 'inspect_source', return_value=before), \
+                mock.patch.object(private_inputs.os, 'fstat', return_value=opened), \
+                self.assertRaisesRegex(SpecError, 'changed before hashing'):
+            freeze_source(self.asset)
+
+    def test_windows_source_mutations_are_still_rejected(self):
+        real = self.asset.stat()
+        fields = {name: getattr(real, name) for name in (
+            'st_mode', 'st_dev', 'st_ino', 'st_size', 'st_mtime_ns')}
+        fields['st_birthtime_ns'] = 100
+        before = SimpleNamespace(**fields, st_ctime_ns=100)
+        opened = SimpleNamespace(**fields, st_ctime_ns=200)
+        # All cross-API identity fields remain mandatory.
+        for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_birthtime_ns'):
+            different = SimpleNamespace(**{**vars(opened), field: getattr(opened, field) + 1})
+            with self.subTest(field=field), \
+                    mock.patch.object(private_inputs, '_WINDOWS', True), \
+                    mock.patch.object(private_inputs, 'inspect_source', return_value=before), \
+                    mock.patch.object(private_inputs.os, 'fstat', return_value=different), \
+                    self.assertRaisesRegex(SpecError, 'changed before hashing'):
+                freeze_source(self.asset)
+        # Same-API comparisons still detect metadata-only changes to the
+        # open descriptor, changes to contents/size, and path replacement.
+        for api, field in (('handle', 'st_ctime_ns'), ('handle', 'st_mtime_ns'),
+                           ('handle', 'st_size'), ('path', 'st_ino'), ('path', 'st_ctime_ns')):
+            last_handle = SimpleNamespace(**vars(opened))
+            last_path = SimpleNamespace(**vars(before))
+            target = last_handle if api == 'handle' else last_path
+            setattr(target, field, getattr(target, field) + 1)
+            with self.subTest(api=api, field=field), \
+                    mock.patch.object(private_inputs, '_WINDOWS', True), \
+                    mock.patch.object(private_inputs, 'inspect_source', side_effect=[before, last_path]), \
+                    mock.patch.object(private_inputs.os, 'fstat', side_effect=[opened, last_handle]), \
+                    self.assertRaisesRegex(SpecError, 'changed while hashing'):
+                freeze_source(self.asset)
 
     def test_declared_source_aliases_omitted_and_explicit_embed_rejected(self):
         alias = self.project / 'alias.bin'

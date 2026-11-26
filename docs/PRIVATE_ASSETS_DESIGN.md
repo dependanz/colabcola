@@ -66,6 +66,11 @@ Source paths are relative to the recipe (absolute paths are also accepted).
 The packager streams the source to compute its exact bytes and SHA-256, checks
 file metadata before and after hashing, and rejects links, Windows reparse
 points, missing or special files and colabcola account configuration paths.
+On Windows, path-stat and descriptor-stat timestamps can have different
+creation/change-time semantics. The cross-API comparison uses file identity,
+size, modification time and creation time; both same-API comparisons retain
+change-time checks throughout hashing. On POSIX, change time is also checked
+across APIs. These are mutation checks, not a lock against hostile writers.
 The source file and hardlinked aliases are excluded from implicit project
 inclusion; attempts to explicitly embed the same file or reuse it as packaging
 control data are rejected. This does not discover independent copies of a
