@@ -4,6 +4,9 @@ import contextlib
 import copy
 import io
 import json
+import os
+import runpy
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -301,3 +304,119 @@ pathlib.Path('outputs/check.json').write_text(json.dumps(report))
         with self.assertRaisesRegex(preflight.PreflightError, "private_inputs failed"):
             self.preflight_run(d, approval)
         self.assertFalse(any(e[0] == "put" for e in self.drive.events))
+
+    def rehearse_recipe_workflow(self, size):
+        """Exercise the public workflow, provider config and real asset protocol."""
+        from colabcola.cli import main
+        benchmark = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                       "examples/private_inputs/benchmark.py"))
+        bench = self.root / "benchmark"
+        self.asset, self.entry = benchmark["make_fixture"](bench, size=size)
+        stores = {}
+        def run_store(parent, run_id, token):
+            return stores.setdefault(run_id, MemoryStore())
+        self.provider.assignments = mock.Mock(return_value=[])
+        self.provider.close = mock.Mock()
+        self.provider.refresh_token = mock.Mock()
+        booted = []
+
+        def boot(endpoint, plan, attempt, token):
+            self.provider.boots.append(endpoint)
+            state = json.loads((Path(plan["directory"]) / "state.json").read_text())
+            self.assertEqual(attempt["private_input_receipts"], state["private_input_receipts"])
+            self.assertEqual(state["phase"], "booting")
+            engine = SimpleNamespace(plan=plan, state=state)
+            config_path, config = self.config(engine, "workflow-" + str(len(booted)))
+            result, job_root = self.execute(config_path, config)
+            self.assertEqual(result["terminal_state"], "success")
+            lio.verify_private_input_result([self.entry], result)
+            self.assertEqual((job_root / self.entry["target"]).stat().st_size, size)
+            self.assertFalse((job_root / "private.bin").exists())
+            store = stores[plan["run_id"]]
+            completed = worker.CompletedArtifacts(config, job_root, config_path.parent)
+            self.assertIsNotNone(completed.publish(store))
+            result_root = Path(config["content_root"]) / "colabcola/results" / plan["job_id"]
+            lio.publish_files(store, plan, "final", {name: result_root / name
+                              for name in ("result.json", "artifacts.zip", "hardware.json")},
+                              attempt=attempt["number"])
+            booted.append(plan["job_id"])
+
+        self.provider.boot = boot
+        self.provider.observe = mock.Mock(return_value={"state": "running"})
+        patches = {
+            "colabcola.onboarding.execution_defaults": {"drive_parent": "private-parent", "token_command": self.helper},
+            "colabcola.preflight.installation_integrity": {"files_verified": 1},
+            "colabcola.lifecycle_provider.dependency_report": {"verified": True},
+            "colabcola.lifecycle_provider.provider_for_plan": self.provider,
+            "colabcola.lifecycle.get_token": self.token(),
+            "colabcola.preflight.drive_parent": {"owned": True},
+        }
+        def command(label, *extra):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(["run", "--colaml", str(bench / "example" / f"{label}.colaml"),
+                             "--run-dir", str(bench / f"run-{label}"), "--non-interactive", *extra])
+            self.assertEqual(code, 0, err.getvalue() + out.getvalue()[-6000:])
+        with contextlib.ExitStack() as stack:
+            for name, value in patches.items():
+                stack.enter_context(mock.patch(name, return_value=value))
+            # Host recovery admission uses the fake disk evidence; the worker
+            # and storage still check the real local filesystem capacity.
+            stack.enter_context(mock.patch.object(lifecycle, "DriveStore", side_effect=run_store))
+            # Do not hide a fixture error behind the supervisor's network retry loop.
+            stack.enter_context(mock.patch.object(lifecycle.Supervisor, "advance", lifecycle.Supervisor.tick))
+            stack.enter_context(mock.patch.object(preflight, "shutil", SimpleNamespace(
+                disk_usage=lambda _: SimpleNamespace(free=100 * 1024**3))))
+            stack.enter_context(mock.patch.object(lio, "PrivateAssetStorage", side_effect=self.storage))
+            stack.enter_context(mock.patch.object(private_inputs, "PrivateAssetStorage", side_effect=self.storage))
+            stack.enter_context(mock.patch("colabcola.lifecycle.time.sleep"))
+            stack.enter_context(mock.patch("urllib.request.urlopen", side_effect=AssertionError("unexpected network")))
+            for label in ("A", "B"):
+                command(label, "--prepare-only")
+            self.assertFalse(self.drive.events)
+            self.assertFalse(self.provider.allocations)
+            previous = None
+            for label, state in (("A", "published"), ("B", "reused")):
+                start = time.monotonic()
+                command(label, "--preflight-only")
+                count = sum(e[0] == "put" for e in self.drive.events)
+                if label == "A":
+                    self.assertEqual(count, 0)
+                command(label)
+                summary, receipts = benchmark["verify_run"](bench / f"run-{label}", self.entry,
+                    expected_state=state, elapsed=time.monotonic() - start)
+                self.assertTrue(all(summary["checks"].values()))
+                self.assertFalse(self.provider.active)
+                posts = sum(e[0] == "put" for e in self.drive.events)
+                if label == "A":
+                    previous = (summary, receipts, posts)
+                    self.asset.rename(bench / "original-synthetic.bin")
+                    self.assertFalse(self.asset.exists())
+                else:
+                    self.assertNotEqual(summary["job_id"], previous[0]["job_id"])
+                    self.assertNotEqual(summary["allocation_id"], previous[0]["allocation_id"])
+                    self.assertEqual(receipts, previous[1])
+                    self.assertEqual(posts, previous[2])
+                    self.assertEqual(summary["preflight"]["assets"][0]["state"], "committed")
+                print(f"Managed rehearsal {label}: {size} bytes; {state}; "
+                      f"{summary['staging']['confirmed_uploaded_bytes']} uploaded bytes; "
+                      f"{summary['controller_elapsed_seconds']:.2f}s; all checks passed")
+        self.assertEqual(len(booted), 2)
+        self.assertEqual(len(self.provider.releases), 2)
+        self.assertLess(self.drive.max_payload, lio.CHUNK_BYTES + 4096)
+        if size == 1024**3:
+            self.assertEqual(sum(e[:2] == ("put", lio.PRIVATE_ASSET_KIND_PREFIX + "member")
+                                 for e in self.drive.events), 128)
+            print(f"1 GiB managed proof: 128 unique chunks; peak HTTP request {self.drive.max_payload} bytes")
+
+    def test_public_recipe_workflow_cross_job_reuse(self):
+        with mock.patch.object(lio, "CHUNK_BYTES", 8 * 1024**2):
+            self.rehearse_recipe_workflow(209)
+
+    @unittest.skipUnless(os.environ.get("COLABCOLA_PRIVATE_ASSET_LARGE_PROOF") == "1",
+                         "opt-in 1 GiB managed private-input proof")
+    def test_real_1gib_managed_workflow(self):
+        if shutil.disk_usage(self.root).free < 5 * 1024**3:
+            self.skipTest("requires 5 GiB local free disk")
+        with mock.patch.object(lio, "CHUNK_BYTES", 8 * 1024**2):
+            self.rehearse_recipe_workflow(1024**3)

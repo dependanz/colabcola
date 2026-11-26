@@ -152,3 +152,14 @@ synthetic 1 GiB local file, no public URL, verified runtime bytes and release,
 no second asset upload, and preflight evidence of the total, bound and disk
 headroom. A local fake endpoint is not proof of live Drive permission metadata,
 throughput or API behavior. No production research assets are needed for tests.
+
+M3 adds the reusable [private-input acceptance example](../examples/private_inputs/README.md)
+and a public recipe-workflow integration test with distinct run-scoped snapshot
+stores and a shared disk-backed private asset store. The larger opt-in test
+executes the same two-job sequence with 1 GiB of actual file data, using the
+real workflow and runtime acquisition code, simulated allocation and Drive,
+and independent streaming workload hashes. Final bundles and owned-runtime
+release records are verified. Intermediate completed-output recovery is
+reported separately: a fast final commit may be observed before a completed
+snapshot is recovered. This does not relax final artifact or asset integrity.
+Native provider behavior remains the M4 gate.
