@@ -188,6 +188,72 @@ class CacheIdentityTests(unittest.TestCase):
                 cache._cc_cache_runtime_fingerprint({"accelerator": "cpu"}, {"gpus": []}, time.time() + 10)
 
 
+class GPUFingerprintTests(unittest.TestCase):
+    def probe(self, observed=None):
+        return cache._cc_cache_gpu_identity(
+            [{"name": "Tesla T4"}] if observed is None else observed, time.time() + 30)
+
+    def test_host_driver_paths_are_explicit_and_credentials_are_not_inherited(self):
+        present = {"/usr/lib64-nvidia", "/usr/local/nvidia/lib64"}
+        with mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(Path, "is_dir", lambda p: str(p) in present), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/private/workload/stubs", "SECRET_TOKEN": "private"}), \
+                mock.patch.object(cache.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="Tesla T4, 7.5, 580.95.05\n")) as run:
+            facts = self.probe([{"name": "NVIDIA T4"}])
+        self.assertEqual(facts, [{"name": "Tesla T4", "compute_capability": "7.5", "driver": "580.95.05"}])
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ["/usr/bin/nvidia-smi", "--query-gpu=name,compute_cap,driver_version",
+                                   "--format=csv,noheader,nounits"])
+        self.assertEqual(kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                       "LD_LIBRARY_PATH": os.pathsep.join(sorted(present))})
+        self.assertTrue(kwargs["check"])
+        self.assertLessEqual(kwargs["timeout"], 10)
+
+    def test_no_driver_paths_does_not_inherit_loader_configuration(self):
+        with mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(Path, "is_dir", return_value=False), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/private/stubs"}), \
+                mock.patch.object(cache.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="Tesla T4, 7.5, 580.95.05\n")) as run:
+            self.probe()
+        self.assertNotIn("LD_LIBRARY_PATH", run.call_args.kwargs["env"])
+
+    def test_failures_are_classified_without_raw_subprocess_output(self):
+        cases = [
+            ("error while loading shared libraries: libnvidia-ml.so.1", "driver_library_unavailable"),
+            ("NVIDIA-SMI couldn't find libnvidia-ml.so library", "driver_library_unavailable"),
+            ("Failed to initialize NVML: Driver/library version mismatch", "nvml_initialization_failed"),
+            ("Field compute_cap is not a valid field to query", "query_field_unsupported"),
+            ("unexpected failure", "nonzero_exit"),
+        ]
+        with mock.patch.object(Path, "is_file", return_value=True):
+            for stderr, category in cases:
+                with self.subTest(category=category), mock.patch.object(cache.subprocess, "run", side_effect=
+                        subprocess.CalledProcessError(9, ["nvidia-smi"], stderr=stderr + " secret-token")):
+                    with self.assertRaises(cache.EnvironmentCacheError) as failure:
+                        self.probe()
+                    self.assertEqual(str(failure.exception), f"GPU compatibility query failed ({category}; exit 9)")
+            for exc, message in ((subprocess.TimeoutExpired(["nvidia-smi"], 1), "timed out"),
+                                 (OSError("secret-path"), "could not start")):
+                with mock.patch.object(cache.subprocess, "run", side_effect=exc), \
+                        self.assertRaisesRegex(cache.EnvironmentCacheError, message):
+                    self.probe()
+
+    def test_invalid_gpu_identity_and_preflight_mismatch_fail_closed(self):
+        with mock.patch.object(Path, "is_file", return_value=True):
+            for output in ("", "Tesla T4, N/A, 580.95.05\n", "Tesla T4, 7.5, unknown\n",
+                           "A100, 8.0, 580.95.05\n", "Tesla T4, 7.5, 580.95.05\n" * 2,
+                           "x" * 16385):
+                with self.subTest(output=output[:64]), mock.patch.object(cache.subprocess, "run", return_value=
+                        subprocess.CompletedProcess([], 0, stdout=output)), \
+                        self.assertRaises(cache.EnvironmentCacheError):
+                    self.probe()
+        with mock.patch.object(Path, "is_file", return_value=False), \
+                self.assertRaisesRegex(cache.EnvironmentCacheError, "executable unavailable"):
+            self.probe()
+
+
 class CacheStorageTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)

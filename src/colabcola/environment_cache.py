@@ -88,6 +88,63 @@ def _cc_cache_file_digest(path, deadline, maximum):
     return {"bytes": size, "sha256": sha.hexdigest()}
 
 
+def _cc_cache_gpu_identity(observed, deadline):
+    """Query host GPU facts without inheriting arbitrary workload or auth variables."""
+    executable = pathlib.Path("/usr/bin/nvidia-smi")
+    if not executable.is_file():
+        raise EnvironmentCacheError("GPU compatibility query executable unavailable")
+    # Colab may expose driver libraries outside the default dynamic loader
+    # search path. Use the same fixed host directories as named CUDA steps,
+    # never a user-supplied LD_LIBRARY_PATH, toolkit prefix, or linker stubs.
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+    libraries = [str(path) for path in map(pathlib.Path,
+        ("/usr/lib64-nvidia", "/usr/local/nvidia/lib", "/usr/local/nvidia/lib64")) if path.is_dir()]
+    if libraries:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(libraries)
+    try:
+        output = subprocess.run([str(executable), "--query-gpu=name,compute_cap,driver_version",
+                                 "--format=csv,noheader,nounits"], check=True,
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                env=env, timeout=min(10, _cc_cache_remaining(deadline))).stdout
+    except subprocess.CalledProcessError as exc:
+        # Keep useful fixed diagnostic categories, never raw subprocess output:
+        # an external tool could include private paths, URLs or credentials.
+        stderr = (exc.stderr or "").lower()[:16384]
+        if "error while loading shared libraries" in stderr or "couldn't find libnvidia-ml" in stderr:
+            category = "driver_library_unavailable"
+        elif "failed to initialize nvml" in stderr:
+            category = "nvml_initialization_failed"
+        elif "not a valid field" in stderr or "invalid query" in stderr:
+            category = "query_field_unsupported"
+        else:
+            category = "nonzero_exit"
+        raise EnvironmentCacheError(f"GPU compatibility query failed ({category}; exit {exc.returncode})") from None
+    except subprocess.TimeoutExpired:
+        raise EnvironmentCacheError("GPU compatibility query timed out") from None
+    except OSError:
+        raise EnvironmentCacheError("GPU compatibility query could not start") from None
+    if len(output) > 16384:
+        raise EnvironmentCacheError("GPU compatibility identity exceeds its bound")
+    gpus = []
+    for line in output.splitlines():
+        fields = [item.strip() for item in line.split(",")]
+        if (len(fields) != 3 or not re.fullmatch(r"[A-Za-z0-9_. +()-]{1,128}", fields[0])
+                or not re.fullmatch(r"\d+\.\d+", fields[1])
+                or not re.fullmatch(r"\d+(?:\.\d+)+", fields[2])):
+            raise EnvironmentCacheError("GPU compatibility query returned invalid identity")
+        gpus.append({"name": fields[0], "compute_capability": fields[1], "driver": fields[2]})
+    # Bind the actual queried GPU set to the earlier resource check. Allow
+    # vendor prefixes in names, not a different model or number of devices.
+    def normalized_name(name):
+        return re.sub(r"^(?:(?:NVIDIA|TESLA) +)+", "", name.upper().strip())
+    if (not gpus or len(gpus) != len(observed)
+            or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in observed)
+            or sorted(normalized_name(item["name"]) for item in observed)
+                != sorted(normalized_name(item["name"]) for item in gpus)):
+        raise EnvironmentCacheError("GPU compatibility identity disagrees with preflight")
+    return gpus
+
+
 def _cc_cache_runtime_fingerprint(resources, hardware, deadline):
     """Fail closed unless the runtime provides an actual image release identity.
 
@@ -119,31 +176,11 @@ def _cc_cache_runtime_fingerprint(resources, hardware, deadline):
     cpu_flags = sorted(set.intersection(*flags))
     if not cpu_flags:
         raise EnvironmentCacheError("host CPU feature identity unavailable")
-    gpus = []
     observed = hardware.get("gpus", [])
     if not isinstance(observed, list):
         raise EnvironmentCacheError("invalid runtime hardware identity")
-    if resources.get("accelerator") == "gpu" or observed:
-        # Query the actual driver and compute capability, not the requested model.
-        executable = pathlib.Path("/usr/bin/nvidia-smi")
-        if not executable.is_file():
-            raise EnvironmentCacheError("GPU compatibility identity unavailable")
-        output = subprocess.run([str(executable), "--query-gpu=name,compute_cap,driver_version",
-                                 "--format=csv,noheader,nounits"], check=True,
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                env={"PATH": "/usr/bin:/bin", "LANG": "C"},
-                                timeout=min(10, _cc_cache_remaining(deadline))).stdout
-        if len(output) > 16384:
-            raise EnvironmentCacheError("GPU compatibility identity exceeds its bound")
-        for line in output.splitlines():
-            fields = [item.strip() for item in line.split(",")]
-            if (len(fields) != 3 or not re.fullmatch(r"[A-Za-z0-9_. +()-]{1,128}", fields[0])
-                    or not re.fullmatch(r"\d+\.\d+", fields[1])
-                    or not re.fullmatch(r"\d+(?:\.\d+)+", fields[2])):
-                raise EnvironmentCacheError("GPU compatibility identity unavailable")
-            gpus.append({"name": fields[0], "compute_capability": fields[1], "driver": fields[2]})
-        if not gpus or len(gpus) != len(observed):
-            raise EnvironmentCacheError("GPU compatibility identity disagrees with preflight")
+    gpus = (_cc_cache_gpu_identity(observed, deadline)
+            if resources.get("accelerator") == "gpu" or observed else [])
     return {"release": release, "system": "Linux", "architecture": "x86_64",
             "kernel": platform.release(), "libc": list(libc), "host_files": host_files,
             "cpu_flags": cpu_flags, "gpus": sorted(gpus, key=_cc_cache_json)}

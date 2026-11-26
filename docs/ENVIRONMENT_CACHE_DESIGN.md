@@ -16,6 +16,10 @@ remain gates. Legacy jobs and environments without opt-in do not use the cache.
   Linux/CPU ABI and GPU compute capability/driver when relevant. `latest` alone
   is not an image identifier. Missing reliable compatibility facts cause a safe
   bypass; a request for a T4 alone is not proof of an actual GPU architecture.
+  The GPU identity query uses only fixed host NVIDIA driver-library search
+  directories and a minimal subprocess environment. Missing or invalid facts
+  still bypass caching; bounded failure categories and exit codes are recorded
+  without retaining arbitrary diagnostic output.
 - Exact CPU flags remain the default. Real CPU runs on the same Colab image
   produced different keys solely due to heterogeneous exposed CPU flags. An
   explicit `cache_cpu = "x86-64-v2"` declares that the entire installed
